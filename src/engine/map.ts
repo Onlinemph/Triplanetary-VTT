@@ -238,6 +238,28 @@ export class GameMap {
     return { mandatory, optional };
   }
 
+  /**
+   * The gravity a ship (or ordnance) picks up from one turn of movement.
+   *
+   * This is the accessor the rules layer should use; `accumulateGravity` is the
+   * lower-level primitive. Two cases:
+   *
+   *  - **Moving.** Gravity comes from the hexes the course *entered*, excluding
+   *    the hex it started in. That hex's pull was already applied on the turn the
+   *    ship arrived there — Figure 6 counts "the gravity hexes entered last
+   *    turn", and double-counting the tail would break orbits.
+   *  - **Stationary.** A ship that does not move is still sitting in the gravity
+   *    hex, and is pulled again. This is not a special case bolted on: it is the
+   *    rule that makes takeoff work. A ship boosted off the surface is "stationary
+   *    in the gravity hex immediately above the base", and "unless fuel is spent
+   *    on the next turn, the ship would fall back to the planet and crash."
+   *    Without this, a stationary ship would hover over a planet forever, free.
+   */
+  gravityFromMove(from: Hex, to: Hex): { mandatory: Hex; optional: Hex[] } {
+    if (eq(from, to)) return this.accumulateGravity([from]);
+    return this.accumulateGravity(traceSegment(from, to).entered.slice(1));
+  }
+
   /** The weak-gravity arrow a hex would contribute, if the pilot accepts it. */
   weakGravityArrow(h: Hex): Hex {
     let out: Hex = { q: 0, r: 0 };

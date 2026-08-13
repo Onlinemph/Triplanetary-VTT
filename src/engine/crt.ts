@@ -172,14 +172,16 @@ export const otherToHit = (kind: OtherAttackKind, modifiedRoll: number): number 
  * Range modifier: "Subtract 1 from the die roll for each hex of range
  * separating the attacker and the target."
  */
-export const rangeModifier = (range: number): number => -range;
+export const rangeModifier = (range: number): number => (range === 0 ? 0 : -range);
 
 /**
  * Relative velocity modifier: "Subtract 1 from the combat die roll for each hex
  * of velocity difference greater than 2."
  */
-export const velocityModifier = (relativeVelocity: number): number =>
-  -Math.max(0, relativeVelocity - 2);
+export const velocityModifier = (relativeVelocity: number): number => {
+  const excess = Math.max(0, relativeVelocity - 2);
+  return excess === 0 ? 0 : -excess;
+};
 
 /**
  * A ship is destroyed once its accumulated disablement reaches D6 or more.
