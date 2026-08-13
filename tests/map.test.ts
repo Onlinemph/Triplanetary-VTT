@@ -10,7 +10,7 @@ import { describe, expect, it } from 'vitest';
 import { DEFAULT_MAP } from '../src/engine/map.js';
 import { traceSegment } from '../src/engine/geometry.js';
 import { DIRECTIONS, add, distance, hex, key, neighbor, sub, type Hex } from '../src/engine/hex.js';
-import { BODIES, inBounds, solarDistance } from '../src/engine/mapdata.js';
+import { BELT_INNER, BELT_OUTER, BODIES, inBounds, solarDistance } from '../src/engine/mapdata.js';
 
 const map = DEFAULT_MAP;
 
@@ -206,6 +206,60 @@ describe('orbit stability', () => {
   it('does not call a fast fly-by an orbit', () => {
     const g = neighbor(terra.hex, 0);
     expect(map.orbitOf(g, hex(2, 0))).toBeUndefined();
+  });
+});
+
+describe('belt placement', () => {
+  it('keeps asteroids out of every body hex and gravity ring', () => {
+    // Orbital rings are the one place ships must fly through to make orbit,
+    // land, or resupply; an asteroid sitting there would be a trap.
+    for (const body of BODIES) {
+      expect({ body: body.id, asteroid: map.isAsteroid(body.hex) }).toEqual({
+        body: body.id,
+        asteroid: false,
+      });
+      // Only bodies with gravity have a ring to keep clear. Clandestine is
+      // itself an asteroid and is deliberately ringed by its dense cordon.
+      if (body.gravity === 'none') continue;
+      for (let d = 0; d < 6; d++) {
+        expect({ body: body.id, d, asteroid: map.isAsteroid(neighbor(body.hex, d)) }).toEqual({
+          body: body.id,
+          d,
+          asteroid: false,
+        });
+      }
+    }
+  });
+
+  it('keeps every world out of the belt annulus itself', () => {
+    // Luna sits sunward of the belt and the Jovian moons beyond it; none should
+    // be embedded in the asteroids, or every approach would cross them.
+    for (const body of BODIES) {
+      if (body.kind === 'majorAsteroid') continue;
+      const d = solarDistance(body.hex);
+      const insideBelt = d >= BELT_INNER && d <= BELT_OUTER;
+      expect({ body: body.id, insideBelt }).toEqual({ body: body.id, insideBelt: false });
+    }
+  });
+
+  it('puts Ceres and Clandestine inside the belt, where the scenarios need them', () => {
+    for (const id of ['ceres', 'clandestine']) {
+      const d = solarDistance(map.body(id)!.hex);
+      expect(d).toBeGreaterThanOrEqual(BELT_INNER);
+      expect(d).toBeLessThanOrEqual(BELT_OUTER);
+    }
+  });
+
+  it('rings Clandestine with the dense cordon that hides it', () => {
+    // "The colored asteroids around Clandestine are especially dense...
+    //  Only ships possessing scanners may enter those hexes."
+    const c = map.body('clandestine')!;
+    expect(map.belt.denseAsteroids.size).toBeGreaterThan(0);
+    for (let d = 0; d < 6; d++) {
+      expect(map.isDenseAsteroid(neighbor(c.hex, d))).toBe(true);
+    }
+    // The base hex itself must stay clear so ships can stop there.
+    expect(map.isDenseAsteroid(c.hex)).toBe(false);
   });
 });
 

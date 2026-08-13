@@ -85,17 +85,20 @@ const near = (anchor: Hex, radius: number, degrees: number): Hex => {
 const ALL_SIDES = [0, 1, 2, 3, 4, 5];
 
 const SOL = hex(0, 0);
-const MERCURY = at(3, 200);
-const VENUS = at(6, 125);
-const TERRA = at(10, 25);
+const MERCURY = at(4, 200);
+const VENUS = at(7, 125);
+const TERRA = at(11, 25);
 const LUNA = near(TERRA, 3, 100);
-const MARS = at(13, 285);
+const MARS = at(14, 285);
 const CERES = at(18, 165);
 const CLANDESTINE = at(19, 320);
-const JUPITER = at(25, 60);
-const IO = near(JUPITER, 3, 15);
-const GANYMEDE = near(JUPITER, 4, 140);
-const CALLISTO = near(JUPITER, 5, 250);
+// Jupiter sits far enough out that even its innermost-facing moon stays clear of
+// the belt: any moon within 5 hexes is at least 22 from Sol, and the belt ends
+// at 20.5. Otherwise a run to Callisto would cross the asteroids every time.
+const JUPITER = at(27, 62);
+const IO = near(JUPITER, 3, 300);
+const GANYMEDE = near(JUPITER, 4, 60);
+const CALLISTO = near(JUPITER, 5, 170);
 
 export const BODIES: readonly AstralBody[] = [
   {
@@ -289,7 +292,7 @@ export const BODIES: readonly AstralBody[] = [
  * The chart is a disc centred on Sol. "Any ship whose final course places it
  * off the map is considered eliminated."
  */
-export const MAP_RADIUS = 32;
+export const MAP_RADIUS = 34;
 
 /** Plane-space distance of a hex from Sol, in unit-pitch units. */
 export const solarDistance = (h: Hex): number => {
@@ -321,6 +324,10 @@ const noise = (q: number, r: number, salt: number): number => {
   return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
 };
 
+/** Neighbour offsets, mirroring hex.ts DIRECTIONS (kept local to avoid a cycle). */
+const DIR_Q = [1, 1, 0, -1, -1, 0];
+const DIR_R = [0, -1, -1, 0, 1, 1];
+
 /** Radius of the dense "blue asteroid" cordon that hides Clandestine. */
 export const CLANDESTINE_CORDON = 3;
 
@@ -342,14 +349,27 @@ export const buildBelt = (): BeltData => {
   const asteroids = new Set<string>();
   const denseAsteroids = new Set<string>();
 
-  const bodyHexes = new Set(BODIES.map((b) => key(b.hex)));
+  // Keep the belt out of every body's hex and its gravity ring. An asteroid in
+  // an orbital ring would sit in the one place ships are obliged to fly through
+  // to make orbit, land or resupply.
+  const reserved = new Set<string>();
+  for (const b of BODIES) {
+    reserved.add(key(b.hex));
+    // Only bodies with gravity have an orbital ring to protect. Ceres and
+    // Clandestine are asteroids themselves — Clandestine in particular *wants*
+    // its neighbours filled, with the dense cordon that conceals it.
+    if (b.gravity === 'none') continue;
+    for (let dir = 0; dir < 6; dir++) {
+      reserved.add(key(hex(b.hex.q + DIR_Q[dir]!, b.hex.r + DIR_R[dir]!)));
+    }
+  }
 
   for (let q = -MAP_RADIUS - 2; q <= MAP_RADIUS + 2; q++) {
     for (let r = -MAP_RADIUS - 2; r <= MAP_RADIUS + 2; r++) {
       const h = hex(q, r);
       if (!inBounds(h)) continue;
       const k = key(h);
-      if (bodyHexes.has(k)) continue;
+      if (reserved.has(k)) continue;
 
       const d = solarDistance(h);
 
