@@ -13,11 +13,9 @@ damage is applied.
 > **Unofficial fan project.** See [Attribution](#attribution) — you should own a
 > copy of the game.
 
-![Screenshot placeholder: the inner system chart with a plotted course](docs/screenshot.svg)
-
-<!-- Placeholder. Replace docs/screenshot.svg with a real capture of a game in
-     progress: the chart, a ship's predicted-course ghost, and the astrogation
-     panel open. Keep the path so this line does not need editing. -->
+![The inner system chart during a game of Lateral 7: Sol and the inner worlds,
+the asteroid belt with Ceres and Clandestine's dense cordon, the Jovian moons,
+gravity arrows around every body, and the fleet and ship panels.](docs/screenshot.png)
 
 ---
 
