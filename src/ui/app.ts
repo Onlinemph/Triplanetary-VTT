@@ -904,15 +904,47 @@ export const createApp = (deps: AppDeps): App => {
     ui = { ...INITIAL_UI, flags: ui.flags };
     victoryShown = false;
     turnKey = '';
+    syncViewInset();
     renderer?.fitAll(state);
     render();
     canvas.focus();
+  };
+
+
+  /**
+   * Measure the screen edges the floating panels cover, straight from the CSS
+   * custom properties that lay them out, so the value tracks the collapse
+   * states and the responsive breakpoints without duplicating either.
+   */
+  const viewInset = (): { top: number; right: number; bottom: number; left: number } => {
+    const cs = getComputedStyle(root);
+    const px = (name: string): number => {
+      const v = parseFloat(cs.getPropertyValue(name));
+      return Number.isFinite(v) ? v : 0;
+    };
+    const gap = px('--gap');
+    // Below the stacking breakpoint the side panels become bottom sheets, so
+    // only the top bar is really occluding the chart.
+    const stacked = window.matchMedia('(max-width: 900px)').matches;
+    return stacked
+      ? { top: px('--top-h') + gap, right: 0, bottom: 0, left: 0 }
+      : {
+          top: px('--top-h') + gap,
+          right: px('--right-w') + gap,
+          bottom: px('--log-h') + gap,
+          left: px('--left-w') + gap,
+        };
+  };
+
+  const syncViewInset = (): void => {
+    renderer?.setViewInset(viewInset());
   };
 
   const resizeObserver = new ResizeObserver(() => {
     const rect = canvas.getBoundingClientRect();
     if (rect.width === 0 || rect.height === 0) return;
     renderer?.resize();
+    syncViewInset();
     schedule();
   });
 
@@ -920,6 +952,7 @@ export const createApp = (deps: AppDeps): App => {
     deps.root.appendChild(root);
     renderer = deps.createRenderer(canvas, deps.map);
     renderer.resize();
+    syncViewInset();
     renderer.fitChart();
 
     canvas.addEventListener('pointerdown', onPointerDown);

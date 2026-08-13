@@ -33,6 +33,23 @@ export interface WorldRect {
   readonly y1: number;
 }
 
+/**
+ * Screen-space edges hidden behind UI panels, in CSS pixels.
+ *
+ * The canvas is full-bleed and the panels float over it, so the geometric
+ * centre of the canvas is not the centre of what the player can actually see.
+ * Framing and focusing work against the *unoccluded* region instead, or a ship
+ * tucked against the left of the chart ends up behind the fleet list.
+ */
+export interface ViewInset {
+  top: number;
+  right: number;
+  bottom: number;
+  left: number;
+}
+
+export const NO_INSET: ViewInset = { top: 0, right: 0, bottom: 0, left: 0 };
+
 export class Camera {
   /** World-space point at the centre of the viewport. */
   x = 0;
@@ -54,6 +71,21 @@ export class Camera {
    * sets it from `MAP_RADIUS` once the map is known.
    */
   panRadius = HEX_SIZE * 60;
+
+  /** Edges hidden behind floating UI panels. */
+  inset: ViewInset = { ...NO_INSET };
+
+  setInset(next: Partial<ViewInset>): void {
+    this.inset = { ...this.inset, ...next };
+  }
+
+  /** Centre of the region the player can actually see, in screen pixels. */
+  visibleCentre(): Point {
+    return {
+      x: (this.inset.left + (this.width - this.inset.right)) / 2,
+      y: (this.inset.top + (this.height - this.inset.bottom)) / 2,
+    };
+  }
 
   // -------------------------------------------------------------------------
   // Viewport
@@ -165,9 +197,16 @@ export class Camera {
     this.zoom = z < lo ? lo : z > hi ? hi : z;
   }
 
+  /**
+   * Put a world point at the centre of the *visible* region.
+   *
+   * Solving `worldToScreen(w) = visibleCentre` for the camera position gives
+   * `cam = w - (visibleCentre - viewportCentre) / zoom`.
+   */
   centreOnWorld(wx: number, wy: number): void {
-    this.x = wx;
-    this.y = wy;
+    const v = this.visibleCentre();
+    this.x = wx - (v.x - this.width / 2) / this.zoom;
+    this.y = wy - (v.y - this.height / 2) / this.zoom;
     this.clampCentre();
   }
 
@@ -176,12 +215,21 @@ export class Camera {
     this.centreOnWorld(p.x, p.y);
   }
 
-  /** Frame a world-space rectangle with `padding` screen pixels of margin. */
+  /**
+   * Frame a world-space rectangle with `padding` screen pixels of margin,
+   * inside the region not covered by UI panels.
+   */
   fitWorldRect(rect: WorldRect, padding = 48): void {
     const w = Math.max(1e-3, rect.x1 - rect.x0);
     const h = Math.max(1e-3, rect.y1 - rect.y0);
-    const availW = Math.max(32, this.width - padding * 2);
-    const availH = Math.max(32, this.height - padding * 2);
+    const availW = Math.max(
+      32,
+      this.width - this.inset.left - this.inset.right - padding * 2,
+    );
+    const availH = Math.max(
+      32,
+      this.height - this.inset.top - this.inset.bottom - padding * 2,
+    );
     this.setZoom(Math.min(availW / w, availH / h));
     this.centreOnWorld((rect.x0 + rect.x1) / 2, (rect.y0 + rect.y1) / 2);
   }

@@ -58,6 +58,8 @@ export interface RendererPort {
   focusOn(h: Hex): void;
   /** Re-read the canvas' CSS size and device pixel ratio. */
   resize(): void;
+  /** Screen edges hidden behind floating panels, in CSS pixels. */
+  setViewInset(inset: { top: number; right: number; bottom: number; left: number }): void;
 }
 
 // ---------------------------------------------------------------------------

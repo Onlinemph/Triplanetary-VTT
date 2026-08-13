@@ -49,6 +49,7 @@ const createRenderer = (canvas: HTMLCanvasElement, map = DEFAULT_MAP): RendererP
     fitChart: () => renderer.fitChart(),
     focusOn: (h) => renderer.focusOn(h),
     resize: () => renderer.resize(),
+    setViewInset: (inset) => renderer.setViewInset(inset),
   };
 };
 

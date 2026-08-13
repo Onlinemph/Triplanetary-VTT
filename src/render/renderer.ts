@@ -50,7 +50,7 @@ import {
   type ShipId,
   areAllied,
 } from '../engine/types.js';
-import { Camera, type Viewport } from './camera.js';
+import { Camera, type ViewInset, type Viewport } from './camera.js';
 import {
   type Frame,
   DIR_COS,
@@ -165,6 +165,14 @@ export class MapRenderer {
 
   get viewport(): Viewport {
     return this.cam.viewport;
+  }
+
+  /**
+   * Tell the camera which screen edges are hidden behind floating UI panels, so
+   * framing and focusing target the region the player can actually see.
+   */
+  setViewInset(inset: Partial<ViewInset>): void {
+    this.cam.setInset(inset);
   }
 
   /** Match the backing store to the element's CSS size and pixel ratio. */
