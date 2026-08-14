@@ -38,6 +38,10 @@ validates every command, assigns seats, and — in fog-of-war scenarios — send
 each player only the state they are entitled to see. See
 [docs/MULTIPLAYER.md](docs/MULTIPLAYER.md).
 
+To publish the client to GitHub Pages, first enable it for the repository
+(**Settings → Pages → Build and deployment → GitHub Actions**); the
+`Deploy to GitHub Pages` workflow then runs on pushes to `main`.
+
 Then pick a scenario and press **New game**. Everything else:
 
 ```bash

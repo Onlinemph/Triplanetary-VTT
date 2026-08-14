@@ -212,8 +212,7 @@ describe('fog of war', () => {
     for (const other of r.state.playerOrder) {
       if (other === owner) continue;
       const seen = r.viewFor(other).scenarioData[ALWAYS_VISIBLE_KEY] as
-        | Record<string, unknown>
-        | undefined;
+        Record<string, unknown> | undefined;
       expect(seen === undefined || !(owner! in seen)).toBe(true);
     }
   });
@@ -238,8 +237,9 @@ describe('protocol parsing', () => {
   const v = SERVER_PROTOCOL_VERSION;
 
   it('accepts well-formed frames', () => {
-    expect(parseClientMsg(JSON.stringify({ t: 'hello', v, room: 'r', seat: 'a', clientId: 'c' })))
-      .not.toBeNull();
+    expect(
+      parseClientMsg(JSON.stringify({ t: 'hello', v, room: 'r', seat: 'a', clientId: 'c' })),
+    ).not.toBeNull();
     expect(
       parseClientMsg(JSON.stringify({ t: 'cmd', v, seq: 1, cmd: { type: 'endPhase', by: 'a' } })),
     ).not.toBeNull();
@@ -248,11 +248,15 @@ describe('protocol parsing', () => {
 
   it('rejects malformed, mistyped and wrong-version frames', () => {
     expect(parseClientMsg('not json')).toBeNull();
-    expect(parseClientMsg(JSON.stringify({ t: 'hello', v: v + 99, room: 'r', seat: null, clientId: 'c' })))
-      .toBeNull();
+    expect(
+      parseClientMsg(
+        JSON.stringify({ t: 'hello', v: v + 99, room: 'r', seat: null, clientId: 'c' }),
+      ),
+    ).toBeNull();
     expect(parseClientMsg(JSON.stringify({ t: 'nonsense', v }))).toBeNull();
     expect(parseClientMsg(JSON.stringify({ t: 'cmd', v, seq: 1, cmd: { by: 'a' } }))).toBeNull();
-    expect(parseClientMsg(JSON.stringify({ t: 'hello', v, room: 5, seat: null, clientId: 'c' })))
-      .toBeNull();
+    expect(
+      parseClientMsg(JSON.stringify({ t: 'hello', v, room: 5, seat: null, clientId: 'c' })),
+    ).toBeNull();
   });
 });

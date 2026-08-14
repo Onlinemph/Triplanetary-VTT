@@ -38,17 +38,7 @@
  * when two hexes tie, the hexside) the course occupies there.
  */
 
-import {
-  type Hex,
-  type Point,
-  add,
-  distance,
-  eq,
-  hex,
-  key,
-  round,
-  SQRT3,
-} from './hex.js';
+import { type Hex, type Point, add, distance, eq, hex, key, round, SQRT3 } from './hex.js';
 
 const EPS = 1e-9;
 
@@ -290,12 +280,8 @@ export const segmentPointDistance = (a: Point, b: Point, c: Point): number => {
  * do not cover their entire hex" and that the uncovered corners belong to the
  * adjacent gravity hexes.
  */
-export const courseHitsDisc = (
-  a: Hex,
-  b: Hex,
-  centre: Hex,
-  radius: number,
-): boolean => segmentPointDistance(toPlane(a), toPlane(b), toPlane(centre)) < radius - EPS;
+export const courseHitsDisc = (a: Hex, b: Hex, centre: Hex, radius: number): boolean =>
+  segmentPointDistance(toPlane(a), toPlane(b), toPlane(centre)) < radius - EPS;
 
 // ---------------------------------------------------------------------------
 // Range

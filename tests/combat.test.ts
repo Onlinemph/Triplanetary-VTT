@@ -51,10 +51,7 @@ const flew = (
 
 describe('range', () => {
   it('is zero when the attacker ends in the target’s hex', () => {
-    const s = arena([
-      flew('atk', A, 'corsair', CLEAR),
-      flew('def', B, 'corvette', CLEAR),
-    ]);
+    const s = arena([flew('atk', A, 'corsair', CLEAR), flew('def', B, 'corvette', CLEAR)]);
     const p = previewAttack(s, ['atk'], ['def'], map);
     expect(p.legal).toBe(true);
     expect(p.range).toBe(0);
@@ -103,10 +100,7 @@ describe('range', () => {
 
 describe('relative velocity', () => {
   const withVelocities = (va: ReturnType<typeof hex>, vb: ReturnType<typeof hex>): number => {
-    const s = arena([
-      flew('atk', A, 'corsair', CLEAR, va),
-      flew('def', B, 'corvette', CLEAR, vb),
-    ]);
+    const s = arena([flew('atk', A, 'corsair', CLEAR, va), flew('def', B, 'corvette', CLEAR, vb)]);
     return previewAttack(s, ['atk'], ['def'], map).relativeVelocity;
   };
 

@@ -96,10 +96,7 @@ export interface PlayerSpec extends PlayerTemplate {
 export const templatesOf = (specs: readonly PlayerSpec[]): PlayerTemplate[] =>
   specs.map(({ faction, color, name }) => ({ faction, color, name }));
 
-export const buildPlayers = (
-  specs: readonly PlayerSpec[],
-  opts: BuildOptions,
-): Player[] =>
+export const buildPlayers = (specs: readonly PlayerSpec[], opts: BuildOptions): Player[] =>
   specs.map((spec, i) =>
     makePlayer(spec.id, nameFor(opts, i, spec.name), spec.faction, spec.color, {
       allies: spec.allies ?? [],
@@ -403,11 +400,7 @@ export const asteroidHexes = (map: GameMap): Hex[] =>
  * the clear space just outside (a picket). Used by scenarios that say only
  * "these may be placed anywhere on the map" but whose play is all in-system.
  */
-export const sitesAround = (
-  map: GameMap,
-  bodyIds: readonly string[],
-  maxRing = 5,
-): Hex[] => {
+export const sitesAround = (map: GameMap, bodyIds: readonly string[], maxRing = 5): Hex[] => {
   const occupied = new Set(map.bodies.map((b) => key(b.hex)));
   const seen = new Set<string>();
   const out: Hex[] = [];
@@ -576,8 +569,7 @@ export const arrivalTurn = (map: GameMap, ship: Ship, bodyId: string): number | 
  * determined by inspection of course plots." Each circled arrow is one point,
  * each double circle two, and the point spent to land is recorded the same way.
  */
-export const fuelBurned = (ship: Ship): number =>
-  ship.course.reduce((n, leg) => n + leg.accel, 0);
+export const fuelBurned = (ship: Ship): number => ship.course.reduce((n, leg) => n + leg.accel, 0);
 
 /**
  * Has this ship ever been disabled, even temporarily?
@@ -617,11 +609,7 @@ export const turnsGrounded = (state: GameState, player: PlayerId): number => {
 };
 
 /** Hexsides of a given world that appear in a list of `sideKey`s. */
-export const sidesOnBody = (
-  map: GameMap,
-  bodyId: string,
-  keys: readonly string[],
-): string[] => {
+export const sidesOnBody = (map: GameMap, bodyId: string, keys: readonly string[]): string[] => {
   const body = map.body(bodyId);
   if (!body) return [];
   const wanted = new Set<string>();

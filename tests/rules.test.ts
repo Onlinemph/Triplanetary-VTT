@@ -22,7 +22,6 @@ import {
   neighbor,
   sub,
   add,
-  distance,
   oddsColumn,
   predictedEndpoint,
   reachableEndpoints,
@@ -237,7 +236,9 @@ describe('astrogation', () => {
     //  the overload maneuver."
     for (const cls of ['transport', 'packet', 'tanker', 'liner'] as const) {
       const state = rig({
-        ships: [makeShip({ id: 'c', owner: A, shipClass: cls, pos: hex(0, 8), velocity: hex(2, 0) })],
+        ships: [
+          makeShip({ id: 'c', owner: A, shipClass: cls, pos: hex(0, 8), velocity: hex(2, 0) }),
+        ],
       });
       const two = add(add(hex(0, 8), hex(2, 0)), hex(2, 0));
       expect(
@@ -249,7 +250,9 @@ describe('astrogation', () => {
   it('cannot burn fuel it does not have', () => {
     const state = rig({ ships: [corvetteAt(hex(0, 8), hex(2, 0), 0)] });
     const target = neighbor(add(hex(0, 8), hex(2, 0)), 1);
-    expect(refused(state, { type: 'plotCourse', by: A, ship: 's1', endpoint: target })).toBeTruthy();
+    expect(
+      refused(state, { type: 'plotCourse', by: A, ship: 's1', endpoint: target }),
+    ).toBeTruthy();
   });
 
   it('destroys a ship whose course intersects a planet', () => {
@@ -257,7 +260,9 @@ describe('astrogation', () => {
     //  body, it has crashed. The ship is eliminated."
     const start = add(TERRA.hex, hex(-3, 0));
     const state = rig({
-      ships: [makeShip({ id: 's1', owner: A, shipClass: 'corvette', pos: start, velocity: hex(3, 0) })],
+      ships: [
+        makeShip({ id: 's1', owner: A, shipClass: 'corvette', pos: start, velocity: hex(3, 0) }),
+      ],
     });
     const after = runTurn(state);
     expect(shipAt(after, 's1').destroyed).toBe(true);
@@ -268,7 +273,9 @@ describe('astrogation', () => {
     const edge = hex(33, 0);
     expect(map.inBounds(edge)).toBe(true);
     const state = rig({
-      ships: [makeShip({ id: 's1', owner: A, shipClass: 'corvette', pos: edge, velocity: hex(4, 0) })],
+      ships: [
+        makeShip({ id: 's1', owner: A, shipClass: 'corvette', pos: edge, velocity: hex(4, 0) }),
+      ],
     });
     const after = runTurn(state);
     expect(shipAt(after, 's1').destroyed).toBe(true);
@@ -488,7 +495,11 @@ describe('determinism', () => {
     const run = (seed: number): string => {
       let s = buildScenario('nova', { seed });
       for (let i = 0; i < 30; i++) {
-        const out = applyCommand(s, { type: 'endPhase', by: s.playerOrder[s.activePlayerIndex]! }, map);
+        const out = applyCommand(
+          s,
+          { type: 'endPhase', by: s.playerOrder[s.activePlayerIndex]! },
+          map,
+        );
         if (!out.result.ok) break;
         s = out.state;
       }
@@ -530,7 +541,11 @@ describe('phase machine', () => {
     for (const def of SCENARIOS) {
       let s = buildScenario(def.id, { seed: 11 });
       for (let i = 0; i < 200; i++) {
-        const out = applyCommand(s, { type: 'endPhase', by: s.playerOrder[s.activePlayerIndex]! }, map);
+        const out = applyCommand(
+          s,
+          { type: 'endPhase', by: s.playerOrder[s.activePlayerIndex]! },
+          map,
+        );
         expect({ id: def.id, step: i, ok: out.result.ok }).toEqual({
           id: def.id,
           step: i,

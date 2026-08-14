@@ -156,7 +156,7 @@ describe('ordnance launch', () => {
       location: { kind: 'landed', side: { hex: TERRA.hex, dir: 0 } },
       cargo: [{ kind: 'mine', quantity: 1 }],
     });
-    let s = toPhase(game([landed]), 'ordnance');
+    const s = toPhase(game([landed]), 'ordnance');
     const check = canLaunch(s, s.ships['w']!, 'mine', map);
     expect(check.ok).toBe(false);
   });
@@ -203,7 +203,11 @@ describe('counterattack', () => {
     s = ok(s, { type: 'attack', by: A, attackers: ['atk'], targets: ['def'] });
 
     // A live pending decision must belong to the defender.
-    const out = applyCommand(s, { type: 'counterattack', by: B, attackers: ['def'], targets: ['atk'] }, map);
+    const out = applyCommand(
+      s,
+      { type: 'counterattack', by: B, attackers: ['def'], targets: ['atk'] },
+      map,
+    );
     expect(out.result.ok).toBe(true);
   });
 
@@ -300,9 +304,27 @@ describe('matched courses', () => {
   it('requires the same position and the same velocity', () => {
     // "The only way for anything to be transferred between ships is for both to
     //  have the same course and position."
-    const a = makeShip({ id: 'a', owner: A, shipClass: 'tanker', pos: CLEAR, velocity: hex(2, -1) });
-    const same = makeShip({ id: 'b', owner: A, shipClass: 'corsair', pos: CLEAR, velocity: hex(2, -1) });
-    const wrongV = makeShip({ id: 'c', owner: A, shipClass: 'corsair', pos: CLEAR, velocity: hex(1, 0) });
+    const a = makeShip({
+      id: 'a',
+      owner: A,
+      shipClass: 'tanker',
+      pos: CLEAR,
+      velocity: hex(2, -1),
+    });
+    const same = makeShip({
+      id: 'b',
+      owner: A,
+      shipClass: 'corsair',
+      pos: CLEAR,
+      velocity: hex(2, -1),
+    });
+    const wrongV = makeShip({
+      id: 'c',
+      owner: A,
+      shipClass: 'corsair',
+      pos: CLEAR,
+      velocity: hex(1, 0),
+    });
     const wrongP = makeShip({
       id: 'd',
       owner: A,

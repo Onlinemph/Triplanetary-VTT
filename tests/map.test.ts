@@ -311,10 +311,7 @@ describe('hazards', () => {
 describe('line of sight', () => {
   it('is blocked by a planet but not by asteroids', () => {
     const terra = map.body('terra')!;
-    const through = map.lineOfSightBlockedBy(
-      add(terra.hex, hex(-3, 0)),
-      add(terra.hex, hex(3, 0)),
-    );
+    const through = map.lineOfSightBlockedBy(add(terra.hex, hex(-3, 0)), add(terra.hex, hex(3, 0)));
     expect(through?.id).toBe('terra');
 
     const ceres = map.body('ceres')!;

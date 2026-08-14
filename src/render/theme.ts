@@ -179,8 +179,7 @@ export const SIZES = {
   hairline: 1,
 } as const;
 
-export const clamp = (v: number, lo: number, hi: number): number =>
-  v < lo ? lo : v > hi ? hi : v;
+export const clamp = (v: number, lo: number, hi: number): number => (v < lo ? lo : v > hi ? hi : v);
 
 export const smoothstep = (edge0: number, edge1: number, x: number): number => {
   if (edge1 === edge0) return x < edge0 ? 0 : 1;

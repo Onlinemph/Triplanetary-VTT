@@ -3,7 +3,7 @@
 > **Status.** Steps 1–4 are implemented. `server/` holds a working
 > server-authoritative WebSocket server with seat authority, per-player
 > redaction and reconnection; `src/net/client.ts` is the browser half. Run it
-> with `npm run server`. What is *not* done is deployment concerns —
+> with `npm run server`. What is _not_ done is deployment concerns —
 > persistence, authentication, TLS termination — listed under
 > [Checklist for a real deployment](#checklist-for-a-real-deployment).
 
@@ -296,7 +296,6 @@ Two details the filter must get right, both from p. 8:
 
 ---
 
-
 ---
 
 ## What is actually implemented
@@ -325,12 +324,12 @@ Connect a client to `ws://host:port/?room=<id>&clientId=<stable-id>` and send a
 `Room.usesSnapshots` decides how the server tells clients what happened, and it
 is simply `state.options.fogOfWar`:
 
-| | open information | fog of war |
-|---|---|---|
-| server sends | the accepted **command** | a per-client redacted **snapshot** |
-| client does | replays it locally | adopts it wholesale |
-| frame size | tiny | whole state |
-| why | determinism guarantees every client lands on the same state | replaying the command would need the hidden state the fog exists to withhold |
+|              | open information                                            | fog of war                                                                   |
+| ------------ | ----------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| server sends | the accepted **command**                                    | a per-client redacted **snapshot**                                           |
+| client does  | replays it locally                                          | adopts it wholesale                                                          |
+| frame size   | tiny                                                        | whole state                                                                  |
+| why          | determinism guarantees every client lands on the same state | replaying the command would need the hidden state the fog exists to withhold |
 
 Adopting a snapshot sets `GameSession.isServerAuthoritative`, which turns off
 undo and local replay: the client's log no longer describes how the game got
@@ -340,7 +339,7 @@ where it is.
 
 **`by` is just a string.** Nothing in a relay stops a client sending
 `{type: 'endPhase', by: 'someone-else'}`. `Room.accept` checks the seat against
-the claimed author *before* the rules see the command, and the engine then has
+the claimed author _before_ the rules see the command, and the engine then has
 the last word — being correctly seated does not make an illegal move legal.
 
 **Secrets have to be withheld at the source.** Hiding a counter in the renderer
@@ -357,7 +356,7 @@ Three rules, in order, applied to each `scenarioData` entry:
    `{fugitiveShip: <a Pilgrim transport>}` reaches the Pilgrim and nobody else.
 2. **Tables keyed by ship or player** are split, and each player receives only
    their own rows. Lateral 7's `dummyAssignments` maps every real ship to the
-   dummies concealing it, for *both* sides; shipping it whole would tell each
+   dummies concealing it, for _both_ sides; shipping it whole would tell each
    player which of the enemy's counters are real.
 3. **Anything naming only other players' ships** is withheld as a backstop.
 

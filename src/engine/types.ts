@@ -234,7 +234,12 @@ export interface AttackResolution {
   readonly modifiedRoll: number;
   readonly result: DamageResult;
   /** Populated instead of `result` when the advanced system is enabled. */
-  readonly hits?: readonly { readonly target: ShipId; readonly weapon: number; readonly drive: number; readonly structure: number }[];
+  readonly hits?: readonly {
+    readonly target: ShipId;
+    readonly weapon: number;
+    readonly drive: number;
+    readonly structure: number;
+  }[];
   readonly kind: 'gun' | 'planetaryDefence' | OtherAttackKind;
 }
 

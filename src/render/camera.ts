@@ -12,7 +12,15 @@
  *   hairlines crisp on HiDPI without any layer rounding coordinates itself.
  */
 
-import { type FracHex, type Hex, type Point, fromPixel, round, toPixel, pitch } from '../engine/hex.js';
+import {
+  type FracHex,
+  type Hex,
+  type Point,
+  fromPixel,
+  round,
+  toPixel,
+  pitch,
+} from '../engine/hex.js';
 
 /** Centre-to-vertex distance of a hex in world units, at zoom 1. */
 export const HEX_SIZE = 32;
@@ -222,14 +230,8 @@ export class Camera {
   fitWorldRect(rect: WorldRect, padding = 48): void {
     const w = Math.max(1e-3, rect.x1 - rect.x0);
     const h = Math.max(1e-3, rect.y1 - rect.y0);
-    const availW = Math.max(
-      32,
-      this.width - this.inset.left - this.inset.right - padding * 2,
-    );
-    const availH = Math.max(
-      32,
-      this.height - this.inset.top - this.inset.bottom - padding * 2,
-    );
+    const availW = Math.max(32, this.width - this.inset.left - this.inset.right - padding * 2);
+    const availH = Math.max(32, this.height - this.inset.top - this.inset.bottom - padding * 2);
     this.setZoom(Math.min(availW / w, availH / h));
     this.centreOnWorld((rect.x0 + rect.x1) / 2, (rect.y0 + rect.y1) / 2);
   }

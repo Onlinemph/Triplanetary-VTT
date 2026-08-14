@@ -36,15 +36,7 @@
  */
 
 import { closestApproach, traceSegment } from './geometry.js';
-import {
-  type Hex,
-  type HexSide,
-  distance,
-  eq,
-  sideGravityHex,
-  sideKey,
-  sub,
-} from './hex.js';
+import { type Hex, type HexSide, distance, eq, sideGravityHex, sideKey, sub } from './hex.js';
 import type { GameMap } from './map.js';
 import { rollDie } from './rng.js';
 import { SHIP_CLASSES } from './ships.js';
@@ -87,8 +79,7 @@ import { log, updateShip, withBase } from './state.js';
  * and the structural ability of the ship to withstand damage." One number does
  * both jobs, so nothing here scales it down for damage already taken.
  */
-export const combatStrength = (ship: Ship): number =>
-  SHIP_CLASSES[ship.shipClass].combatStrength;
+export const combatStrength = (ship: Ship): number => SHIP_CLASSES[ship.shipClass].combatStrength;
 
 export const shipLabel = (ship: Ship): string =>
   ship.name ?? `${SHIP_CLASSES[ship.shipClass].name} ${ship.number}`;
@@ -457,10 +448,14 @@ export function applyDamage(
   }
 
   const next = updateShip(state, target, { disabled: total });
-  return log(next, `${shipLabel(ship)} disabled for ${total} turn${total === 1 ? '' : 's'} by ${cause}.`, {
-    severity: 'warn',
-    focus: [ship.pos],
-  });
+  return log(
+    next,
+    `${shipLabel(ship)} disabled for ${total} turn${total === 1 ? '' : 's'} by ${cause}.`,
+    {
+      severity: 'warn',
+      focus: [ship.pos],
+    },
+  );
 }
 
 interface HitTotals {
@@ -694,7 +689,8 @@ const describeResolution = (state: GameState, r: AttackResolution, verb: string)
   if (r.column === null) {
     return `${who} ${verb} ${whom} at worse than 1:4 — no effect.`;
   }
-  const mods = r.modifiers.total === 0 ? '' : ` ${r.modifiers.total > 0 ? '+' : ''}${r.modifiers.total}`;
+  const mods =
+    r.modifiers.total === 0 ? '' : ` ${r.modifiers.total > 0 ? '+' : ''}${r.modifiers.total}`;
   const outcome =
     r.hits !== undefined
       ? `${r.hits.reduce((n, h) => n + h.weapon + h.drive + h.structure, 0)} hit(s)`
@@ -796,10 +792,7 @@ export function pendingCounterattack(
  * Ships allowed to return fire against `targets`' attackers: each victim, plus
  * "any ships in the victim's hex and sharing its course".
  */
-const counterattackCandidates = (
-  state: GameState,
-  victims: readonly ShipId[],
-): ShipId[] => {
+const counterattackCandidates = (state: GameState, victims: readonly ShipId[]): ShipId[] => {
   const advanced = state.options.advancedCombat;
   const out: ShipId[] = [];
   const seen = new Set<ShipId>();
@@ -1059,7 +1052,8 @@ export function firePlanetaryDefence(
   }
   const base = state.bases[cmd.base];
   if (!base) return reject(state, `unknown base ${cmd.base}`);
-  if (base.kind !== 'planetary') return reject(state, 'only planetary bases have planetary defences');
+  if (base.kind !== 'planetary')
+    return reject(state, 'only planetary bases have planetary defences');
   if (base.destroyed) return reject(state, 'that base has been destroyed');
   if (!base.hasPlanetaryDefences) return reject(state, 'that base has no planetary defences');
   if (!base.side) return reject(state, 'that base is not on a hexside');
@@ -1279,11 +1273,7 @@ export function recoverDamage(state: GameState, player: PlayerId): GameState {
 // ---------------------------------------------------------------------------
 
 /** Live enemy ships sharing a hex — the natural target group for one attack. */
-export const targetGroupIn = (
-  state: GameState,
-  where: Hex,
-  attackerSide: PlayerId,
-): Ship[] =>
+export const targetGroupIn = (state: GameState, where: Hex, attackerSide: PlayerId): Ship[] =>
   Object.values(state.ships).filter(
     (s) =>
       !s.destroyed &&

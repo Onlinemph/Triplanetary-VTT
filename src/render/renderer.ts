@@ -465,16 +465,7 @@ export class MapRenderer {
         const y1 = c.y + uy * head + py;
 
         ctx.beginPath();
-        taperedArrowPath(
-          ctx,
-          x0,
-          y0,
-          x1,
-          y1,
-          f.pitch * 0.062,
-          f.pitch * 0.15,
-          f.pitch * 0.18,
-        );
+        taperedArrowPath(ctx, x0, y0, x1, y1, f.pitch * 0.062, f.pitch * 0.15, f.pitch * 0.18);
 
         if (src.strength === 'full') {
           ctx.fillStyle = rgba(THEME.gravityFull, 0.62 * fade);
@@ -621,14 +612,7 @@ export class MapRenderer {
       if (ship.destroyed || this.isHidden(state, view, ship)) continue;
       const color = this.colorOf(state, ship.owner);
       const selected = view.selectedShip === ship.id;
-      drawTrail(
-        f,
-        ship.course,
-        state.turn,
-        color,
-        view.showCourseHistory,
-        selected ? 2.2 : 1.7,
-      );
+      drawTrail(f, ship.course, state.turn, color, view.showCourseHistory, selected ? 2.2 : 1.7);
     }
 
     // The selected ship's predicted course, dashed.

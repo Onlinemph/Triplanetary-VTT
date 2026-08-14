@@ -145,14 +145,29 @@ const build = (opts: BuildOptions): GameState => {
   // "Each pirate corsair begins the game with one mine on board."
   ships.push(
     atAsteroidBase(
-      { id: 'pirate-corsair-1', owner: PIRATES, shipClass: 'corsair', number: 1, cargo: hold({ mine: 1 }) },
+      {
+        id: 'pirate-corsair-1',
+        owner: PIRATES,
+        shipClass: 'corsair',
+        number: 1,
+        cargo: hold({ mine: 1 }),
+      },
       siteAt(4),
     ),
     atAsteroidBase(
-      { id: 'pirate-corsair-2', owner: PIRATES, shipClass: 'corsair', number: 2, cargo: hold({ mine: 1 }) },
+      {
+        id: 'pirate-corsair-2',
+        owner: PIRATES,
+        shipClass: 'corsair',
+        number: 2,
+        cargo: hold({ mine: 1 }),
+      },
       siteAt(5),
     ),
-    atAsteroidBase({ id: 'pirate-corvette', owner: PIRATES, shipClass: 'corvette', number: 3 }, siteAt(6)),
+    atAsteroidBase(
+      { id: 'pirate-corvette', owner: PIRATES, shipClass: 'corvette', number: 3 },
+      siteAt(6),
+    ),
   );
 
   const dummies: DummyCounter[] = [];
@@ -248,15 +263,28 @@ const checkVictory = (state: GameState): VictoryState | null => {
   );
   if (ransomed) {
     return dreadnaughtLost
-      ? victory([PIRATES], 'decisive', 'The magnates are held at Clandestine and the Tycho Brahe is wreckage.')
+      ? victory(
+          [PIRATES],
+          'decisive',
+          'The magnates are held at Clandestine and the Tycho Brahe is wreckage.',
+        )
       : victory([PIRATES], 'marginal', 'The magnates are held for ransom at Clandestine.');
   }
 
   // "The Navy wins if the liner makes it to Ganymede."
   const liner = state.ships['liner'];
-  if (liner && !liner.destroyed && cargoCount(liner, 'passengers') > 0 && isLandedOn(map, liner, 'ganymede')) {
+  if (
+    liner &&
+    !liner.destroyed &&
+    cargoCount(liner, 'passengers') > 0 &&
+    isLandedOn(map, liner, 'ganymede')
+  ) {
     return pirateLost
-      ? victory([NAVY], 'decisive', 'Lateral 7 is down at Ganymede and a pirate has been destroyed.')
+      ? victory(
+          [NAVY],
+          'decisive',
+          'Lateral 7 is down at Ganymede and a pirate has been destroyed.',
+        )
       : victory([NAVY], 'marginal', 'Lateral 7 has landed at Ganymede with the magnates aboard.');
   }
 

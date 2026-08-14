@@ -20,7 +20,7 @@ export const createRng = (seed: number): RngState => ({ seed: seed >>> 0 });
 
 /** Advance the generator, returning the next state and a float in [0, 1). */
 export const nextFloat = (state: RngState): { state: RngState; value: number } => {
-  let a = (state.seed + 0x6d2b79f5) >>> 0;
+  const a = (state.seed + 0x6d2b79f5) >>> 0;
   let t = a;
   t = Math.imul(t ^ (t >>> 15), t | 1);
   t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
@@ -35,10 +35,7 @@ export const rollDie = (state: RngState): { state: RngState; value: number } => 
 };
 
 /** Roll `n` six-sided dice, returning them in order. */
-export const rollDice = (
-  state: RngState,
-  n: number,
-): { state: RngState; values: number[] } => {
+export const rollDice = (state: RngState, n: number): { state: RngState; values: number[] } => {
   let s = state;
   const values: number[] = [];
   for (let i = 0; i < n; i++) {
@@ -50,7 +47,10 @@ export const rollDice = (
 };
 
 /** Deterministic shuffle — used for "randomly chosen order" torpedo targeting. */
-export const shuffle = <T>(state: RngState, items: readonly T[]): { state: RngState; items: T[] } => {
+export const shuffle = <T>(
+  state: RngState,
+  items: readonly T[],
+): { state: RngState; items: T[] } => {
   const out = items.slice();
   let s = state;
   for (let i = out.length - 1; i > 0; i--) {

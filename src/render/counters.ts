@@ -12,15 +12,7 @@
 
 import { SHIP_CLASSES, type ShipClass } from '../engine/ships.js';
 import type { Ordnance, Ship } from '../engine/types.js';
-import {
-  type Frame,
-  counterPath,
-  diamondPath,
-  glow,
-  label,
-  pulse,
-  setFont,
-} from './draw.js';
+import { type Frame, counterPath, diamondPath, glow, label, pulse, setFont } from './draw.js';
 import { LOD, SIZES, THEME, clamp, darken, inkOn, lighten, rgba } from './theme.js';
 
 /**
@@ -506,11 +498,7 @@ export const drawOrdnanceMarker = (
 };
 
 /** Fan several counters sharing one hex so every one of them stays readable. */
-export const stackOffset = (
-  f: Frame,
-  index: number,
-  count: number,
-): { dx: number; dy: number } => {
+export const stackOffset = (f: Frame, index: number, count: number): { dx: number; dy: number } => {
   if (count <= 1) return { dx: 0, dy: 0 };
   const step = counterWidth(f) * 0.2;
   const centred = index - (count - 1) / 2;

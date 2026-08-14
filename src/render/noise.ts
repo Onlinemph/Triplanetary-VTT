@@ -18,7 +18,8 @@ export const hash2 = (x: number, y: number, salt: number): number => {
 };
 
 /** Hashed noise in [0, 1). */
-export const noise2 = (x: number, y: number, salt: number): number => hash2(x, y, salt) / 4294967296;
+export const noise2 = (x: number, y: number, salt: number): number =>
+  hash2(x, y, salt) / 4294967296;
 
 /** Hashed noise in [lo, hi). */
 export const range2 = (x: number, y: number, salt: number, lo: number, hi: number): number =>

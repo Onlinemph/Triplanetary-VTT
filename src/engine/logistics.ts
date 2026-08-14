@@ -24,13 +24,7 @@
  * way movement parks its landing and ramming declarations.
  */
 
-import {
-  applyAdvancedHits,
-  applyDamage,
-  isDisabled,
-  recoverDamage,
-  shipLabel,
-} from './combat.js';
+import { applyAdvancedHits, applyDamage, isDisabled, recoverDamage, shipLabel } from './combat.js';
 import type {
   Capture,
   CommandResult,
@@ -44,24 +38,11 @@ import type {
   TransferCargo,
 } from './commands.js';
 import { otherDamage, otherToHit } from './crt.js';
-import {
-  type Hex,
-  type HexSide,
-  distance,
-  eq,
-  isZero,
-  key,
-  sideKey,
-} from './hex.js';
+import { type Hex, type HexSide, distance, eq, isZero, key, sideKey } from './hex.js';
 import type { GameMap } from './map.js';
 import { controllerOf, shipPath } from './movement.js';
 import { rollDice } from './rng.js';
-import {
-  type CargoKind,
-  type ShipClass,
-  CARGO,
-  SHIP_CLASSES,
-} from './ships.js';
+import { type CargoKind, type ShipClass, CARGO, SHIP_CLASSES } from './ships.js';
 import {
   ZERO,
   addCargo,
@@ -174,10 +155,10 @@ const withLogistics = (state: GameState, patch: Partial<LogisticsData>): GameSta
 
 const okResult: CommandResult = { ok: true };
 
-const reject = (
-  state: GameState,
-  reason: string,
-): { state: GameState; result: CommandResult } => ({ state, result: { ok: false, reason } });
+const reject = (state: GameState, reason: string): { state: GameState; result: CommandResult } => ({
+  state,
+  result: { ok: false, reason },
+});
 
 /** Ore is mined a tenth of a ton at a time; keep the arithmetic printable. */
 const roundTons = (t: number): number => Math.round(t * 1000) / 1000;
@@ -192,11 +173,7 @@ export const hasUnlimitedFuel = (ship: Ship): boolean =>
  * "Bases are marked on the map... the scenario will also indicate the ownership
  * of the various bases." A base nobody has claimed serves anyone; allies share.
  */
-export const baseIsFriendly = (
-  state: GameState,
-  base: BaseState,
-  player: PlayerId,
-): boolean => {
+export const baseIsFriendly = (state: GameState, base: BaseState, player: PlayerId): boolean => {
   if (base.destroyed) return false;
   return base.owner === null || areAllied(state, base.owner, player);
 };
@@ -630,11 +607,9 @@ export function transferCargo(
   const moved = applyTransfer(from, to, item);
   let s = withShip(withShip(state, moved.giver), moved.taker);
   const what = cmd.kind === 'fuel' ? 'fuel' : CARGO[cmd.kind].name;
-  s = log(
-    s,
-    `${shipLabel(from)} transfers ${cmd.quantity} ${what} to ${shipLabel(to)}.`,
-    { focus: [from.pos] },
-  );
+  s = log(s, `${shipLabel(from)} transfers ${cmd.quantity} ${what} to ${shipLabel(to)}.`, {
+    focus: [from.pos],
+  });
   return { state: s, result: okResult };
 }
 
@@ -937,9 +912,7 @@ export function purchaseShip(
     shipClass: cmd.shipClass,
     number,
     pos: cmd.side ? cmd.side.hex : cmd.at,
-    location: cmd.side
-      ? { kind: 'landed', side: cmd.side }
-      : { kind: 'asteroidBase', hex: cmd.at },
+    location: cmd.side ? { kind: 'landed', side: cmd.side } : { kind: 'asteroidBase', hex: cmd.at },
   });
 
   let s: GameState = { ...state, nextShipNumber: number + 1 };
@@ -983,11 +956,9 @@ export function purchaseEquipment(
 
   let s = withShip(state, addCargo(ship, kind, quantity));
   s = withPlayer(s, { ...buyer, megacredits: roundTons(buyer.megacredits - total) });
-  s = log(
-    s,
-    `${shipLabel(ship)} takes on ${quantity} ${CARGO[kind].name} for MCr ${total}.`,
-    { focus: [ship.pos] },
-  );
+  s = log(s, `${shipLabel(ship)} takes on ${quantity} ${CARGO[kind].name} for MCr ${total}.`, {
+    focus: [ship.pos],
+  });
   return { state: s, result: okResult };
 }
 
@@ -1007,7 +978,8 @@ export function sellCargo(
   if (!seller) return reject(state, 'no such player');
 
   const check = canResupplyAt(state, ship, map);
-  if (!check.ok || check.baseId === undefined) return reject(state, check.reason ?? 'not at a base');
+  if (!check.ok || check.baseId === undefined)
+    return reject(state, check.reason ?? 'not at a base');
   const base = state.bases[check.baseId]!;
   const market = MARKETS[baseBodyId(base, map)];
   if (!market) return reject(state, `${nameOfBase(state, base.id, map)} does not buy ore`);
@@ -1042,11 +1014,10 @@ export function sellCargo(
 export const prospectingEnabled = (state: GameState): boolean =>
   state.scenarioData['prospecting'] === true;
 
-const withProspected = (
-  state: GameState,
-  k: string,
-  value: 'ore' | 'barren',
-): GameState => ({ ...state, prospected: { ...state.prospected, [k]: value } });
+const withProspected = (state: GameState, k: string, value: 'ore' | 'barren'): GameState => ({
+  ...state,
+  prospected: { ...state.prospected, [k]: value },
+});
 
 /**
  * "Any ship may prospect by passing through an asteroid hex at a speed of 1. Two

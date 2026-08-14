@@ -124,7 +124,13 @@ export const drawCourseArrow = (
 
   const a = toPixel(from, f.size);
   const b = toPixel(to, f.size);
-  if (!f.cam.isVisible((a.x + b.x) / 2, (a.y + b.y) / 2, Math.hypot(b.x - a.x, b.y - a.y) / 2 + f.pitch))
+  if (
+    !f.cam.isVisible(
+      (a.x + b.x) / 2,
+      (a.y + b.y) / 2,
+      Math.hypot(b.x - a.x, b.y - a.y) / 2 + f.pitch,
+    )
+  )
     return;
 
   const { headLen, headHalf, lw } = arrowGeometry(f, style.width);

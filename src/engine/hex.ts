@@ -51,8 +51,7 @@ export const DIRECTIONS: readonly Hex[] = [
   hex(0, 1), //  5: south-east
 ] as const;
 
-export const neighbor = (h: Hex, dir: number): Hex =>
-  add(h, DIRECTIONS[((dir % 6) + 6) % 6]!);
+export const neighbor = (h: Hex, dir: number): Hex => add(h, DIRECTIONS[((dir % 6) + 6) % 6]!);
 
 export const neighbors = (h: Hex): Hex[] => DIRECTIONS.map((d) => add(h, d));
 

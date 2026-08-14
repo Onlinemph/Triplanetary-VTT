@@ -125,12 +125,15 @@ const build = (opts: BuildOptions): GameState => {
   const ships: Ship[] = [];
   const orbitalBases: { id: string; owner: PlayerId; hex: Hex }[] = [];
 
-  const station = (o: {
-    id: string;
-    owner: PlayerId;
-    shipClass: ShipClass;
-    number: number;
-  }, at: Hex): Ship =>
+  const station = (
+    o: {
+      id: string;
+      owner: PlayerId;
+      shipClass: ShipClass;
+      number: number;
+    },
+    at: Hex,
+  ): Ship =>
     // "Vessels in gravity hexes may be assumed to be in orbit."
     orbitAtHex(o, map, at) ?? inSpace(o, at);
 
@@ -147,18 +150,16 @@ const build = (opts: BuildOptions): GameState => {
     // An orbital base is both a counter that fights and a base that resupplies,
     // so it is seeded as both: the ship carries its combat strength of 16, the
     // `BaseState` carries its fuel and ordnance stores.
-    ships.push(
-      station(
-        { id, owner: EMPIRE, shipClass: 'orbitalBase', number: 90 + i },
-        at,
-      ),
-    );
+    ships.push(station({ id, owner: EMPIRE, shipClass: 'orbitalBase', number: 90 + i }, at));
     orbitalBases.push({ id, owner: EMPIRE, hex: at });
   }
 
   // "The Rebel player designates five ships and/or orbital bases, and rolls a die
   // for each one. On a roll of 6, the ship does not rebel."
-  const draw = shuffle(rng, ships.map((s) => s.id));
+  const draw = shuffle(
+    rng,
+    ships.map((s) => s.id),
+  );
   rng = draw.state;
   const designated = draw.items.slice(0, SUBORNED);
   const rebelIds: string[] = [];
@@ -214,9 +215,7 @@ const build = (opts: BuildOptions): GameState => {
 /** Every rebel asset still in the game: hulls, orbital bases, captured bases. */
 const rebelAssets = (state: GameState): number => {
   const ships = ownedShips(state, REBELS).length;
-  const bases = Object.values(state.bases).filter(
-    (b) => b.owner === REBELS && !b.destroyed,
-  ).length;
+  const bases = Object.values(state.bases).filter((b) => b.owner === REBELS && !b.destroyed).length;
   return ships + bases;
 };
 

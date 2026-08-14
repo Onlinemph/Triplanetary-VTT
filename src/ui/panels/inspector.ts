@@ -12,7 +12,7 @@ import { isZero } from '@engine/hex.js';
 import { cargoMass } from '@engine/logistics.js';
 import { controllerOf } from '@engine/movement.js';
 import { CARGO, SHIP_CLASSES } from '@engine/ships.js';
-import { PHASE_LABELS, type Ship, activePlayer } from '@engine/types.js';
+import { PHASE_LABELS, activePlayer } from '@engine/types.js';
 import { type Child, button, el, fill } from '../components/dom.js';
 import { shipGlyph } from '../components/glyphs.js';
 import { advancedTracks, damagePips, empty, note, section, statRow } from '../components/meters.js';

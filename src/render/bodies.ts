@@ -18,15 +18,7 @@ import { type Hex, toPixel } from '../engine/hex.js';
 import type { GameMap } from '../engine/map.js';
 import { type AstralBody, solarDistance } from '../engine/mapdata.js';
 import type { BaseState, GameState, PlayerId } from '../engine/types.js';
-import {
-  type Frame,
-  DIR_COS,
-  DIR_SIN,
-  blobPath,
-  glow,
-  label,
-  setFont,
-} from './draw.js';
+import { type Frame, DIR_COS, DIR_SIN, blobPath, glow, label, setFont } from './draw.js';
 import { Stream, hash2, noise2 } from './noise.js';
 import { LOD, THEME, darken, lighten, mix, rgba, smoothstep } from './theme.js';
 
@@ -150,9 +142,15 @@ const drawStar = (f: Frame, body: AstralBody, cx: number, cy: number, r: number)
     grad.addColorStop(1, rgba(body.glow, 0));
     ctx.fillStyle = grad;
     ctx.beginPath();
-    ctx.moveTo(Math.cos(a - 0.0) * r * 0.85 + Math.cos(a + Math.PI / 2) * w, Math.sin(a) * r * 0.85 + Math.sin(a + Math.PI / 2) * w);
+    ctx.moveTo(
+      Math.cos(a - 0.0) * r * 0.85 + Math.cos(a + Math.PI / 2) * w,
+      Math.sin(a) * r * 0.85 + Math.sin(a + Math.PI / 2) * w,
+    );
     ctx.lineTo(Math.cos(a) * len, Math.sin(a) * len);
-    ctx.lineTo(Math.cos(a) * r * 0.85 - Math.cos(a + Math.PI / 2) * w, Math.sin(a) * r * 0.85 - Math.sin(a + Math.PI / 2) * w);
+    ctx.lineTo(
+      Math.cos(a) * r * 0.85 - Math.cos(a + Math.PI / 2) * w,
+      Math.sin(a) * r * 0.85 - Math.sin(a + Math.PI / 2) * w,
+    );
     ctx.closePath();
     ctx.fill();
   }
@@ -222,7 +220,10 @@ const bands = (f: Frame, body: AstralBody, cx: number, cy: number, r: number): v
   for (let i = 0; i < n; i++) {
     const y0 = cy - r + (2 * r * i) / n;
     const h = ((2 * r) / n) * rnd.range(0.5, 1.0);
-    const tint = rnd.next() < 0.5 ? darken(body.color, rnd.range(0.15, 0.3)) : lighten(body.color, rnd.range(0.1, 0.24));
+    const tint =
+      rnd.next() < 0.5
+        ? darken(body.color, rnd.range(0.15, 0.3))
+        : lighten(body.color, rnd.range(0.1, 0.24));
     ctx.fillStyle = rgba(tint, 0.55);
     ctx.beginPath();
     ctx.ellipse(cx, y0 + h / 2, r, h / 2, 0, 0, Math.PI * 2);
@@ -254,7 +255,15 @@ const drawWorld = (
   const base = cool > 0 ? mix(body.color, '#8fa7c4', cool) : body.color;
 
   // Atmosphere / halo.
-  glow(f, cx, cy, r * (body.kind === 'moon' ? 1.9 : 2.5), body.glow, body.kind === 'moon' ? 0.16 : 0.24, r * 0.7);
+  glow(
+    f,
+    cx,
+    cy,
+    r * (body.kind === 'moon' ? 1.9 : 2.5),
+    body.glow,
+    body.kind === 'moon' ? 0.16 : 0.24,
+    r * 0.7,
+  );
 
   // Lit hemisphere: a radial gradient pushed toward Sol.
   const g = ctx.createRadialGradient(

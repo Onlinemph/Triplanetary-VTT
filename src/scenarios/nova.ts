@@ -171,9 +171,7 @@ const build = (opts: BuildOptions): GameState => {
     fleet.forEach((cls, i) => {
       const home = homes[i % Math.max(1, homes.length)]!;
       const o = { id: `${owner}-${cls}-${i + 1}`, owner, shipClass: cls, number: counter++ };
-      ships.push(
-        home.side ? landed(o, home.side) : atAsteroidBase(o, home.hex),
-      );
+      ships.push(home.side ? landed(o, home.side) : atAsteroidBase(o, home.hex));
     });
   };
 
@@ -244,9 +242,7 @@ const checkVictory = (state: GameState): VictoryState | null => {
   const map = DEFAULT_MAP;
   const alienIds = (state.scenarioData['alienShips'] ?? []) as readonly string[];
 
-  const aliens = alienIds
-    .map((id) => state.ships[id])
-    .filter((s): s is Ship => s !== undefined);
+  const aliens = alienIds.map((id) => state.ships[id]).filter((s): s is Ship => s !== undefined);
 
   // "The Alien force wins, permanently and decisively, by successfully activating
   // a nova bomb while in orbit around the sun." Each ship "automatically
@@ -265,7 +261,9 @@ const checkVictory = (state: GameState): VictoryState | null => {
 
   // "The EastBloc or the WestBloc wins by capturing or destroying the last Alien
   // ship (note that aliens will not surrender)."
-  const stillFlying = aliens.filter((s) => !s.destroyed && s.capturedBy === undefined && s.owner === ALIEN);
+  const stillFlying = aliens.filter(
+    (s) => !s.destroyed && s.capturedBy === undefined && s.owner === ALIEN,
+  );
   if (aliens.length > 0 && stillFlying.length === 0) {
     // Variant, and the more interesting reading of the two: "a human decisive
     // victory goes only to a force that captures an Alien vessel and returns it
@@ -281,7 +279,11 @@ const checkVictory = (state: GameState): VictoryState | null => {
         'The alien fleet is broken and a hull has been taken home for study.',
       );
     }
-    return victory([WEST, EAST], 'marginal', 'The last alien ship is destroyed. The System survives.');
+    return victory(
+      [WEST, EAST],
+      'marginal',
+      'The last alien ship is destroyed. The System survives.',
+    );
   }
 
   return null;

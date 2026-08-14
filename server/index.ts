@@ -20,12 +20,7 @@ import { WebSocketServer, type WebSocket } from 'ws';
 
 import { DEFAULT_MAP } from '../src/engine/index.js';
 import { buildScenario } from '../src/scenarios/index.js';
-import {
-  type ServerMsg,
-  encode,
-  frame,
-  parseClientMsg,
-} from '../src/net/protocol.js';
+import { type ServerMsg, encode, frame, parseClientMsg } from '../src/net/protocol.js';
 import { Room } from './room.js';
 
 const PORT = Number(process.env['PORT'] ?? 8787);
@@ -58,8 +53,7 @@ const send = (client: Client, msg: ServerMsg): void => {
   }
 };
 
-const peers = (room: Room): Client[] =>
-  [...clients].filter((c) => c.room === room);
+const peers = (room: Room): Client[] => [...clients].filter((c) => c.room === room);
 
 const broadcastRoster = (room: Room): void => {
   const roster = room.roster();
@@ -144,9 +138,7 @@ wss.on('connection', (socket: WebSocket, req: IncomingMessage) => {
         frame({ t: 'snapshot', index: room.log.length, state: room.viewFor(client.seat) }),
       );
       broadcastRoster(room);
-      console.log(
-        `[room ${msg.room}] ${client.id} joined as ${client.seat ?? 'spectator'}`,
-      );
+      console.log(`[room ${msg.room}] ${client.id} joined as ${client.seat ?? 'spectator'}`);
       return;
     }
 

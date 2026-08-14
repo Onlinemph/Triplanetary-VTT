@@ -163,15 +163,16 @@ export const ordnanceLabel = (o: Ordnance): string => `${KIND_NAME[o.kind]} ${o.
 
 const okResult: CommandResult = { ok: true };
 
-const reject = (
-  state: GameState,
-  reason: string,
-): { state: GameState; result: CommandResult } => ({ state, result: { ok: false, reason } });
+const reject = (state: GameState, reason: string): { state: GameState; result: CommandResult } => ({
+  state,
+  result: { ok: false, reason },
+});
 
 const no = (reason: string): { ok: boolean; reason?: string } => ({ ok: false, reason });
 const yes: { ok: boolean; reason?: string } = { ok: true };
 
-const byId = (a: { id: string }, b: { id: string }): number => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+const byId = (a: { id: string }, b: { id: string }): number =>
+  a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
 
 // ---------------------------------------------------------------------------
 // Side table: which ship launched which item
@@ -338,7 +339,8 @@ export function canLaunch(
   }
 
   // A captured ship's prize crew "may not fire, or return fire if fired upon".
-  if (ship.capturedBy !== undefined) return no(`${shipLabel(ship)} is a prize and may not launch ordnance`);
+  if (ship.capturedBy !== undefined)
+    return no(`${shipLabel(ship)} is a prize and may not launch ordnance`);
 
   // "Ships landed at planetary bases may not fire guns or launch ordnance."
   if (ship.location.kind === 'landed') return no(`${shipLabel(ship)} is landed`);
@@ -396,8 +398,7 @@ export function torpedoAimOptions(state: GameState, ship: Ship, map: GameMap): H
     map.inBounds(add(add(ship.pos, v), gravity)),
   );
   return options.sort(
-    (a, b) =>
-      distance(a, ship.velocity) - distance(b, ship.velocity) || a.q - b.q || a.r - b.r,
+    (a, b) => distance(a, ship.velocity) - distance(b, ship.velocity) || a.q - b.q || a.r - b.r,
   );
 }
 
@@ -423,7 +424,8 @@ export function launchOrdnance(
 ): { state: GameState; result: CommandResult } {
   // "2. Ordnance Phase. Spaceships may declare that they are launching ordnance
   // (mines, torpedoes, nukes) during this phase."
-  if (state.phase !== 'ordnance') return reject(state, 'ordnance is launched in the ordnance phase');
+  if (state.phase !== 'ordnance')
+    return reject(state, 'ordnance is launched in the ordnance phase');
   if (cmd.by !== activePlayer(state)) return reject(state, 'it is not your player-turn');
 
   const ship = state.ships[cmd.ship];
@@ -436,7 +438,10 @@ export function launchOrdnance(
   let velocity = ship.velocity;
   if (cmd.aim !== undefined) {
     if (cmd.kind !== 'torpedo') {
-      return reject(state, 'only a torpedo may be aimed; mines and nukes take the launcher’s vector');
+      return reject(
+        state,
+        'only a torpedo may be aimed; mines and nukes take the launcher’s vector',
+      );
     }
     const boost = distance(cmd.aim, ship.velocity);
     if (boost > TORPEDO_BOOST) {
@@ -634,7 +639,12 @@ interface DetonationOutcome {
 }
 
 /** Everything that counts as standing in the hex when the fuse trips. */
-const victimsIn = (state: GameState, at: Hex, kind: OrdnanceKind, opts: DetonationOptions): Ship[] => {
+const victimsIn = (
+  state: GameState,
+  at: Hex,
+  kind: OrdnanceKind,
+  opts: DetonationOptions,
+): Ship[] => {
   const here = shipsInHex(state, at).filter((s) => !immuneTo(s, kind));
   const triggeringShip = opts.triggeringShip;
   if (triggeringShip !== undefined && !here.some((s) => s.id === triggeringShip)) {
@@ -732,7 +742,10 @@ export function detonate(
   // more than one ship in the affected hex, damage is rolled for each, in a
   // randomly chosen order, until one ship (only) is damaged or destroyed, or all
   // ships have been rolled for without damage resulting."
-  const order = shuffle(state.rng, victims.map((v) => v.id));
+  const order = shuffle(
+    state.rng,
+    victims.map((v) => v.id),
+  );
   let s: GameState = { ...state, rng: order.state };
   let hit = false;
   for (const victimId of order.items) {
@@ -818,11 +831,10 @@ const detonateNuke = (
     // "destroys everything in the hex".
     const side = nukeDevastationSide(body, opts.from ?? sub(at, nuke.velocity));
     const k = sideKey(side);
-    s = log(
-      s,
-      `${ordnanceLabel(nuke)} strikes ${body.name} and devastates hexside ${side.dir}.`,
-      { severity: 'bad', focus: [at] },
-    );
+    s = log(s, `${ordnanceLabel(nuke)} strikes ${body.name} and devastates hexside ${side.dir}.`, {
+      severity: 'bad',
+      focus: [at],
+    });
     if (!s.devastatedSides.includes(k)) {
       s = { ...s, devastatedSides: [...s.devastatedSides, k] };
     }
@@ -834,8 +846,7 @@ const detonateNuke = (
       s = log(s, `The base at ${base.id} is obliterated.`, { severity: 'bad', focus: [at] });
     }
     for (const ship of shipsInHex(s, at).sort(byId)) {
-      const landedElsewhere =
-        ship.location.kind === 'landed' && sideKey(ship.location.side) !== k;
+      const landedElsewhere = ship.location.kind === 'landed' && sideKey(ship.location.side) !== k;
       if (landedElsewhere) continue;
       s = destroyShip(s, ship.id, cause);
     }
@@ -872,7 +883,8 @@ const detonateNuke = (
   }
 
   const cleared = new Set(s.clearedAsteroids);
-  const isRock = map.isAsteroid(at, cleared) || (body !== undefined && body.kind === 'majorAsteroid');
+  const isRock =
+    map.isAsteroid(at, cleared) || (body !== undefined && body.kind === 'majorAsteroid');
   if (isRock && !cleared.has(key(at))) {
     s = { ...s, clearedAsteroids: [...s.clearedAsteroids, key(at)] };
     s = log(s, `The asteroids at ${at.q},${at.r} are blasted into clear space.`, {
@@ -970,9 +982,7 @@ const triggerAt = (
  * pull.
  */
 const ordnanceGravity = (from: Hex, to: Hex, map: GameMap): Hex => {
-  const entered = eq(from, to)
-    ? [to]
-    : traceSegment(from, to).entered.filter((h) => !eq(h, from));
+  const entered = eq(from, to) ? [to] : traceSegment(from, to).entered.filter((h) => !eq(h, from));
   const { mandatory, optional } = map.accumulateGravity(entered);
   let g = mandatory;
   for (const h of optional) g = add(g, map.weakGravityArrow(h));
@@ -1217,7 +1227,8 @@ export function attackNuke(
   for (const id of attackers) {
     const ship = state.ships[id];
     if (!ship) return reject(state, `unknown ship ${id}`);
-    if (ships.some((s) => s.id === ship.id)) return reject(state, `${shipLabel(ship)} was listed twice`);
+    if (ships.some((s) => s.id === ship.id))
+      return reject(state, `${shipLabel(ship)} was listed twice`);
     if (!canFire(ship, state.options.advancedCombat)) {
       return reject(state, `${shipLabel(ship)} may not fire`);
     }
@@ -1252,8 +1263,7 @@ export function attackNuke(
   }
   // "Heroic ships always add +1 to the die roll for gun combat when attacking."
   const heroic = ships.some((s) => s.heroic);
-  const modifier =
-    rangeModifier(range) + velocityModifier(relativeVelocity) + (heroic ? 1 : 0);
+  const modifier = rangeModifier(range) + velocityModifier(relativeVelocity) + (heroic ? 1 : 0);
 
   let s = state;
   for (const ship of ships) s = withShip(s, { ...s.ships[ship.id]!, firedThisPhase: true });
@@ -1312,7 +1322,12 @@ export function firePlanetaryDefenceAtNuke(
   const modifier = rangeModifier(range) + velocityModifier(relativeVelocity);
 
   let s = withBase(state, { ...base, firedThisTurn: true });
-  const shot = rollAtNuke(s, item, { range, relativeVelocity, modifier }, `Planetary defences at ${base.id}`);
+  const shot = rollAtNuke(
+    s,
+    item,
+    { range, relativeVelocity, modifier },
+    `Planetary defences at ${base.id}`,
+  );
   s = shot.state;
   return { state: s, result: okResult };
 }

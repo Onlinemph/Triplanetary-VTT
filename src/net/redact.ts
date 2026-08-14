@@ -82,11 +82,7 @@ const collectStrings = (value: unknown, out: Set<string>, depth = 0): void => {
  * A secret that names nothing identifiable is withheld from everyone, which is
  * the safe direction to fail in.
  */
-export const secretIsVisibleTo = (
-  state: GameState,
-  secret: unknown,
-  viewer: PlayerId,
-): boolean => {
+export const secretIsVisibleTo = (state: GameState, secret: unknown, viewer: PlayerId): boolean => {
   const names = new Set<string>();
   collectStrings(secret, names);
 
@@ -177,7 +173,9 @@ const alwaysVisibleTo = (state: GameState, viewer: PlayerId): ReadonlySet<string
   const table = state.scenarioData[ALWAYS_VISIBLE_KEY];
   if (typeof table !== 'object' || table === null) return new Set();
   const list = (table as Record<string, unknown>)[viewer];
-  return Array.isArray(list) ? new Set(list.filter((x): x is string => typeof x === 'string')) : new Set();
+  return Array.isArray(list)
+    ? new Set(list.filter((x): x is string => typeof x === 'string'))
+    : new Set();
 };
 
 const shipVisible = (
@@ -197,11 +195,7 @@ const shipVisible = (
  * When the scenario is not playing with fog of war this is the identity
  * function, and the server can broadcast one state to everybody.
  */
-export const redactState = (
-  state: GameState,
-  viewer: PlayerId | null,
-  map: GameMap,
-): GameState => {
+export const redactState = (state: GameState, viewer: PlayerId | null, map: GameMap): GameState => {
   // A spectator of an open-information game sees everything; a spectator of a
   // fog game sees only what is public, which is what `null` falls through to.
   if (!state.options.fogOfWar) return state;
@@ -264,7 +258,5 @@ export const redactState = (
  * player's turn, fire their guns, or scuttle their ordnance, because `by` is
  * just a string in a JSON frame.
  */
-export const commandIsAuthorised = (
-  seat: PlayerId | null,
-  commandBy: PlayerId,
-): boolean => seat !== null && seat === commandBy;
+export const commandIsAuthorised = (seat: PlayerId | null, commandBy: PlayerId): boolean =>
+  seat !== null && seat === commandBy;

@@ -910,7 +910,6 @@ export const createApp = (deps: AppDeps): App => {
     canvas.focus();
   };
 
-
   /**
    * Measure the screen edges the floating panels cover, straight from the CSS
    * custom properties that lay them out, so the value tracks the collapse

@@ -67,7 +67,13 @@ const build = (opts: BuildOptions): GameState => {
     ships: [
       // "The Patrol starts with a Dreadnaught and a Corsair on Luna."
       landed(
-        { id: 'patrol-dreadnaught', owner: PATROL, shipClass: 'dreadnaught', number: 1, name: 'Argus' },
+        {
+          id: 'patrol-dreadnaught',
+          owner: PATROL,
+          shipClass: 'dreadnaught',
+          number: 1,
+          name: 'Argus',
+        },
         sideOf(map, 'luna', 0),
       ),
       landed(
@@ -197,7 +203,11 @@ const checkVictory = (state: GameState): VictoryState | null => {
   // that time if they have at least 4 ships."
   if (pirateShips === 0) {
     return merchantShips >= 4
-      ? victory([PATROL, MERCHANTS], 'decisive', 'The pirate fleet is destroyed and trade is thriving.')
+      ? victory(
+          [PATROL, MERCHANTS],
+          'decisive',
+          'The pirate fleet is destroyed and trade is thriving.',
+        )
       : victory([PATROL], 'decisive', 'The pirate fleet is destroyed.');
   }
 

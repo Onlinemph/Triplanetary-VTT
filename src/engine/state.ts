@@ -239,7 +239,10 @@ export const log = (state: GameState, text: string, opts: LogOptions = {}): Game
   const entry: LogEntry = {
     id: state.nextLogId,
     turn: state.turn,
-    player: opts.player !== undefined ? opts.player : (state.playerOrder[state.activePlayerIndex] ?? null),
+    player:
+      opts.player !== undefined
+        ? opts.player
+        : (state.playerOrder[state.activePlayerIndex] ?? null),
     phase: opts.phase ?? state.phase,
     severity: opts.severity ?? 'info',
     text,

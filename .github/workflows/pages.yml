@@ -2,7 +2,14 @@ name: Deploy to GitHub Pages
 
 on:
   push:
+    branches: [main]
   workflow_dispatch:
+
+# Deploying needs GitHub Pages switched on for the repository first
+# (Settings -> Pages -> Build and deployment -> GitHub Actions). Until then this
+# workflow fails at `configure-pages` with "Get Pages site failed", which is why
+# it is scoped to `main` rather than every push: enabling Pages publishes the
+# site, and that is a decision for whoever owns the repository, not for CI.
 
 permissions:
   contents: read

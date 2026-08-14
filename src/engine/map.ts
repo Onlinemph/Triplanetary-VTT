@@ -315,11 +315,7 @@ export class GameMap {
    *
    * Ships travelling at one hex per turn are never affected.
    */
-  asteroidHazards(
-    from: Hex,
-    to: Hex,
-    cleared: ReadonlySet<string> = new Set(),
-  ): Hex[] {
+  asteroidHazards(from: Hex, to: Hex, cleared: ReadonlySet<string> = new Set()): Hex[] {
     if (distance(from, to) <= 1) return [];
     const trace = traceSegment(from, to);
     const out: Hex[] = [];

@@ -153,10 +153,7 @@ const withMovementData = (state: GameState, patch: Partial<MovementData>): GameS
 const SPACE: ShipLocation = { kind: 'space' };
 
 const okResult: CommandResult = { ok: true };
-const reject = (
-  state: GameState,
-  reason: string,
-): { state: GameState; result: CommandResult } => ({
+const reject = (state: GameState, reason: string): { state: GameState; result: CommandResult } => ({
   state,
   result: { ok: false, reason },
 });
@@ -228,9 +225,7 @@ const baseIsFriendly = (state: GameState, baseId: string, player: PlayerId): boo
 
 const baseAtSide = (state: GameState, side: HexSide) => {
   const k = sideKey(side);
-  return Object.values(state.bases).find(
-    (b) => b.side !== undefined && sideKey(b.side) === k,
-  );
+  return Object.values(state.bases).find((b) => b.side !== undefined && sideKey(b.side) === k);
 };
 
 /** An asteroid or orbital base sitting in a hex (planetary bases live on hexsides). */
@@ -420,9 +415,7 @@ const checkPlot = (
   }
   const accel = d as 0 | 1 | 2;
   if (accel > 0 && !canManeuver(state, ship)) {
-    return fail(
-      `${shipLabel(ship)} cannot maneuver and may only drift on its current course`,
-    );
+    return fail(`${shipLabel(ship)} cannot maneuver and may only drift on its current course`);
   }
   if (accel === 2) {
     if (!overload) {
@@ -491,8 +484,7 @@ const authorise = (
     return { reason: `that order belongs to the ${phases[0]} phase` };
   }
   if (by !== activePlayer(state)) return { reason: 'it is not your player-turn' };
-  if (by !== controllerOf(ship))
-    return { reason: `${shipLabel(ship)} is not under your command` };
+  if (by !== controllerOf(ship)) return { reason: `${shipLabel(ship)} is not under your command` };
   return { ship };
 };
 
@@ -533,11 +525,9 @@ export const plotCourse = (
       : check.accel === 1
         ? 'burning 1 fuel'
         : 'burning 2 fuel (overload)';
-  s = log(
-    s,
-    `${shipLabel(ship)} plots a course to ${cmd.endpoint.q},${cmd.endpoint.r}, ${burn}.`,
-    { focus: [ship.pos, cmd.endpoint] },
-  );
+  s = log(s, `${shipLabel(ship)} plots a course to ${cmd.endpoint.q},${cmd.endpoint.r}, ${burn}.`, {
+    focus: [ship.pos, cmd.endpoint],
+  });
 
   // Warnings only — the rules permit a pilot to fly into a planet or off the map.
   const option = describeOption(state, ship, cmd.endpoint, check.accel, map);
@@ -634,10 +624,7 @@ export const land = (
 
   const body = map.bodyAt(cmd.side.hex);
   if (!body || body.landing !== 'hexside') {
-    return reject(
-      state,
-      `${cmd.side.hex.q},${cmd.side.hex.r} is not a world with landing sites`,
-    );
+    return reject(state, `${cmd.side.hex.q},${cmd.side.hex.r} is not a world with landing sites`);
   }
 
   // "A ship may only land by expending one fuel point while in orbit."
@@ -711,10 +698,7 @@ export const takeOff = (
   const side = ship.location.side;
   const base = baseAtSide(state, side);
   if (!base || base.destroyed) {
-    return reject(
-      state,
-      `${shipLabel(ship)} landed on a hexside with no base and cannot take off`,
-    );
+    return reject(state, `${shipLabel(ship)} landed on a hexside with no base and cannot take off`);
   }
   if (!baseIsFriendly(state, base.id, controllerOf(ship))) {
     return reject(state, 'boosters are available only at friendly bases');
@@ -795,14 +779,10 @@ export const declareRam = (
   let s = withMovementData(state, {
     rams: { ...movementData(state).rams, [ship.id]: target.id },
   });
-  s = log(
-    s,
-    `${shipLabel(ship)} declares a ramming attempt against ${shipLabel(target)}.`,
-    {
-      severity: 'warn',
-      focus: [ship.pos, target.pos],
-    },
-  );
+  s = log(s, `${shipLabel(ship)} declares a ramming attempt against ${shipLabel(target)}.`, {
+    severity: 'warn',
+    focus: [ship.pos, target.pos],
+  });
   return { state: s, result: okResult };
 };
 
@@ -969,19 +949,13 @@ const gravityHexesEntered = (from: Hex, to: Hex, entered: readonly Hex[]): Hex[]
 };
 
 /** Where a ship comes to rest: stopping in an asteroid hex is a landing. */
-const locationAfter = (
-  state: GameState,
-  map: GameMap,
-  to: Hex,
-  velocity: Hex,
-): ShipLocation => {
+const locationAfter = (state: GameState, map: GameMap, to: Hex, velocity: Hex): ShipLocation => {
   if (!isZero(velocity)) return SPACE;
   // "Ships may land at Ceres and Clandestine, or at any unnamed asteroid in the
   // Belt, by simply stopping in the hex."
   const body = map.bodyAt(to);
   if (body && body.landing === 'stop') return { kind: 'asteroidBase', hex: to };
-  if (map.isAsteroid(to, new Set(state.clearedAsteroids)))
-    return { kind: 'asteroidBase', hex: to };
+  if (map.isAsteroid(to, new Set(state.clearedAsteroids))) return { kind: 'asteroidBase', hex: to };
   return SPACE;
 };
 
@@ -1000,8 +974,7 @@ const clearDetectionOnArrival = (
   if (baseId === undefined) return ship;
   // "Ships which reach Clandestine drop off the detectors of the opposing side" —
   // that base hides everyone, friend or not.
-  if (baseId !== 'clandestine' && !baseIsFriendly(state, baseId, controllerOf(ship)))
-    return ship;
+  if (baseId !== 'clandestine' && !baseIsFriendly(state, baseId, controllerOf(ship))) return ship;
   return { ...ship, detectedBy: [] };
 };
 
@@ -1043,12 +1016,7 @@ const resolveTakeOff = (state: GameState, id: ShipId, map: GameMap): GameState =
   return s;
 };
 
-const resolveLanding = (
-  state: GameState,
-  id: ShipId,
-  side: HexSide,
-  map: GameMap,
-): GameState => {
+const resolveLanding = (state: GameState, id: ShipId, side: HexSide, map: GameMap): GameState => {
   const ship = state.ships[id]!;
   const from = ship.pos;
   const to = side.hex;
@@ -1076,14 +1044,10 @@ const resolveLanding = (
 
   let s = withShip(state, landed);
   s = recordPath(s, id, [from, to]);
-  s = log(
-    s,
-    `${shipLabel(ship)} lands on ${body?.name ?? 'the surface'} at hexside ${side.dir}.`,
-    {
-      severity: 'good',
-      focus: [from, to],
-    },
-  );
+  s = log(s, `${shipLabel(ship)} lands on ${body?.name ?? 'the surface'} at hexside ${side.dir}.`, {
+    severity: 'good',
+    focus: [from, to],
+  });
   return s;
 };
 
@@ -1113,9 +1077,7 @@ const rollAsteroidHazards = (
     if (!cur || cur.destroyed) break;
     const roll = rollDie(s.rng);
     s = { ...s, rng: roll.state };
-    s = resolveOther(s, 'asteroid', roll.value, [id], `the asteroids at ${h.q},${h.r}`, [
-      h,
-    ]);
+    s = resolveOther(s, 'asteroid', roll.value, [id], `the asteroids at ${h.q},${h.r}`, [h]);
   }
   return s;
 };
@@ -1211,13 +1173,9 @@ const moveShip = (state: GameState, id: ShipId, map: GameMap): GameState => {
   s = recordPath(s, id, trace.entered);
 
   if (!eq(from, to)) {
-    s = log(
-      s,
-      `${shipLabel(ship)} moves ${distance(from, to)} hex(es) to ${to.q},${to.r}.`,
-      {
-        focus: [from, to],
-      },
-    );
+    s = log(s, `${shipLabel(ship)} moves ${distance(from, to)} hex(es) to ${to.q},${to.r}.`, {
+      focus: [from, to],
+    });
   } else {
     s = log(s, `${shipLabel(ship)} is stationary at ${to.q},${to.r}.`, {
       focus: [to],
@@ -1272,14 +1230,9 @@ const resolveRams = (state: GameState): GameState => {
       }).`,
       { severity: 'warn', focus: [target.pos] },
     );
-    s = resolveOther(
-      s,
-      'ram',
-      roll.value + modifier,
-      [rammerId, targetId],
-      'the collision',
-      [target.pos],
-    );
+    s = resolveOther(s, 'ram', roll.value + modifier, [rammerId, targetId], 'the collision', [
+      target.pos,
+    ]);
   }
   return s;
 };

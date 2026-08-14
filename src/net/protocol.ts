@@ -127,12 +127,7 @@ export interface RosterMsg {
   readonly roster: readonly RosterEntry[];
 }
 
-export type ServerMsg =
-  | WelcomeMsg
-  | AppliedMsg
-  | SnapshotMsg
-  | RejectedMsg
-  | RosterMsg;
+export type ServerMsg = WelcomeMsg | AppliedMsg | SnapshotMsg | RejectedMsg | RosterMsg;
 
 export type AnyMsg = ClientMsg | ServerMsg;
 
@@ -140,8 +135,7 @@ export type AnyMsg = ClientMsg | ServerMsg;
 // Validation
 // ---------------------------------------------------------------------------
 
-const isRecord = (v: unknown): v is Record<string, unknown> =>
-  typeof v === 'object' && v !== null;
+const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null;
 
 /**
  * Structural check on an inbound frame.
@@ -192,7 +186,13 @@ export const parseServerMsg = (text: string): ServerMsg | null => {
   if (!isRecord(value)) return null;
   if (value['v'] !== SERVER_PROTOCOL_VERSION) return null;
   const t = value['t'];
-  if (t === 'welcome' || t === 'applied' || t === 'snapshot' || t === 'rejected' || t === 'roster') {
+  if (
+    t === 'welcome' ||
+    t === 'applied' ||
+    t === 'snapshot' ||
+    t === 'rejected' ||
+    t === 'roster'
+  ) {
     return value as unknown as ServerMsg;
   }
   return null;

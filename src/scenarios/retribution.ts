@@ -71,20 +71,38 @@ const build = (opts: BuildOptions): GameState => {
       // "two corsairs, each in orbit around a different planet selected by the
       // player" — Terra and Mars by default; a setup screen may move them.
       inOrbit(
-        { id: 'enforcer-corsair-1', owner: ENFORCERS, shipClass: 'corsair', number: 1, name: 'Praetor' },
+        {
+          id: 'enforcer-corsair-1',
+          owner: ENFORCERS,
+          shipClass: 'corsair',
+          number: 1,
+          name: 'Praetor',
+        },
         map,
         'terra',
         0,
       ),
       inOrbit(
-        { id: 'enforcer-corsair-2', owner: ENFORCERS, shipClass: 'corsair', number: 2, name: 'Lictor' },
+        {
+          id: 'enforcer-corsair-2',
+          owner: ENFORCERS,
+          shipClass: 'corsair',
+          number: 2,
+          name: 'Lictor',
+        },
         map,
         'mars',
         0,
       ),
       // "one frigate on a base at Luna."
       landed(
-        { id: 'enforcer-frigate', owner: ENFORCERS, shipClass: 'frigate', number: 3, name: 'First Citizen' },
+        {
+          id: 'enforcer-frigate',
+          owner: ENFORCERS,
+          shipClass: 'frigate',
+          number: 3,
+          name: 'First Citizen',
+        },
         sideOf(map, 'luna', 0),
       ),
       // The first of the ten. It is put in orbit above the base it rose from:

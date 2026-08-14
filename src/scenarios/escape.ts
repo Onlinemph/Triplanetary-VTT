@@ -156,9 +156,7 @@ const build = (opts: BuildOptions): GameState => {
 
 /** The Pilgrim ship the fugitives are actually aboard. */
 const fugitiveOf = (state: GameState): Ship | undefined => {
-  const secret = state.scenarioData[ESCAPE_SECRET_KEY] as
-    | { fugitiveShip?: string }
-    | undefined;
+  const secret = state.scenarioData[ESCAPE_SECRET_KEY] as { fugitiveShip?: string } | undefined;
   const id = secret?.fugitiveShip;
   return id ? state.ships[id] : undefined;
 };
@@ -226,11 +224,7 @@ const checkVictory = (state: GameState): VictoryState | null => {
         'The fugitive transport was destroyed — a marginal Enforcer win — but the Pilgrims disabled an Enforcer ship on the way out, and win a moral victory.',
       );
     }
-    return victory(
-      [ENFORCERS],
-      'marginal',
-      'The transport carrying the fugitives was destroyed.',
-    );
+    return victory([ENFORCERS], 'marginal', 'The transport carrying the fugitives was destroyed.');
   }
 
   // Every Pilgrim hull gone while the fugitives somehow survive is impossible;

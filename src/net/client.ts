@@ -19,13 +19,7 @@
 
 import type { Command, GameState, PlayerId } from '../engine/index.js';
 import type { GameSession } from './session.js';
-import {
-  type RosterEntry,
-  type ServerMsg,
-  encode,
-  frame,
-  parseServerMsg,
-} from './protocol.js';
+import { type RosterEntry, type ServerMsg, encode, frame, parseServerMsg } from './protocol.js';
 
 export interface GameClientOptions {
   readonly url: string;
@@ -120,8 +114,7 @@ export class GameClient {
     this.setConnection('connecting');
     const url = `${this.options.url}?room=${encodeURIComponent(this.options.room)}&clientId=${encodeURIComponent(this.options.clientId)}`;
     const make =
-      this.options.factory ??
-      ((u: string) => new WebSocket(u) as unknown as WebSocketLike);
+      this.options.factory ?? ((u: string) => new WebSocket(u) as unknown as WebSocketLike);
 
     let socket: WebSocketLike;
     try {
