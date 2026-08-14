@@ -7,7 +7,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { applyDamage } from '../src/engine/combat.js';
+import { applyDamage, isDisabled } from '../src/engine/combat.js';
 import {
   type Command,
   type GameState,
@@ -355,6 +355,76 @@ describe('takeoff, orbit and landing', () => {
     // Clockwise and counter-clockwise both work.
     expect(orbited).toBe(2);
   });
+
+  it('holds a Luna orbit without fuel, declining nothing across turn boundaries', () => {
+    // Luna's arrows are hollow, and "a ship passing through one weak gravity hex
+    // may ignore it or use it" — but "when two or more weak gravity hexes are
+    // entered consecutively, the second and later hexes have the effect of full
+    // gravity hexes". An orbiter enters one per turn, so from the second turn on
+    // there is nothing left to decline and "such a ship will continue to orbit
+    // until fuel is burned to produce a course change."
+    const luna = map.body('luna')!;
+    const ring = new Set([0, 1, 2, 3, 4, 5].map((d) => key(neighbor(luna.hex, d))));
+    const from = neighbor(luna.hex, 0);
+    const to = neighbor(luna.hex, 1);
+    // A ship already in orbit: one hex per turn between adjacent gravity hexes,
+    // carrying the arrow of the hex it is in ("each gravity hex has the effect
+    // of one hex of acceleration in the direction of the arrow").
+    let state = solo([
+      {
+        ...makeShip({
+          id: 's1',
+          owner: A,
+          shipClass: 'corvette',
+          pos: to,
+          velocity: sub(to, from),
+          fuel: 20,
+        }),
+        pendingGravity: sub(luna.hex, to),
+      },
+    ]);
+
+    // Issue no orders at all: the passive default declines every optional pull.
+    for (let t = 0; t < 20; t++) {
+      state = runTurn(state);
+      const sh = shipAt(state, 's1');
+      expect({ t, destroyed: sh.destroyed, inRing: ring.has(key(sh.pos)) }).toEqual({
+        t,
+        destroyed: false,
+        inRing: true,
+      });
+    }
+    expect(shipAt(state, 's1').fuel).toBe(20);
+  });
+
+  it('charges one fuel point however often the landing hexside is changed', () => {
+    // "A ship may only land by expending one fuel point while in orbit", and
+    // "a ship may burn one fuel point per turn": picking a different hexside
+    // replaces the commitment, it does not buy a second landing.
+    const from = neighbor(TERRA.hex, 0);
+    const to = neighbor(TERRA.hex, 1);
+    let state = solo([
+      makeShip({
+        id: 's1',
+        owner: A,
+        shipClass: 'corvette',
+        pos: to,
+        velocity: sub(to, from),
+        fuel: 20,
+      }),
+    ]);
+    expect(map.orbitOf(to, sub(to, from))?.id).toBe('terra');
+
+    for (const dir of [0, 1, 2]) {
+      state = ok(state, { type: 'land', by: A, ship: 's1', side: { hex: TERRA.hex, dir } });
+    }
+    expect(shipAt(state, 's1').fuel).toBe(19);
+
+    state = runTurn(state);
+    const ship = shipAt(state, 's1');
+    expect(ship.fuel).toBe(19);
+    expect(ship.location).toEqual({ kind: 'landed', side: { hex: TERRA.hex, dir: 2 } });
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -462,6 +532,227 @@ describe('gun combat', () => {
     expect(shipAt(state, 'v').disabled).toBe(2);
     state = runTurn(state);
     expect(shipAt(state, 'v').disabled).toBe(1);
+  });
+
+  it('binds a surrender to the two ships that struck it, not to the fleets', () => {
+    // "Surrender is a binding bargain. Both parties agree not to attack the
+    //  OTHER SPECIFIC SHIP" — so a merchant cannot buy immunity from a whole
+    //  squadron by surrendering to its weakest ship.
+    let state = rig({
+      ships: [
+        makeShip({ id: 'p1', owner: A, shipClass: 'corsair', pos: clear }),
+        makeShip({ id: 'p2', owner: A, shipClass: 'corsair', pos: clear, number: 2 }),
+        makeShip({ id: 'victim', owner: B, shipClass: 'packet', pos: clear }),
+      ],
+    });
+    state = toCombat(state);
+    state = ok(state, { type: 'demandSurrender', by: A, ship: 'p1', target: 'victim' });
+    state = ok(state, {
+      type: 'respondToSurrender',
+      by: B,
+      ship: 'victim',
+      to: 'p1',
+      accept: true,
+    });
+    expect(shipAt(state, 'victim').surrenderedTo).toEqual(['p1']);
+
+    // The signatory is bound, in both directions.
+    expect(
+      refused(state, { type: 'attack', by: A, attackers: ['p1'], targets: ['victim'] }),
+    ).toMatch(/surrendered/);
+    // Its squadron-mate never signed anything.
+    const out = applyCommand(
+      state,
+      { type: 'attack', by: A, attackers: ['p2'], targets: ['victim'] },
+      map,
+    );
+    expect({ ok: out.result.ok, why: out.result.reason }).toEqual({ ok: true, why: undefined });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Advanced combat
+// ---------------------------------------------------------------------------
+
+describe('advanced combat', () => {
+  const clear = hex(0, 14);
+
+  it('counts a gunless ship with a wrecked drive as disabled and lootable', () => {
+    // "A ship is considered 'disabled' and lootable/capturable only if it can
+    //  neither maneuver nor fire." A transport's strength carries a D and so it
+    //  "may not attack or counterattack" at all — it never had guns to lose, so
+    //  a wrecked drive is all it takes.
+    let state = rig({
+      ships: [
+        makeShip({ id: 'pirate', owner: A, shipClass: 'corsair', pos: clear }),
+        makeShip({ id: 'prize', owner: B, shipClass: 'transport', pos: clear }),
+      ],
+      options: { advancedCombat: true },
+    });
+    state = {
+      ...state,
+      ships: {
+        ...state.ships,
+        prize: { ...shipAt(state, 'prize'), advancedDamage: { weapon: 0, drive: 3, structure: 2 } },
+      },
+    };
+    expect(isDisabled(shipAt(state, 'prize'), true)).toBe(true);
+
+    while (state.phase !== 'resupply') state = endPhase(state);
+    state = ok(state, { type: 'capture', by: A, ship: 'pirate', target: 'prize' });
+    expect(shipAt(state, 'prize').capturedBy).toBe(A);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Prospecting, mining and bases
+// ---------------------------------------------------------------------------
+
+describe('mining and claims', () => {
+  /** The first belt rock, with ore already prospected in it. */
+  const oreHex = (): ReturnType<typeof hex> => {
+    const k = [...map.belt.asteroids][0]!;
+    const [q, r] = k.split(',').map(Number);
+    return hex(q!, r!);
+  };
+
+  const prospector = (cargo: Ship['cargo'] = []): GameState => {
+    const pos = oreHex();
+    const s = createInitialState({
+      scenarioId: 'test',
+      seed: 1234,
+      players: [makePlayer(A, 'Player A', 'Alpha', '#e8703a')],
+      ships: [makeShip({ id: 'm', owner: A, shipClass: 'transport', pos, cargo })],
+      scenarioData: { prospecting: true },
+    });
+    return { ...s, prospected: { [key(pos)]: 'ore' } };
+  };
+
+  it('digs .1 ton per turn, not .1 ton per order', () => {
+    // "A stationary ship on an ore hex may mine ore at .1 TON PER TURN" — a rate,
+    // which is what makes an automated mine's ton per turn worth MCr 5.
+    let state = prospector();
+    state = ok(state, { type: 'mineOre', by: A, ship: 'm' });
+    expect(refused(state, { type: 'mineOre', by: A, ship: 'm' })).toMatch(/already mined/);
+
+    // Not even by waiting for the movement phase the same turn.
+    state = endPhase(state); // -> ordnance
+    state = endPhase(state); // -> movement
+    expect(state.phase).toBe('movement');
+    expect(refused(state, { type: 'mineOre', by: A, ship: 'm' })).toMatch(/already mined/);
+
+    const ore = shipAt(state, 'm').cargo.find((c) => c.kind === 'ore');
+    expect(ore?.quantity).toBe(0.1);
+
+    // A fresh day buys a fresh dig.
+    state = runTurn(state);
+    state = ok(state, { type: 'mineOre', by: A, ship: 'm' });
+    expect(shipAt(state, 'm').cargo.find((c) => c.kind === 'ore')?.quantity).toBe(0.2);
+  });
+
+  it('holds a mining ship still for the turn it works the hex', () => {
+    // Mining "takes place on the movement phase, INSTEAD OF MOVEMENT", and
+    // emplacing gear "requires the miner's ship to stand still for one turn".
+    for (const order of [
+      { type: 'mineOre', by: A, ship: 'm' } as const,
+      { type: 'emplaceEquipment', by: A, ship: 'm', kind: 'automatedMine' } as const,
+    ]) {
+      let state = prospector([{ kind: 'automatedMine', quantity: 1 }]);
+      const away = neighbor(shipAt(state, 'm').pos, 0);
+      // The departure is legal until the ship commits to standing still.
+      expect(
+        applyCommand(state, { type: 'plotCourse', by: A, ship: 'm', endpoint: away }, map).result
+          .ok,
+      ).toBe(true);
+
+      state = ok(state, order);
+      expect(refused(state, { type: 'plotCourse', by: A, ship: 'm', endpoint: away })).toMatch(
+        /stand still/,
+      );
+      state = runTurn(state);
+      expect(key(shipAt(state, 'm').pos)).toBe(key(oreHex()));
+    }
+  });
+});
+
+describe('bases', () => {
+  const gravityHex = neighbor(TERRA.hex, 0);
+
+  /** An orbital base at Terra's gravity hex, with the ship counter that fights for it. */
+  const withOrbitalBase = (ships: readonly Ship[]): GameState =>
+    createInitialState({
+      scenarioId: 'test',
+      seed: 1234,
+      players: [
+        makePlayer(A, 'Player A', 'Alpha', '#e8703a'),
+        makePlayer(B, 'Player B', 'Beta', '#4a9fe0'),
+      ],
+      ships: [
+        makeShip({ id: 'ob', owner: A, shipClass: 'orbitalBase', pos: gravityHex }),
+        ...ships,
+      ],
+      bases: [
+        {
+          id: 'orbital:base',
+          kind: 'orbital',
+          owner: A,
+          hex: gravityHex,
+          destroyed: false,
+          suppressed: false,
+          hasPlanetaryDefences: false,
+          firedThisTurn: false,
+          resuppliedThisTurn: false,
+        },
+      ],
+    });
+
+  it('will not let an orbital base fire and resupply in the same player-turn', () => {
+    // "An orbital base resupplying any ship may not fire its guns or launch
+    //  ordnance during that player-turn." Combat is phase 4 and resupply phase
+    //  5, so within a player-turn only this direction can be enforced — and an
+    //  orbital base shoots through its ship counter, not through the base record.
+    let state = withOrbitalBase([
+      makeShip({ id: 'friend', owner: A, shipClass: 'corvette', pos: gravityHex, fuel: 3 }),
+      makeShip({ id: 'foe', owner: B, shipClass: 'corvette', pos: gravityHex }),
+    ]);
+    while (state.phase !== 'combat') state = endPhase(state);
+    state = ok(state, { type: 'attack', by: A, attackers: ['ob'], targets: ['foe'] });
+    state = ok(state, { type: 'declineCounterattack', by: B });
+    expect(shipAt(state, 'ob').firedThisPhase).toBe(true);
+    expect(state.bases['orbital:base']!.firedThisTurn).toBe(false);
+
+    state = endPhase(state);
+    expect(state.phase).toBe('resupply');
+    expect(refused(state, { type: 'resupply', by: A, ship: 'friend' })).toMatch(/already fired/);
+  });
+
+  it('charges MCr .5 a point for fuel in a Prospecting game', () => {
+    // "Fuel: MCr .5 per point of fuel, available at any friendly base" — in a
+    // scenario whose victory condition is "the miner with the most money wins".
+    const base = map.allPlanetaryBases().find((b) => b.bodyId === 'terra')!;
+    let state = createInitialState({
+      scenarioId: 'test',
+      seed: 1234,
+      players: [makePlayer(A, 'Player A', 'Alpha', '#e8703a', { megacredits: 20 })],
+      ships: [
+        makeShip({
+          id: 'm',
+          owner: A,
+          shipClass: 'transport',
+          pos: TERRA.hex,
+          location: { kind: 'landed', side: base.side },
+          fuel: 0,
+        }),
+      ],
+      scenarioData: { prospecting: true },
+    });
+    while (state.phase !== 'resupply') state = endPhase(state);
+
+    const tank = shipAt(state, 'm').fuel;
+    state = ok(state, { type: 'resupply', by: A, ship: 'm' });
+    const filled = shipAt(state, 'm').fuel;
+    expect(filled).toBeGreaterThan(tank);
+    expect(state.players[A]!.megacredits).toBe(20 - 0.5 * (filled - tank));
   });
 });
 

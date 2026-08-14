@@ -17,7 +17,15 @@ import { sideGravityHex } from '@engine/hex.js';
 import { logisticsData } from '@engine/logistics.js';
 import { controllerOf } from '@engine/movement.js';
 import { SHIP_CLASSES } from '@engine/ships.js';
-import { type Ship, type ShipId, activePlayer, areAllied, liveShips } from '@engine/types.js';
+import type { Counterattack } from '@engine/commands.js';
+import {
+  type PlayerId,
+  type Ship,
+  type ShipId,
+  activePlayer,
+  areAllied,
+  liveShips,
+} from '@engine/types.js';
 import { type Child, button, el, fill } from '../components/dom.js';
 import { empty, note, section, statRow } from '../components/meters.js';
 import { damageText, shipLabel, signed } from '../format.js';
@@ -27,7 +35,30 @@ interface CounterDraft {
   readonly signature: string;
   attackers: Set<ShipId>;
   targets: Set<ShipId>;
+  /** Pooled strength to hold back to, or null for everything the ships have. */
+  strength: number | null;
 }
+
+/**
+ * The order the "Return fire" button sends.
+ *
+ * "A ship may always attack or counterattack with less than its rated combat
+ * strength, if it hopes to disable a target without destroying it." The limit
+ * rides on a counterattack exactly as it does on an attack, so it has to be
+ * carried here; a draft left at full pooled strength omits the field.
+ */
+export const counterattackCommand = (
+  by: PlayerId,
+  attackers: readonly ShipId[],
+  targets: readonly ShipId[],
+  strength: number | null,
+): Counterattack => ({
+  type: 'counterattack',
+  by,
+  attackers: [...attackers],
+  targets: [...targets],
+  ...(strength !== null ? { strength } : {}),
+});
 
 export const createCombatPanel = (): Panel => {
   const root = el('div', { class: 'combat-panel' });
@@ -46,6 +77,7 @@ export const createCombatPanel = (): Panel => {
           signature,
           attackers: new Set(pending.attackers),
           targets: new Set(pending.targets),
+          strength: null,
         };
       }
       fill(root, ...counterattackPrompt(ctx, pending, draft));
@@ -404,6 +436,13 @@ const counterattackPrompt = (
   const chosenAttackers = eligible.filter((s) => draft.attackers.has(s.id));
   const chosenTargets = marks.filter((s) => draft.targets.has(s.id));
 
+  // "A ship may always attack or counterattack with less than its rated combat
+  // strength." Deselecting ships is not a substitute — a lone defender has to be
+  // able to hold back part of its own strength.
+  const maxStrength = chosenAttackers.reduce((n, s) => n + combatStrength(s), 0);
+  if (draft.strength !== null && draft.strength >= maxStrength) draft.strength = null;
+  const limited = draft.strength;
+
   const preview =
     chosenAttackers.length > 0 && chosenTargets.length > 0
       ? previewAttack(
@@ -411,7 +450,7 @@ const counterattackPrompt = (
           chosenAttackers.map((s) => s.id),
           chosenTargets.map((s) => s.id),
           map,
-          undefined,
+          limited ?? undefined,
           'counterattack',
         )
       : null;
@@ -475,6 +514,33 @@ const counterattackPrompt = (
       toggleRow(marks, draft.targets, 'At', () => null),
     ),
     preview ? oddsBlock(ctx, preview) : empty('Choose at least one ship on each side.'),
+    maxStrength > 1
+      ? section(
+          'Limited return fire',
+          el(
+            'div',
+            { class: 'row-inline' },
+            el('input', {
+              type: 'range',
+              min: '1',
+              max: String(maxStrength),
+              value: String(limited ?? maxStrength),
+              class: 'slider',
+              'aria-label': 'Return fire strength',
+              oninput: (ev: Event) => {
+                const v = Number((ev.target as HTMLInputElement).value);
+                draft.strength = v >= maxStrength ? null : v;
+                act.refresh();
+              },
+            }),
+            el('span', {
+              class: 'mono strength-readout',
+              text: String(limited ?? maxStrength),
+            }),
+          ),
+          note('info', 'Return fire with less than full strength to disable rather than destroy.'),
+        )
+      : null,
     el(
       'div',
       { class: 'actions actions-wide' },
@@ -484,12 +550,14 @@ const counterattackPrompt = (
         disabled: preview === null || !preview.legal,
         title: preview?.reason ?? 'Resolve the counterattack',
         onClick: () =>
-          act.dispatch({
-            type: 'counterattack',
-            by: defender ?? activePlayer(state),
-            attackers: chosenAttackers.map((s) => s.id),
-            targets: chosenTargets.map((s) => s.id),
-          }),
+          act.dispatch(
+            counterattackCommand(
+              defender ?? activePlayer(state),
+              chosenAttackers.map((s) => s.id),
+              chosenTargets.map((s) => s.id),
+              limited,
+            ),
+          ),
       }),
       button({
         label: 'Hold fire',

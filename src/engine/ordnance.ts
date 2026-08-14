@@ -717,6 +717,28 @@ export function detonate(
   const cause = `${ordnanceLabel(item)} (${opts.reason})`;
   const victims = victimsIn(state, at, item.kind, opts);
 
+  /**
+   * "Mines, torpedoes, and nukes automatically destroy mines and are themselves
+   * destroyed." Contact is mutual, so whatever was standing in the hex comes off
+   * the board alongside the item that ran into it — otherwise a minefield would
+   * be immune to being swept, and two mines dropped in one hex would leave a
+   * survivor. Nukes are not swept here: one in the hex is set off above instead,
+   * and its own blast clears everything.
+   */
+  const sweepStruck = (s0: GameState): GameState => {
+    if (!opts.hard) return s0;
+    let s1 = s0;
+    for (const other of ordnanceInHex(s0, at).sort(byId)) {
+      if (other.id === id || other.kind === 'nuke') continue;
+      s1 = discard(
+        s1,
+        other.id,
+        `is destroyed at ${at.q},${at.r} — contact with ${ordnanceLabel(item)}`,
+      );
+    }
+    return s1;
+  };
+
   if (item.kind === 'mine') {
     // "At the instant of contact with a mine (during the movement phase), an
     // affected ship rolls one die and consults the mine column of the damage
@@ -735,7 +757,7 @@ export function detonate(
       s = { ...s, rng: roll.state };
       s = applyOther(s, 'mine', roll.value, victim.id, cause);
     }
-    return { state: drop(s, id), consumed: true };
+    return { state: sweepStruck(drop(s, id)), consumed: true };
   }
 
   // Torpedo. "A torpedo hits only a single target. In the event that there is
@@ -766,11 +788,11 @@ export function detonate(
       severity: 'bad',
       focus: [at],
     });
-    return { state: drop(s, id), consumed: true };
+    return { state: sweepStruck(drop(s, id)), consumed: true };
   }
   if (opts.hard) {
     return {
-      state: discard(s, id, `is destroyed at ${at.q},${at.r} — ${opts.reason}`),
+      state: sweepStruck(discard(s, id, `is destroyed at ${at.q},${at.r} — ${opts.reason}`)),
       consumed: true,
     };
   }

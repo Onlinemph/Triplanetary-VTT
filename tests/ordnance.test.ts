@@ -18,6 +18,7 @@ import {
   add,
   hex,
   key,
+  legalCommands,
   makePlayer,
   makeShip,
   neighbor,
@@ -188,6 +189,93 @@ describe('ordnance launch', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Ordnance meeting ordnance
+// ---------------------------------------------------------------------------
+
+describe('ordnance against ordnance', () => {
+  /**
+   * A picket mine sitting still at `CLEAR + 3` and a second item flown into it
+   * from `CLEAR` at three hexes per turn. Both are player A's, because ordnance
+   * "is detonated when [it enters] a hex containing a ship, astral body, mine,
+   * torpedo, or nuke" with no friend-or-foe test, and one player's launches all
+   * move in the same movement phase.
+   */
+  const collide = (kind: 'mine' | 'torpedo'): GameState => {
+    const picket = add(CLEAR, hex(2, 0));
+    let s = game([
+      // Stationary, so its mine is laid in its own hex and stays put.
+      makeShip({
+        id: 'sitter',
+        owner: A,
+        shipClass: 'frigate',
+        pos: picket,
+        cargo: [{ kind: 'mine', quantity: 1 }],
+      }),
+      makeShip({
+        id: 'shooter',
+        owner: A,
+        shipClass: 'frigate',
+        pos: CLEAR,
+        velocity: hex(2, 0),
+        cargo: [{ kind, quantity: 1 }],
+      }),
+    ]);
+    s = toPhase(s, 'ordnance');
+    s = ok(s, { type: 'launchOrdnance', by: A, ship: 'sitter', kind: 'mine' });
+    s = ok(s, { type: 'launchOrdnance', by: A, ship: 'shooter', kind });
+    expect(Object.keys(s.ordnance)).toHaveLength(2);
+
+    // Both launchers steer clear — "that ship must execute an immediate course
+    // change" — and neither course may cross the picket hex, or the ship rather
+    // than the ordnance would spring the mine.
+    s = ok(s, { type: 'plotCourse', by: A, ship: 'sitter', endpoint: add(picket, hex(1, 0)) });
+    s = ok(s, { type: 'plotCourse', by: A, ship: 'shooter', endpoint: add(CLEAR, hex(1, 1)) });
+    const shooter = s.ships['shooter']!;
+    expect(
+      traceSegment(shooter.pos, shooter.plottedEndpoint!).touched.map((t) => key(t.hex)),
+    ).not.toContain(key(picket));
+    return toPhase(s, 'combat');
+  };
+
+  it('destroys the mine it runs into, not only itself', () => {
+    // "Mines, torpedoes, and nukes automatically destroy mines and are
+    //  themselves destroyed." Both halves, or a minefield can never be swept.
+    for (const kind of ['mine', 'torpedo'] as const) {
+      const s = collide(kind);
+      expect({ kind, left: Object.keys(s.ordnance) }).toEqual({ kind, left: [] });
+    }
+  });
+
+  it('leaves no survivor when two mines are laid in the same hex', () => {
+    const where = add(CLEAR, hex(4, 0));
+    let s = game([
+      makeShip({
+        id: 'a1',
+        owner: A,
+        shipClass: 'frigate',
+        pos: where,
+        cargo: [{ kind: 'mine', quantity: 1 }],
+      }),
+      makeShip({
+        id: 'a2',
+        owner: A,
+        shipClass: 'frigate',
+        pos: where,
+        cargo: [{ kind: 'mine', quantity: 1 }],
+      }),
+    ]);
+    s = toPhase(s, 'astrogation');
+    s = ok(s, { type: 'plotCourse', by: A, ship: 'a1', endpoint: add(where, hex(1, 0)) });
+    s = ok(s, { type: 'plotCourse', by: A, ship: 'a2', endpoint: add(where, hex(-1, 0)) });
+    s = toPhase(s, 'ordnance');
+    s = ok(s, { type: 'launchOrdnance', by: A, ship: 'a1', kind: 'mine' });
+    s = ok(s, { type: 'launchOrdnance', by: A, ship: 'a2', kind: 'mine' });
+    s = toPhase(s, 'combat');
+    expect(Object.keys(s.ordnance)).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Counterattack
 // ---------------------------------------------------------------------------
 
@@ -220,6 +308,30 @@ describe('counterattack', () => {
     s = ok(s, { type: 'attack', by: A, attackers: ['atk'], targets: ['def'] });
     const out = applyCommand(s, { type: 'declineCounterattack', by: B }, map);
     expect(out.result.ok).toBe(true);
+  });
+
+  it('will not let the attacker end the phase out from under the return fire', () => {
+    // "Ships which are attacked may return fire against any or all of their
+    //  attackers during the combat phase, before any damage is implemented."
+    // The window belongs to the defender, so the attacker cannot close it by
+    // ending the phase — which would flush the held damage and skip the reply.
+    let s = game([
+      makeShip({ id: 'atk', owner: A, shipClass: 'corsair', pos: CLEAR }),
+      makeShip({ id: 'def', owner: B, shipClass: 'frigate', pos: CLEAR }),
+    ]);
+    s = toPhase(s, 'combat');
+    s = ok(s, { type: 'attack', by: A, attackers: ['atk'], targets: ['def'] });
+
+    expect(refuse(s, { type: 'endPhase', by: A })).toBe(
+      'the outstanding counterattack must be answered first',
+    );
+    expect(legalCommands(s, A, map)).not.toContain('endPhase');
+    expect(s.phase).toBe('combat');
+
+    // Answering releases the phase again.
+    s = ok(s, { type: 'counterattack', by: B, attackers: ['def'], targets: ['atk'] });
+    s = ok(s, { type: 'endPhase', by: A });
+    expect(s.phase).toBe('resupply');
   });
 
   it('never offers a counterattack to a D-suffix defender', () => {

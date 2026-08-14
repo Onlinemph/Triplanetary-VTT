@@ -104,6 +104,33 @@ describe('gravity', () => {
     expect(optional.map(key)).toEqual([key(g)]);
     expect(key(mandatory)).toBe('0,0');
   });
+
+  it('carries a weak-gravity run across the turn boundary', () => {
+    // "When two or more weak gravity hexes are entered CONSECUTIVELY, the second
+    // and later hexes have the effect of full gravity hexes" — consecutively in
+    // the order hexes are entered, which does not restart every turn. At one hex
+    // per turn (that is, in orbit) every weak hex is the first of its own turn.
+    for (const body of BODIES.filter((b) => b.gravity === 'weak')) {
+      const a = neighbor(body.hex, 0);
+      const b = neighbor(body.hex, 1);
+      const { mandatory, optional } = map.gravityFromMove(a, b);
+      expect({ id: body.id, optional: optional.map(key) }).toEqual({ id: body.id, optional: [] });
+      expect({ id: body.id, pull: key(mandatory) }).toEqual({
+        id: body.id,
+        pull: key(sub(body.hex, b)),
+      });
+    }
+  });
+
+  it('still offers the first weak hex of a run after clear space', () => {
+    // The run is broken by any hex without a hollow arrow, so a ship that comes
+    // back round through open space gets its free choice again.
+    const luna = map.body('luna')!;
+    const g = neighbor(luna.hex, 0);
+    const { mandatory, optional } = map.accumulateGravity([g], false);
+    expect(optional.map(key)).toEqual([key(g)]);
+    expect(key(mandatory)).toBe('0,0');
+  });
 });
 
 /** Coast one turn under the movement rules, returning the new kinematic state. */
@@ -189,6 +216,32 @@ describe('orbit stability', () => {
         s = coast(s.pos, s.velocity, s.pendingGravity);
         expect(s.crashed).toBe(false);
         expect(bodyRing.has(key(s.pos))).toBe(true);
+      }
+    }
+  });
+
+  it('keeps a weak-gravity orbit forever too, declining nothing', () => {
+    // Luna and Io have hollow arrows, but "such a ship will continue to orbit
+    // until fuel is burned to produce a course change" is not qualified: an
+    // orbiter enters one weak hex per turn, and every one after the first is a
+    // second-or-later hex of the same unbroken run.
+    for (const body of BODIES.filter((b) => b.gravity === 'weak')) {
+      const bodyRing = new Set([0, 1, 2, 3, 4, 5].map((d) => key(neighbor(body.hex, d))));
+      const from = neighbor(body.hex, 0);
+      const to = neighbor(body.hex, 1);
+      let s = {
+        pos: to,
+        velocity: sub(to, from),
+        pendingGravity: map.gravityFromMove(from, to).mandatory,
+        crashed: false,
+      };
+      for (let t = 0; t < 40; t++) {
+        s = coast(s.pos, s.velocity, s.pendingGravity);
+        expect({ id: body.id, crashed: s.crashed }).toEqual({ id: body.id, crashed: false });
+        expect({ id: body.id, inRing: bodyRing.has(key(s.pos)) }).toEqual({
+          id: body.id,
+          inRing: true,
+        });
       }
     }
   });
@@ -305,6 +358,25 @@ describe('hazards', () => {
       if (found >= 5) break;
     }
     expect(found).toBeGreaterThan(0);
+  });
+
+  it('does not roll again for the rock the course starts on', () => {
+    // "A die is rolled for each asteroid hex ENTERED." The hex a ship starts the
+    // turn in was entered — and rolled for — on a previous turn, so the turn it
+    // leaves is not a second entry. A ship parked on a belt rock likewise owes
+    // nothing for its own landing site.
+    const rock = [...map.belt.asteroids]
+      .map((k) => {
+        const [q, r] = k.split(',').map(Number);
+        return hex(q!, r!);
+      })
+      .find((h) => ![1, 2, 3].some((n) => map.isAsteroid(add(h, hex(n, 0)))))!;
+    expect(rock).toBeDefined();
+
+    // Flying in: one entry, one roll.
+    expect(map.asteroidHazards(add(rock, hex(-2, 0)), rock).map(key)).toEqual([key(rock)]);
+    // Flying out again: the same rock, already entered, must not be rolled twice.
+    expect(map.asteroidHazards(rock, add(rock, hex(2, 0)))).toHaveLength(0);
   });
 });
 

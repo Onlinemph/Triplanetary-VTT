@@ -21,6 +21,7 @@ import {
   sub,
 } from '../src/engine/index.js';
 import { previewAttack } from '../src/engine/combat.js';
+import { counterattackCommand } from '../src/ui/panels/combat.js';
 
 const map = DEFAULT_MAP;
 const A = 'a';
@@ -173,5 +174,27 @@ describe('odds', () => {
     ]);
     expect(previewAttack(s, ['atk'], ['def'], map).column).toBe('4:1');
     expect(previewAttack(s, ['atk'], ['def'], map, 2).column).toBe('1:1');
+  });
+
+  it('honours a limited counterattack, and the gunnery board sends one', () => {
+    // The same sentence covers return fire — "attack **or counterattack** with
+    // less than its rated combat strength" — so the panel that answers a
+    // counterattack has to carry the limit through, not just the attack panel.
+    const s = arena([
+      flew('atk', A, 'corvette', CLEAR), // 2
+      flew('def', B, 'dreadnaught', CLEAR), // 15
+    ]);
+    expect(previewAttack(s, ['def'], ['atk'], map, undefined, 'counterattack').column).toBe('4:1');
+    expect(previewAttack(s, ['def'], ['atk'], map, 2, 'counterattack').column).toBe('1:1');
+
+    expect(counterattackCommand(B, ['def'], ['atk'], 2)).toEqual({
+      type: 'counterattack',
+      by: B,
+      attackers: ['def'],
+      targets: ['atk'],
+      strength: 2,
+    });
+    // Full pooled strength is the default and carries no limit.
+    expect(counterattackCommand(B, ['def'], ['atk'], null)).not.toHaveProperty('strength');
   });
 });

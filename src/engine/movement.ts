@@ -126,6 +126,16 @@ export interface MovementData {
   readonly rams: Readonly<Record<ShipId, ShipId>>;
   /** Hexes entered by each ship's most recent leg, tail to head. */
   readonly paths: Readonly<Record<ShipId, readonly Hex[]>>;
+  /**
+   * Turn on which each ship spent its movement phase standing still — mining
+   * ("this takes place on the movement phase, instead of movement") or emplacing
+   * equipment ("placement requires the miner's ship to stand still for one
+   * turn"). Keyed by turn rather than cleared, so it can never leak into the
+   * next day.
+   */
+  readonly standingStill: Readonly<Record<ShipId, number>>;
+  /** Turn on which each ship last mined ore by hand: ".1 ton per turn." */
+  readonly mined: Readonly<Record<ShipId, number>>;
 }
 
 const MOVEMENT_KEY = 'movement';
@@ -135,6 +145,8 @@ const EMPTY_MOVEMENT: MovementData = {
   takeoff: [],
   rams: {},
   paths: {},
+  standingStill: {},
+  mined: {},
 };
 
 export const movementData = (state: GameState): MovementData => {
@@ -149,6 +161,27 @@ const withMovementData = (state: GameState, patch: Partial<MovementData>): GameS
     [MOVEMENT_KEY]: { ...movementData(state), ...patch },
   },
 });
+
+/**
+ * Has this ship already given its movement phase over to standing still?
+ *
+ * Mining "takes place on the movement phase, instead of movement", and dropping
+ * an automated mine or robot guards "requires the miner's ship to stand still
+ * for one turn". Both are recorded here so `plotCourse` can hold the ship to it.
+ */
+export const standingStillThisTurn = (state: GameState, id: ShipId): boolean =>
+  movementData(state).standingStill[id] === state.turn;
+
+/** Has this ship already taken its ".1 ton per turn" by hand this turn? */
+export const minedThisTurn = (state: GameState, id: ShipId): boolean =>
+  movementData(state).mined[id] === state.turn;
+
+/** Record that a ship is spending this turn's movement phase standing still. */
+export const commitToStandingStill = (state: GameState, id: ShipId, mining: boolean): GameState =>
+  withMovementData(state, {
+    standingStill: { ...movementData(state).standingStill, [id]: state.turn },
+    ...(mining ? { mined: { ...movementData(state).mined, [id]: state.turn } } : {}),
+  });
 
 const SPACE: ShipLocation = { kind: 'space' };
 
@@ -408,6 +441,12 @@ const checkPlot = (
   if (ship.location.kind === 'landed') {
     return fail(`${shipLabel(ship)} is landed and must take off first`);
   }
+  // Mining "takes place on the movement phase, instead of movement", and
+  // emplacing equipment "requires the miner's ship to stand still for one turn":
+  // once the ship has done either, this turn's movement is spent.
+  if (!eq(endpoint, ship.pos) && standingStillThisTurn(state, ship.id)) {
+    return fail(`${shipLabel(ship)} must stand still for the turn it works this hex`);
+  }
   if (d > 2) {
     return fail(
       `${endpoint.q},${endpoint.r} is ${d} hexes off the predicted course; a ship may alter its course by at most two hexes`,
@@ -633,7 +672,14 @@ export const land = (
     return reject(state, `${shipLabel(ship)} must be in orbit around ${body.name} to land`);
   }
 
-  const refunded = clearPlot(ship);
+  // "A ship may burn one fuel point per turn." Re-issuing `land` picks a
+  // different hexside for the same landing, so the point charged by the earlier
+  // command this turn comes back before the new one is taken — exactly as
+  // `clearPlot` refunds a superseded course.
+  const cleared = clearPlot(ship);
+  const refunded = movementData(state).landing[ship.id]
+    ? { ...cleared, fuel: cleared.fuel + 1 }
+    : cleared;
   if (refunded.fuel < 1) {
     return reject(state, `${shipLabel(ship)} has no fuel left to land with`);
   }
@@ -1154,8 +1200,18 @@ const moveShip = (state: GameState, id: ShipId, map: GameMap): GameState => {
   }
 
   // 5. Gravity from the hexes this course entered, felt next turn.
+  //    "When two or more weak gravity hexes are entered consecutively, the
+  //    second and later hexes have the effect of full gravity hexes, regardless
+  //    of how the first such hex is treated." A run of entries is not reset by
+  //    the turn boundary: the hex the ship started in is the last one it
+  //    entered, so a weak arrow there makes this turn's first weak hex a
+  //    second-or-later one. Without the carry, an orbit of Luna or Io — one hex
+  //    per turn, so every weak hex is the first of its own turn — could be
+  //    declined away for free, contradicting "such a ship will continue to orbit
+  //    until fuel is burned to produce a course change."
   const { mandatory, optional } = map.accumulateGravity(
     gravityHexesEntered(from, to, trace.entered),
+    map.hasWeakGravity(from),
   );
   const location = locationAfter(state, map, to, velocity);
   const settled: Ship =

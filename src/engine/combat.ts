@@ -173,7 +173,15 @@ export const weaponsUnrepairable = (ship: Ship): boolean =>
 export const isDisabled = (ship: Ship, advancedCombat = false): boolean => {
   if (ship.destroyed) return false;
   if (!advancedCombat) return ship.disabled > 0;
-  const cannotFire = !weaponsOperational(ship, true) || ship.disabled > 0;
+  // A wrecked weapon track is not the only way to be unable to fire. A ship that
+  // never had guns can never fire either: "Commercial ships have a suffix D in
+  // their combat strengths and may not attack or counterattack", and a prize
+  // "may not fire, or return fire if fired upon". Without this a crippled
+  // freighter can neither manoeuvre nor fire and yet is never lootable, which
+  // is the opposite of "lootable/capturable only if it can neither maneuver nor
+  // fire".
+  const gunless = SHIP_CLASSES[ship.shipClass].defensiveOnly || ship.capturedBy !== undefined;
+  const cannotFire = gunless || !weaponsOperational(ship, true) || ship.disabled > 0;
   const cannotMove = ship.advancedDamage.drive > 0 || ship.disabled > 0;
   return cannotFire && cannotMove;
 };
@@ -332,14 +340,17 @@ export function previewAttack(
       return illegal(`${shipLabel(t)} is landed at a planetary base and immune to gunfire`);
     }
     // "Surrender is a binding bargain. Both parties agree not to attack the
-    // other specific ship" — modelled per player, which is as fine-grained as
-    // `surrenderedTo` gets.
+    // other specific ship." Only the two signatories are bound: the rest of
+    // either fleet may fire freely, so a merchant cannot buy immunity from a
+    // whole pirate squadron by surrendering to its weakest ship.
     for (const a of atk) {
-      if (t.surrenderedTo.includes(a.owner)) {
-        return illegal(`${shipLabel(t)} has surrendered to ${a.owner} and may not be attacked`);
+      if (t.surrenderedTo.includes(a.id)) {
+        return illegal(
+          `${shipLabel(t)} has surrendered to ${shipLabel(a)} and may not be attacked by it`,
+        );
       }
-      if (a.surrenderedTo.includes(t.owner)) {
-        return illegal(`${shipLabel(a)} has surrendered and may not attack`);
+      if (a.surrenderedTo.includes(t.id)) {
+        return illegal(`${shipLabel(a)} has surrendered to ${shipLabel(t)} and may not attack it`);
       }
     }
   }

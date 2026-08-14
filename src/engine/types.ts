@@ -125,8 +125,12 @@ export interface Ship {
 
   /** Set when captured; the ship must reach a base friendly to the captor. */
   readonly capturedBy?: PlayerId;
-  /** Ships this one has surrendered to. Surrender is a binding bargain. */
-  readonly surrenderedTo: readonly PlayerId[];
+  /**
+   * The individual ships this one has surrendered to. "Surrender is a binding
+   * bargain. Both parties agree not to attack the other specific ship" — so the
+   * pact is recorded per ship, not per fleet.
+   */
+  readonly surrenderedTo: readonly ShipId[];
 
   /** Plotted endpoint for this turn, set during the astrogation phase. */
   readonly plottedEndpoint?: Hex;

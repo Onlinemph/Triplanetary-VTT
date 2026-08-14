@@ -16,6 +16,7 @@ import {
   fuelCapacity,
   hasUnlimitedFuel,
   matchedShips,
+  surrenderedToSide,
 } from '@engine/logistics.js';
 import { CARGO, type CargoKind, SHIP_CLASSES } from '@engine/ships.js';
 import { type Ship, activePlayer, areAllied } from '@engine/types.js';
@@ -205,7 +206,7 @@ export const createLogisticsSection = (): LogisticsSection => {
     // --- Loot, rescue and capture -----------------------------------------
 
     const prizes = foes.filter(
-      (s) => isDisabled(s, state.options.advancedCombat) || s.surrenderedTo.includes(by),
+      (s) => isDisabled(s, state.options.advancedCombat) || surrenderedToSide(state, s, by),
     );
     if (foes.length > 0) {
       out.push(

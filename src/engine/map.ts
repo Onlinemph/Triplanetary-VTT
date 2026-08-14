@@ -200,16 +200,23 @@ export class GameMap {
    * weak gravity hexes are entered consecutively, the second and later hexes
    * have the effect of full gravity hexes, regardless of how the first such hex
    * is treated." Runs are counted along the order the course entered them.
+   *
+   * `precededByWeak` continues a run that began *before* this list: the rule
+   * counts hexes entered consecutively, not hexes entered within one turn, and
+   * a ship in orbit round Luna or Io enters exactly one weak hex per turn.
    */
-  accumulateGravity(entered: readonly Hex[]): {
+  accumulateGravity(
+    entered: readonly Hex[],
+    precededByWeak = false,
+  ): {
     mandatory: Hex;
     optional: Hex[];
   } {
     let mandatory: Hex = { q: 0, r: 0 };
     const optional: Hex[] = [];
 
-    // Track, per body, how long the current unbroken run of weak-gravity hexes is.
-    let weakRun = 0;
+    // How long the current unbroken run of weak-gravity hexes is.
+    let weakRun = precededByWeak ? 1 : 0;
 
     for (const h of entered) {
       const sources = this.gravityAt(h);
@@ -256,8 +263,16 @@ export class GameMap {
    *    Without this, a stationary ship would hover over a planet forever, free.
    */
   gravityFromMove(from: Hex, to: Hex): { mandatory: Hex; optional: Hex[] } {
-    if (eq(from, to)) return this.accumulateGravity([from]);
-    return this.accumulateGravity(traceSegment(from, to).entered.slice(1));
+    if (eq(from, to)) return this.accumulateGravity([from], this.hasWeakGravity(from));
+    return this.accumulateGravity(
+      traceSegment(from, to).entered.slice(1),
+      this.hasWeakGravity(from),
+    );
+  }
+
+  /** Does this hex carry a hollow (Luna/Io) arrow? */
+  hasWeakGravity(h: Hex): boolean {
+    return this.gravityAt(h).some((src) => src.strength === 'weak');
   }
 
   /** The weak-gravity arrow a hex would contribute, if the pilot accepts it. */
@@ -313,13 +328,20 @@ export class GameMap {
    * "A ship passing along a hexside between two asteroid hexes is considered to
    * have entered one asteroid hex" — one roll for the pair, not two.
    *
+   * The hex the course *starts* in was entered on a previous turn and was rolled
+   * for then, so it is not an entry now — otherwise a rock a ship's arrowhead
+   * lands on provokes two rolls for one entry, and a ship parked on a belt rock
+   * is charged a hazard roll for its own landing site. This is the same
+   * "entered on a previous turn" reasoning gravity uses.
+   *
    * Ships travelling at one hex per turn are never affected.
    */
   asteroidHazards(from: Hex, to: Hex, cleared: ReadonlySet<string> = new Set()): Hex[] {
     if (distance(from, to) <= 1) return [];
     const trace = traceSegment(from, to);
     const out: Hex[] = [];
-    const seen = new Set<string>();
+    // Seeded with the tail: already entered, already rolled for.
+    const seen = new Set<string>([key(from)]);
 
     for (const h of trace.entered) {
       if (this.isAsteroid(h, cleared) && !seen.has(key(h))) {

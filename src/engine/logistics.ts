@@ -40,7 +40,7 @@ import type {
 import { otherDamage, otherToHit } from './crt.js';
 import { type Hex, type HexSide, distance, eq, isZero, key, sideKey } from './hex.js';
 import type { GameMap } from './map.js';
-import { controllerOf, shipPath } from './movement.js';
+import { commitToStandingStill, controllerOf, minedThisTurn, shipPath } from './movement.js';
 import { rollDice } from './rng.js';
 import { type CargoKind, type ShipClass, CARGO, SHIP_CLASSES } from './ships.js';
 import {
@@ -122,8 +122,6 @@ export interface LogisticsData {
   readonly shards: Readonly<Record<string, number>>;
   /** Outstanding surrender demands: target ship id -> ids of the demanding ships. */
   readonly demands: Readonly<Record<ShipId, readonly ShipId[]>>;
-  /** Ship-specific surrender pacts, kept alongside the broader `surrenderedTo`. */
-  readonly pacts: Readonly<Record<ShipId, readonly ShipId[]>>;
 }
 
 const LOGISTICS_KEY = 'logistics';
@@ -133,7 +131,6 @@ const EMPTY_LOGISTICS: LogisticsData = {
   guards: {},
   shards: {},
   demands: {},
-  pacts: {},
 };
 
 export const logisticsData = (state: GameState): LogisticsData => {
@@ -368,6 +365,21 @@ export function canResupplyAt(state: GameState, ship: Ship, map: GameMap): Resup
 // Resupply
 // ---------------------------------------------------------------------------
 
+/**
+ * The ship counter, if any, that fights on behalf of an orbital base. Orbital
+ * bases are `BaseState`s for resupply and `Ship`s for gunnery, so the two halves
+ * of "an orbital base resupplying any ship may not fire its guns or launch
+ * ordnance during that player-turn" live on different records.
+ */
+const orbitalBaseCounter = (state: GameState, base: BaseState): Ship | undefined =>
+  Object.values(state.ships).find(
+    (o) =>
+      o.shipClass === 'orbitalBase' &&
+      !o.destroyed &&
+      eq(o.pos, base.hex) &&
+      (base.owner === null || areAllied(state, base.owner, o.owner)),
+  );
+
 const maintain = (ship: Ship): Ship => ({
   ...ship,
   // "This repairs all remaining damage..." — including the advanced system's
@@ -415,9 +427,18 @@ export function resupply(
 
   // "An orbital base resupplying any ship may not fire its guns or launch
   // ordnance during that player-turn" — read symmetrically, a base that has
-  // already fired this player-turn has spent its turn.
-  if (base.kind === 'orbital' && base.firedThisTurn) {
-    return reject(state, 'that orbital base has already fired this turn');
+  // already fired this player-turn has spent its turn. Combat (phase 4) runs
+  // before resupply (phase 5), so this is the only direction the sentence can
+  // be enforced within a player-turn. An orbital base shoots through its ship
+  // counter — "It may fire one torpedo per turn, providing resupply operations
+  // are not in progress" — so its guns and torpedoes are recorded there, not on
+  // the BaseState, which only ever tracks planetary defence fire.
+  if (base.kind === 'orbital') {
+    const counter = orbitalBaseCounter(state, base);
+    const spent =
+      base.firedThisTurn ||
+      (counter !== undefined && (counter.firedThisPhase || counter.launchedOrdnanceThisTurn));
+    if (spent) return reject(state, 'that orbital base has already fired this turn');
   }
 
   // Work out the new ordnance loadout before touching anything, so an illegal
@@ -453,6 +474,23 @@ export function resupply(
     }
   }
 
+  // "Fuel: MCr .5 per point of fuel, available at any friendly base." Prospecting
+  // is the scenario that runs a fuel market and is decided by "the miner with the
+  // most money"; the campaign is the one that says "to reduce bookkeeping, fuel
+  // is free", so everywhere else refuelling stays free.
+  const buyer = state.players[controllerOf(ship)];
+  const topUp = fuelCapacity(ship) - ship.fuel;
+  let fuelBill = 0;
+  if (prospectingEnabled(state) && buyer && Number.isFinite(topUp) && topUp > 0) {
+    fuelBill = roundTons(topUp * FUEL_PRICE);
+    if (buyer.megacredits < fuelBill) {
+      return reject(
+        state,
+        `${buyer.name} cannot afford MCr ${fuelBill} for ${topUp} points of fuel`,
+      );
+    }
+  }
+
   const refuelled: Ship = {
     ...maintain(rearmed),
     fuel: fuelCapacity(ship),
@@ -463,17 +501,14 @@ export function resupply(
   };
 
   let s = withShip(state, refuelled);
+  if (fuelBill > 0 && buyer) {
+    s = withPlayer(s, { ...buyer, megacredits: roundTons(buyer.megacredits - fuelBill) });
+  }
   s = withBase(s, { ...base, resuppliedThisTurn: true });
 
   // An orbital base counter is also a ship in some scenarios; if one is sitting
   // on this base it spends its player-turn resupplying too.
-  const baseShip = Object.values(s.ships).find(
-    (o) =>
-      o.shipClass === 'orbitalBase' &&
-      !o.destroyed &&
-      eq(o.pos, base.hex) &&
-      (base.owner === null || areAllied(s, base.owner, o.owner)),
-  );
+  const baseShip = orbitalBaseCounter(s, base);
   if (baseShip && baseShip.id !== ship.id) {
     s = withShip(s, { ...baseShip, resuppliedThisTurn: true });
   }
@@ -494,10 +529,16 @@ export function resupply(
   s = releaseCapture(s, ship.id, base);
 
   const where = nameOfBase(s, base.id, map);
-  s = log(s, `${shipLabel(ship)} refuels and undergoes maintenance at ${where}.`, {
-    severity: 'good',
-    focus: [ship.pos],
-  });
+  s = log(
+    s,
+    fuelBill > 0
+      ? `${shipLabel(ship)} refuels and undergoes maintenance at ${where} (MCr ${fuelBill} for ${topUp} fuel).`
+      : `${shipLabel(ship)} refuels and undergoes maintenance at ${where}.`,
+    {
+      severity: 'good',
+      focus: [ship.pos],
+    },
+  );
   return { state: s, result: okResult };
 }
 
@@ -635,6 +676,20 @@ export function surrenderFuelReserve(state: GameState, ship: Ship, map: GameMap)
 }
 
 /**
+ * Has this ship surrendered to anything flying `side`'s flag?
+ *
+ * The bargain itself binds two specific ships and combat enforces it that way,
+ * but collecting on it — "the attacking ship may then match courses and loot it
+ * without first being required to disable it" — is a fleet matter, and any ship
+ * that comes alongside still has to match courses first.
+ */
+export const surrenderedToSide = (state: GameState, ship: Ship, side: PlayerId): boolean =>
+  ship.surrenderedTo.some((id) => {
+    const captor = state.ships[id];
+    return captor !== undefined && areAllied(state, controllerOf(captor), side);
+  });
+
+/**
  * "Only disabled (or surrendered) ships may be looted. A ship which is
  * eliminated has broken up or exploded and may not be looted."
  */
@@ -654,7 +709,7 @@ export function loot(
     return reject(state, 'the two ships have not matched courses');
   }
 
-  const surrendered = victim.surrenderedTo.includes(cmd.by);
+  const surrendered = surrenderedToSide(state, victim, cmd.by);
   if (!surrendered && !isDisabled(victim, state.options.advancedCombat)) {
     return reject(state, 'only disabled or surrendered ships may be looted');
   }
@@ -775,8 +830,8 @@ export function demandSurrender(
   if (areAllied(state, cmd.by, controllerOf(target))) {
     return reject(state, 'that ship is not an enemy');
   }
-  if (target.surrenderedTo.includes(cmd.by)) {
-    return reject(state, `${shipLabel(target)} has already surrendered to you`);
+  if (target.surrenderedTo.includes(cmd.ship)) {
+    return reject(state, `${shipLabel(target)} has already surrendered to ${shipLabel(demander)}`);
   }
   if (target.capturedBy !== undefined) return reject(state, 'that ship is already a prize');
   if (refusesSurrender(state, target.owner)) {
@@ -801,9 +856,9 @@ export function demandSurrender(
  * "Surrender is a binding bargain. Both parties agree not to attack the other
  * specific ship."
  *
- * The `Ship` contract records the bargain as a list of *players* — which is what
- * combat reads — so we widen the promise to the demanding player's whole side
- * and keep the ship-specific pairing alongside it for scenarios and the log.
+ * The pact is recorded on the surrendering ship as the id of the ship it struck
+ * the bargain with, which is exactly the granularity the sentence calls for:
+ * neither fleet is bound, only the two signatories.
  */
 export function respondToSurrender(
   state: GameState,
@@ -839,17 +894,12 @@ export function respondToSurrender(
     return reject(state, `${shipLabel(ship)} will never surrender`);
   }
 
-  const captorSide = controllerOf(demander);
-  const pact = data.pacts[cmd.ship] ?? [];
-  let s = withLogistics(state, {
-    demands,
-    pacts: { ...data.pacts, [cmd.ship]: pact.includes(cmd.to) ? pact : [...pact, cmd.to] },
-  });
+  let s = withLogistics(state, { demands });
   s = withShip(s, {
     ...ship,
-    surrenderedTo: ship.surrenderedTo.includes(captorSide)
+    surrenderedTo: ship.surrenderedTo.includes(cmd.to)
       ? ship.surrenderedTo
-      : [...ship.surrenderedTo, captorSide],
+      : [...ship.surrenderedTo, cmd.to],
   });
   s = log(
     s,
@@ -1133,6 +1183,12 @@ export function mineOre(
   if (ship.plottedEndpoint && !eq(ship.plottedEndpoint, ship.pos)) {
     return reject(state, 'mining takes the place of movement — cancel the plotted course');
   }
+  // ".1 ton per turn" is a rate, not a price per order: one swing of the pick per
+  // ship per turn, which is what makes an automated mine's 1 ton per turn worth
+  // buying.
+  if (minedThisTurn(state, cmd.ship)) {
+    return reject(state, `${shipLabel(ship)} has already mined this turn`);
+  }
   if (ship.disabled > 0) return reject(state, `${shipLabel(ship)} is disabled`);
   if (!map.isAsteroid(ship.pos, new Set(state.clearedAsteroids))) {
     return reject(state, 'there is nothing to mine here');
@@ -1175,6 +1231,9 @@ export function mineOre(
   }
 
   s = withShip(s, hold);
+  // "This takes place on the movement phase, instead of movement" — the ship is
+  // now held to standing still for the turn, and has taken its one dig.
+  s = commitToStandingStill(s, cmd.ship, true);
   s = log(
     s,
     dug > 0 && took > 0
@@ -1246,6 +1305,10 @@ export function emplaceEquipment(
       focus: [ship.pos],
     });
   }
+  // "Placement requires the miner's ship to stand still for one turn, and takes
+  // place in the movement phase" — so the ship may not plot its way out again
+  // afterwards.
+  s = commitToStandingStill(s, cmd.ship, false);
   return { state: s, result: okResult };
 }
 

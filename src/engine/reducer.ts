@@ -657,6 +657,20 @@ const mayAnswer = (state: GameState, eligible: readonly ShipId[], by: PlayerId):
   });
 
 /**
+ * Is *anyone* still able to answer? The window belongs to the defender, so it
+ * may not be closed while a live player still holds it — but a record nobody can
+ * speak for any more must not wedge the game either, and `enterResupply` remains
+ * the sweep that flushes it.
+ */
+const anyoneMayAnswer = (state: GameState, eligible: readonly ShipId[]): boolean =>
+  eligible.some((id) => {
+    const ship = state.ships[id];
+    if (ship === undefined || ship.destroyed) return false;
+    const owner = state.players[controllerOf(ship)];
+    return owner !== undefined && !owner.eliminated;
+  });
+
+/**
  * Apply one command.
  *
  * Rejections return the *original* state, unchanged and un-logged: a refusal is
@@ -699,7 +713,13 @@ export function applyCommand(state: GameState, cmd: Command, map: GameMap = DEFA
   const pending = pendingCounterattack(state);
   if (pending) {
     const answering = cmd.type === 'counterattack' || cmd.type === 'declineCounterattack';
-    if (!answering && cmd.type !== 'endPhase' && cmd.type !== 'concede') {
+    // "Ships which are attacked may return fire against any or all of their
+    // attackers during the combat phase, before any damage is implemented."
+    // The window is the defender's, so the attacker may not shut it by ending
+    // the phase out from under them: `endPhase` waits too, for as long as a live
+    // player is still entitled to answer.
+    const closeable = cmd.type === 'endPhase' && !anyoneMayAnswer(state, pending.attackers);
+    if (!answering && !closeable && cmd.type !== 'concede') {
       return reject(state, 'the outstanding counterattack must be answered first');
     }
     if (answering && !mayAnswer(state, pending.attackers, cmd.by)) {
@@ -749,7 +769,12 @@ export function legalCommands(
     if (mayAnswer(state, pending.attackers, player)) {
       out.push('counterattack', 'declineCounterattack');
     }
-    if (player === seatOf(state)) out.push('endPhase', 'concede');
+    // Ending the phase is not on offer while the return fire the rules guarantee
+    // is still owed to a live player; conceding always is.
+    if (player === seatOf(state)) {
+      if (!anyoneMayAnswer(state, pending.attackers)) out.push('endPhase');
+      out.push('concede');
+    }
     return out;
   }
 
