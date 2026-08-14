@@ -26,6 +26,18 @@ npm install
 npm run dev      # http://localhost:5173
 ```
 
+Multiplayer, on one machine or over a network:
+
+```bash
+npm run server                     # authoritative server on :8787
+PORT=9000 SCENARIO=lateral-7 npm run server
+```
+
+Clients connect to `ws://host:port/?room=<id>&clientId=<stable-id>`. The server
+validates every command, assigns seats, and — in fog-of-war scenarios — sends
+each player only the state they are entitled to see. See
+[docs/MULTIPLAYER.md](docs/MULTIPLAYER.md).
+
 Then pick a scenario and press **New game**. Everything else:
 
 ```bash

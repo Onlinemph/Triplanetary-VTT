@@ -36,3 +36,9 @@ export {
   type TransportKind,
   type WebSocketTransportOptions,
 } from './transport.js';
+
+// The server-authoritative layer: wire protocol, redaction, and the client that
+// speaks to `server/`. Peer relay play does not need any of this.
+export * from './protocol.js';
+export * from './redact.js';
+export * from './client.js';

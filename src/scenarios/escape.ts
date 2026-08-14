@@ -139,8 +139,14 @@ const build = (opts: BuildOptions): GameState => {
       ...opts.options,
     },
     scenarioData: {
-      [ESCAPE_SECRET_KEY]: { fugitiveShip: fugitive },
-      decoyShips: TRANSPORT_IDS.filter((id) => id !== fugitive),
+      // Both halves live under the secret key. Naming the decoys is exactly as
+      // revealing as naming the fugitive — an Enforcer given the other two ids
+      // has the answer by elimination — so they must travel together, or not
+      // at all. See src/net/redact.ts.
+      [ESCAPE_SECRET_KEY]: {
+        fugitiveShip: fugitive,
+        decoyShips: TRANSPORT_IDS.filter((id) => id !== fugitive),
+      },
       // "Mines and torpedoes are not available to either player."
       ordnanceAvailable: [],
       noTimeLimit: true,

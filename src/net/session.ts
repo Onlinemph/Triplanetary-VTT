@@ -101,6 +101,7 @@ export class GameSession {
   private readonly listeners = new Set<SessionListener>();
   private readonly rejections: Rejection[] = [];
 
+  private authoritative = false;
   private transport: Transport | null = null;
   private unsubscribeTransport: (() => void) | null = null;
 
@@ -141,6 +142,7 @@ export class GameSession {
    * is refused. Hot-seat play — the common case — has no such problem.
    */
   get canUndo(): boolean {
+    if (this.authoritative) return false;
     return this.commands.length > 0 && (this.transport === null || this.transport.kind === 'local');
   }
 
@@ -259,6 +261,33 @@ export class GameSession {
    * command issued from inside a remote command's notification still has to
    * reach the peers.
    */
+  /**
+   * Replace the local state with one the server sent.
+   *
+   * This is how a fog-of-war game stays honest. The client cannot replay the
+   * command that produced this state, because replaying it would need the
+   * hidden information the fog exists to withhold — so the server computes the
+   * result and sends back only the part this player is entitled to see.
+   *
+   * The local command log is deliberately *not* extended: it no longer
+   * describes how we got here, so `canUndo` and `replay` stop being meaningful
+   * and the session reports as much.
+   */
+  adoptSnapshot(state: GameState): void {
+    this.currentState = state;
+    this.authoritative = true;
+    this.notify();
+  }
+
+  /**
+   * True once the server has pushed a snapshot. Undo and local replay are off
+   * from that point: this client is a view onto someone else's authority, and
+   * rewinding it would only desynchronise the table.
+   */
+  get isServerAuthoritative(): boolean {
+    return this.authoritative;
+  }
+
   private apply(cmd: Command, origin: Rejection['origin']): CommandResult {
     const { state, result } = applyCommand(this.currentState, cmd, this.gameMap);
     if (!result.ok) {

@@ -1,5 +1,12 @@
 # From hot seat to networked play
 
+> **Status.** Steps 1–4 are implemented. `server/` holds a working
+> server-authoritative WebSocket server with seat authority, per-player
+> redaction and reconnection; `src/net/client.ts` is the browser half. Run it
+> with `npm run server`. What is *not* done is deployment concerns —
+> persistence, authentication, TLS termination — listed under
+> [Checklist for a real deployment](#checklist-for-a-real-deployment).
+
 The game already keeps everything a networked table needs. This document is the
 concrete path from "two people and one keyboard" to "four people, four cities,
 one relay", and it is honest about the parts that are wiring and the parts that
@@ -74,7 +81,7 @@ them on, and applies what arrives from the others. If the socket drops, outgoing
 commands queue; on reconnect the join frame says how much of the log this client
 already holds and the relay sends back the rest.
 
-### 4. Server-authoritative
+### 4. Server-authoritative — shipping today
 
 The relay from step 3 does not know the rules, so it cannot tell a legal plot
 from a modified client's fantasy. Making it authoritative is a small change,
@@ -288,6 +295,84 @@ Two details the filter must get right, both from p. 8:
   filtered view must not leak the base's location through a rejected move.
 
 ---
+
+
+---
+
+## What is actually implemented
+
+```
+server/room.ts        the authoritative rules loop, with no networking in it
+server/index.ts       a WebSocket + HTTP shell around it
+src/net/protocol.ts   the wire protocol, and inbound frame validation
+src/net/redact.ts     what one player is allowed to know
+src/net/client.ts     the browser client, with optimistic apply and backoff
+```
+
+Run a server:
+
+```bash
+npm run server                                  # bi-planetary on :8787
+PORT=9000 SCENARIO=lateral-7 SEED=42 npm run server
+curl localhost:8787/health                      # rooms, turns, seat occupancy
+```
+
+Connect a client to `ws://host:port/?room=<id>&clientId=<stable-id>` and send a
+`hello` naming the seat you want.
+
+### The two publication modes
+
+`Room.usesSnapshots` decides how the server tells clients what happened, and it
+is simply `state.options.fogOfWar`:
+
+| | open information | fog of war |
+|---|---|---|
+| server sends | the accepted **command** | a per-client redacted **snapshot** |
+| client does | replays it locally | adopts it wholesale |
+| frame size | tiny | whole state |
+| why | determinism guarantees every client lands on the same state | replaying the command would need the hidden state the fog exists to withhold |
+
+Adopting a snapshot sets `GameSession.isServerAuthoritative`, which turns off
+undo and local replay: the client's log no longer describes how the game got
+where it is.
+
+### Two things a relay cannot do
+
+**`by` is just a string.** Nothing in a relay stops a client sending
+`{type: 'endPhase', by: 'someone-else'}`. `Room.accept` checks the seat against
+the claimed author *before* the rules see the command, and the engine then has
+the last word — being correctly seated does not make an illegal move legal.
+
+**Secrets have to be withheld at the source.** Hiding a counter in the renderer
+is not hiding it. `redactState` drops undetected enemy ships, enemy ordnance
+outside the detector net, and scenario secrets, and it does so on the server so
+the data never reaches the client at all.
+
+### How scenario secrets are classified
+
+Three rules, in order, applied to each `scenarioData` entry:
+
+1. **`secret`** — the declared hiding place, sent only to the player it names.
+   Ownership is derived from the ships it references, so Escape's
+   `{fugitiveShip: <a Pilgrim transport>}` reaches the Pilgrim and nobody else.
+2. **Tables keyed by ship or player** are split, and each player receives only
+   their own rows. Lateral 7's `dummyAssignments` maps every real ship to the
+   dummies concealing it, for *both* sides; shipping it whole would tell each
+   player which of the enemy's counters are real.
+3. **Anything naming only other players' ships** is withheld as a backstop.
+
+Rules 2 and 3 exist because rule 1 was not enough, and the failure was
+instructive. Escape originally shipped its decoy list in plain `scenarioData`.
+It named two of the three transports — so the Enforcer, who was correctly
+denied the `secret`, could name the fugitive by elimination anyway. A partial
+leak was worse than no secret at all. `tests/multiplayer.test.ts` now asserts
+the general property: **no wire payload ever names a ship the viewer cannot
+see**, across every fog-of-war scenario.
+
+Scenarios that need a ship visible regardless of detection declare
+`alwaysVisible: {playerId: [shipId, ...]}` — Lateral 7 uses it for
+"the pirate knows the location of the liner". Each player is sent only their own
+row, so the declaration itself reveals nothing.
 
 ## Ordering, undo and conflicts
 

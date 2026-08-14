@@ -216,8 +216,9 @@ const build = (opts: BuildOptions): GameState => {
       // ship or a base."
       dreadnaughtHeldUntilContact: 'tycho-brahe',
       // "Because ship sailings are published, the pirate knows the location of
-      // the liner."
-      alwaysVisibleToPirates: ['liner'],
+      // the liner." Detection alone would not give the pirate that, so the
+      // liner is declared permanently visible to them; see src/net/redact.ts.
+      alwaysVisible: { pirates: ['liner'] },
       passengerShip: 'liner',
     },
   });
