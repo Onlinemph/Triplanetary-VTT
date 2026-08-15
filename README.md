@@ -44,8 +44,8 @@ Set **Settings → Pages → Build and deployment → Source** to **GitHub Actio
 The `Deploy to GitHub Pages` workflow then builds and publishes on every push to
 the default branch.
 
-The Source setting is the one that catches people out. Left on *"Deploy from a
-branch"*, Pages serves the repository as-is — which looks like it worked and did
+The Source setting is the one that catches people out. Left on _"Deploy from a
+branch"_, Pages serves the repository as-is — which looks like it worked and did
 not. The root `index.html` is Vite's development entry, and its only script tag
 points at `/src/main.ts`; no browser can execute TypeScript, so the page loads,
 `#root` stays empty, and you get a blank grey screen with nothing in the console
