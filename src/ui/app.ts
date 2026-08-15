@@ -11,7 +11,7 @@
  * leaves as a `Command`, so the shell is replaceable and the game is not.
  */
 
-import { type Hex, type HexSide, distance, eq } from '@engine/hex.js';
+import { type Hex, type HexSide, distance, eq, length as hexLength, sub } from '@engine/hex.js';
 import { isDetected, visibleShips } from '@engine/detection.js';
 import {
   controllerOf,
@@ -731,7 +731,13 @@ export const createApp = (deps: AppDeps): App => {
 
     // While aiming a torpedo the candidate hexes take over the "reachable"
     // channel: same affordance, different order — click a lit hex to commit.
-    const reachable: { hex: Hex; accel: 0 | 1 | 2; danger?: string }[] = [];
+    const reachable: {
+      hex: Hex;
+      accel: 0 | 1 | 2;
+      danger?: string;
+      orbit?: string;
+      speed?: number;
+    }[] = [];
     if (ui.aiming === 'torpedo') {
       for (const h of aimEndpoints()) reachable.push({ hex: h, accel: 1 });
     } else {
@@ -743,10 +749,19 @@ export const createApp = (deps: AppDeps): App => {
             : option.asteroidHexes.length > 0
               ? `${option.asteroidHexes.length} asteroid hex(es)`
               : undefined;
+        // Would this burn leave the ship in orbit? Orbit is emergent in
+        // Triplanetary -- one hex per turn between adjacent gravity hexes of
+        // the same body -- so it has to be derived from the resulting vector.
+        const orbitBody =
+          ship && !danger
+            ? s.map.orbitOf(option.endpoint, sub(option.endpoint, ship.pos))
+            : undefined;
         reachable.push({
           hex: option.endpoint,
           accel: option.accel,
           ...(danger ? { danger } : {}),
+          ...(orbitBody ? { orbit: orbitBody.name } : {}),
+          ...(ship ? { speed: hexLength(sub(option.endpoint, ship.pos)) } : {}),
         });
       }
     }

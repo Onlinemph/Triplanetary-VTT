@@ -8,7 +8,16 @@
  * that are not a click on a hex: landing, takeoff, ramming, weak gravity.
  */
 
-import { type Hex, distance, eq, hexSide, isZero, key, sideKey } from '@engine/hex.js';
+import {
+  type Hex,
+  distance,
+  eq,
+  hexSide,
+  isZero,
+  key,
+  sideKey,
+  length as hexLength,
+} from '@engine/hex.js';
 import { prospectingEnabled } from '@engine/logistics.js';
 import {
   canOverload,
@@ -115,6 +124,7 @@ export const astrogationActions = (ctx: Ctx, ship: Ship): Child[] => {
   }
   if (!preview.legal && preview.reason) warnings.push(note('warn', preview.reason));
 
+  const speed = hexLength(ship.velocity);
   out.push(
     section(
       plotted ? 'Plotted course' : 'Predicted course',
@@ -130,6 +140,19 @@ export const astrogationActions = (ctx: Ctx, ship: Ship): Child[] => {
           )
         : null,
       ...warnings,
+      // Vector movement's one genuine surprise: you cannot turn in place, and
+      // at speed there is no burn that reverses you. Players reasonably read
+      // that as the game being broken, so say it outright and give the count.
+      speed > 0
+        ? el(
+            'p',
+            { class: 'hint' },
+            `Speed ${speed}. A burn moves the arrowhead one hex, so you cannot turn round in one turn — ` +
+              `burn against your vector to shed a hex of speed at a time. ` +
+              `${speed} more turn${speed === 1 ? '' : 's'} of braking to stop, then accelerate the other way. ` +
+              `Each hex is labelled with the speed it leaves you at.`,
+          )
+        : null,
       el(
         'p',
         { class: 'hint' },

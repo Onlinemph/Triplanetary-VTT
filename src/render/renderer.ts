@@ -98,7 +98,7 @@ export interface RenderView {
   viewer: PlayerId | null;
   selectedShip?: ShipId | null;
   hoveredHex?: Hex | null;
-  reachable?: { hex: Hex; accel: 0 | 1 | 2; danger?: string }[];
+  reachable?: { hex: Hex; accel: 0 | 1 | 2; danger?: string; orbit?: string; speed?: number }[];
   plannedEndpoint?: Hex | null;
   attackPreview?: { from: Hex; to: Hex; blocked: boolean } | null;
   showGravity: boolean;
@@ -622,15 +622,41 @@ export class MapRenderer {
     for (const entry of list) {
       const p = toPixel(entry.hex, f.size);
       if (!f.cam.isVisible(p.x, p.y, f.pitch)) continue;
-      const tint = dangerColor(entry.danger);
+      // An orbit-producing burn is the one outcome worth picking out. Coming
+      // off a planet the ship is left stationary in a gravity hex and falls
+      // back next turn unless it burns; of the six burns available exactly two
+      // hold orbit, and nothing on the chart used to say which. That made the
+      // rulebook's own takeoff sequence look like a bug.
+      const orbiting = entry.orbit !== undefined && entry.danger === undefined;
+      const tint = orbiting ? THEME.safe : dangerColor(entry.danger);
 
       ctx.beginPath();
       hexPath(ctx, p.x, p.y, f.size * 0.92);
-      ctx.fillStyle = rgba(tint, 0.13);
+      ctx.fillStyle = rgba(tint, orbiting ? 0.2 : 0.13);
       ctx.fill();
-      ctx.lineWidth = Math.max(0.9 * f.u, f.pitch * 0.01);
-      ctx.strokeStyle = rgba(tint, 0.55);
+      ctx.lineWidth = Math.max(orbiting ? 1.7 * f.u : 0.9 * f.u, f.pitch * 0.01);
+      ctx.strokeStyle = rgba(tint, orbiting ? 0.95 : 0.55);
       ctx.stroke();
+
+      if (orbiting && f.hexPx >= LOD.detailMin) {
+        setFont(f, Math.min(11, f.hexPx * 0.26), '700');
+        label(f, 'ORBIT', p.x, p.y + f.size * 0.58, THEME.safe, 0.85);
+      } else if (entry.speed !== undefined && f.hexPx >= LOD.detailMin) {
+        // The resulting speed, on every option. This is what makes braking
+        // findable: "how do I turn around" has no single answer in vector
+        // movement -- you burn against your vector until the speed reads 0,
+        // then accelerate the other way -- and the numbers make that legible
+        // instead of something you have to be told.
+        setFont(f, Math.min(11, f.hexPx * 0.26), '700');
+        label(
+          f,
+          entry.speed === 0 ? 'STOP' : `${entry.speed}`,
+          p.x,
+          p.y + f.size * 0.58,
+          entry.speed === 0 ? THEME.safe : tint,
+          0.8,
+        );
+      }
 
       // Same notation as the course arrows: a circle for one point of fuel, a
       // double circle for the overload manoeuvre.
