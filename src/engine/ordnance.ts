@@ -55,7 +55,7 @@
  * or the DOM.
  */
 
-import type { CommandResult, LaunchOrdnance, ScuttleOrdnance } from './commands.js';
+import type { CommandResult, LaunchBaseTorpedo, LaunchOrdnance } from './commands.js';
 import {
   type DamageResult,
   type OtherAttackKind,
@@ -99,6 +99,7 @@ import {
   withShip,
 } from './state.js';
 import {
+  type BaseState,
   type CourseLeg,
   type GameState,
   type Ordnance,
@@ -111,6 +112,7 @@ import {
   areAllied,
 } from './types.js';
 import { applyAdvancedHits, applyDamage, canFire, shipLabel } from './combat.js';
+import { ordnanceDeniedReason } from './logistics.js';
 import {
   controllerOf,
   effectiveGravity,
@@ -498,22 +500,123 @@ export function launchOrdnance(
 }
 
 /**
- * Detonate ordnance its owner no longer wants to track.
+ * May this base fire its torpedo right now?
  *
- * Treated as the five-turn self-destruct arriving early — the item is scrapped
- * without a blast. The rules never give a player a command detonator, and letting
- * one exist would turn every mine into a remotely triggered bomb.
+ * "The two bases in the asteroid belt (Ceres and Clandestine) are asteroid
+ * bases... They are capable of launching one torpedo per turn." For an orbital
+ * base: "It may fire one torpedo per turn, providing resupply operations are not
+ * in progress."
  */
-export function scuttleOrdnance(
+export function canLaunchBaseTorpedo(
   state: GameState,
-  cmd: ScuttleOrdnance,
-): { state: GameState; result: CommandResult } {
-  const item = state.ordnance[cmd.ordnance];
-  if (!item) return reject(state, `unknown ordnance ${cmd.ordnance}`);
-  if (!areAllied(state, item.owner, cmd.by)) return reject(state, 'that ordnance is not yours');
-  if (cmd.by !== activePlayer(state)) return reject(state, 'it is not your player-turn');
-  return { state: discard(state, cmd.ordnance, 'is scuttled'), result: okResult };
+  base: BaseState,
+  player: PlayerId,
+  map: GameMap,
+): { ok: boolean; reason?: string } {
+  // Planetary bases get planetary defences instead; the torpedo is named only
+  // for asteroid and orbital bases.
+  if (base.kind === 'planetary') return no('only asteroid and orbital bases launch torpedoes');
+  if (base.destroyed) return no('that base has been destroyed');
+  if (base.owner === null || !areAllied(state, base.owner, player)) {
+    return no('that base is not yours');
+  }
+  if (base.launchedThisTurn) return no('that base has already launched a torpedo this turn');
+  // The proviso belongs to the orbital base alone — "It may fire one torpedo per
+  // turn, providing resupply operations are not in progress" — and is repeated
+  // on p. 8: "An orbital base resupplying any ship may not fire its guns or
+  // launch ordnance during that player-turn." Nothing of the kind is printed for
+  // Ceres and Clandestine.
+  if (base.kind === 'orbital' && base.resuppliedThisTurn) {
+    return no('that base is resupplying this turn');
+  }
+  // A scenario may shut the magazine: "Torpedoes and mines are available only to
+  // the Enforcers, but also only from Terran bases."
+  const denied = ordnanceDeniedReason(state, base, player, map);
+  if (denied) return no(denied);
+  return yes;
 }
+
+/**
+ * Every vector a base's torpedo could be given: "it may accelerate one or two
+ * hexes in any direction", from a standing start, and not off the chart.
+ */
+export function baseTorpedoAimOptions(base: BaseState, map: GameMap): Hex[] {
+  return withinRadius(ZERO, TORPEDO_BOOST)
+    .filter((v) => !isZero(v) && map.inBounds(add(base.hex, v)))
+    .sort((a, b) => distance(a, ZERO) - distance(b, ZERO) || a.q - b.q || a.r - b.r);
+}
+
+/**
+ * Fire a base's own torpedo.
+ *
+ * A base draws on "an unlimited supply of fuel, mines, and torpedoes", so there
+ * is no hold to debit, and it stands still, so the torpedo's whole vector comes
+ * from the launch boost: "On the turn in which a torpedo is launched (and only
+ * on that turn), it may accelerate one or two hexes in any direction."
+ */
+export function launchBaseTorpedo(
+  state: GameState,
+  cmd: LaunchBaseTorpedo,
+  map: GameMap,
+): { state: GameState; result: CommandResult } {
+  if (state.phase !== 'ordnance')
+    return reject(state, 'ordnance is launched in the ordnance phase');
+  if (cmd.by !== activePlayer(state)) return reject(state, 'it is not your player-turn');
+
+  const base = state.bases[cmd.base];
+  if (!base) return reject(state, `unknown base ${cmd.base}`);
+  const check = canLaunchBaseTorpedo(state, base, cmd.by, map);
+  if (!check.ok) return reject(state, check.reason ?? 'that base may not launch a torpedo');
+
+  const boost = distance(cmd.aim, ZERO);
+  if (boost < 1 || boost > TORPEDO_BOOST) {
+    return reject(
+      state,
+      `a torpedo may accelerate one or two hexes in any direction (this is ${boost})`,
+    );
+  }
+  if (!map.inBounds(add(base.hex, cmd.aim))) return reject(state, 'that would send it off the map');
+
+  const id = `${ID_PREFIX.torpedo}${state.nextOrdnanceId}`;
+  const item: Ordnance = {
+    id,
+    owner: base.owner!,
+    kind: 'torpedo',
+    pos: base.hex,
+    velocity: cmd.aim,
+    // The base is a fixture, not a ship coasting in from somewhere: it has
+    // entered no gravity hex, so the torpedo starts with no pull on it and
+    // picks up whatever the hexes it enters this turn hand it.
+    pendingGravity: ZERO,
+    turnsRemaining: ORDNANCE_LIFETIME,
+    launchedTurn: state.turn,
+    course: [],
+    canAccelerate: false,
+  };
+
+  let s: GameState = {
+    ...state,
+    ordnance: { ...state.ordnance, [id]: item },
+    nextOrdnanceId: state.nextOrdnanceId + 1,
+  };
+  s = withBase(s, { ...base, launchedThisTurn: true });
+  s = log(s, `${base.id} launches ${ordnanceLabel(item)} at ${base.hex.q},${base.hex.r}.`, {
+    severity: 'warn',
+    focus: [base.hex],
+  });
+  return { state: s, result: okResult };
+}
+
+/*
+ * There is deliberately no command to scrap live ordnance.
+ *
+ * The rules give an item exactly two ways off the board: detonation, and
+ * "Mines remain active for five turns, after which they self-destruct." An
+ * at-will removal would dissolve the obligation the very next sentence imposes
+ * — "That ship must execute an immediate course change to insure that it does
+ * not remain in the same hex as the mine" — and would let a player walk a fleet
+ * through its own minefield for free.
+ */
 
 // ---------------------------------------------------------------------------
 // The launcher's obligation to break away from its own mine

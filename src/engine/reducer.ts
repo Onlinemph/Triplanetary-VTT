@@ -72,10 +72,11 @@ import {
   canLaunch,
   checkOrdnanceAgainstCourse,
   firePlanetaryDefenceAtNuke,
+  canLaunchBaseTorpedo,
+  launchBaseTorpedo,
   launchOrdnance,
   moveOrdnancePhase,
   ownMineConflict,
-  scuttleOrdnance,
 } from './ordnance.js';
 import {
   canResupplyAt,
@@ -155,6 +156,38 @@ export function registerVictoryCheck(
 export const victoryCheckerFor = (scenarioId: string): VictoryChecker | null =>
   scenarioCheckers.get(scenarioId) ?? defaultChecker;
 
+/**
+ * The scenario's own upkeep, run as each player-turn closes.
+ *
+ * A handful of scenarios have machinery that ticks on its own rather than being
+ * ordered by anybody — "Each base generates MCr 0.1 per turn", "A corvette does
+ * not appear until the previous one has accomplished its mission or been
+ * destroyed", "The Patrol earns points equal to the combat strength of destroyed
+ * pirate ships". None of it belongs in the general rules, and the engine cannot
+ * import the scenario table, so it arrives through the same registry the victory
+ * checkers use. Hooks must be pure and must take any die they need from
+ * `state.rng`, or replays stop matching.
+ */
+export type TurnHook = (state: GameState, map: GameMap) => GameState;
+
+const scenarioHooks = new Map<string, TurnHook>();
+let defaultHook: TurnHook | null = null;
+
+export function registerTurnHook(hook: TurnHook | null): void;
+export function registerTurnHook(scenarioId: string, hook: TurnHook | null): void;
+export function registerTurnHook(a: string | TurnHook | null, b?: TurnHook | null): void {
+  if (typeof a === 'string') {
+    if (b) scenarioHooks.set(a, b);
+    else scenarioHooks.delete(a);
+    return;
+  }
+  defaultHook = a;
+}
+
+/** The upkeep hook that would run for this scenario id, if any. */
+export const turnHookFor = (scenarioId: string): TurnHook | null =>
+  scenarioHooks.get(scenarioId) ?? defaultHook;
+
 const describeWinners = (state: GameState, v: VictoryState): string => {
   if (v.winners.length === 0) return 'The game ends in a draw';
   const names = v.winners.map((id) => state.players[id]?.name ?? id).join(' and ');
@@ -216,6 +249,7 @@ const COMMAND_PHASES: Readonly<Record<CommandType, readonly Phase[] | typeof ANY
   emplaceEquipment: ['astrogation'],
   // 2. Ordnance.
   launchOrdnance: ['ordnance'],
+  launchBaseTorpedo: ['ordnance'],
   // 3. Movement is automatic — see `advancePhase`.
   // 4. Combat.
   attack: ['combat'],
@@ -233,7 +267,6 @@ const COMMAND_PHASES: Readonly<Record<CommandType, readonly Phase[] | typeof ANY
   purchaseShip: ['resupply'],
   // Flow.
   endPhase: ANY,
-  scuttleOrdnance: ANY,
   concede: ANY,
 };
 
@@ -389,8 +422,10 @@ const clearPerTurnFlags = (state: GameState): GameState => {
   const bases = { ...s.bases };
   let touched = false;
   for (const base of Object.values(bases)) {
-    if (!base.resuppliedThisTurn) continue;
-    bases[base.id] = { ...base, resuppliedThisTurn: false };
+    if (!base.resuppliedThisTurn && !base.launchedThisTurn) continue;
+    // "It may fire one torpedo per turn" — a base's turn, like a ship's, is its
+    // owner's player-turn.
+    bases[base.id] = { ...base, resuppliedThisTurn: false, launchedThisTurn: false };
     touched = true;
   }
   return touched ? { ...s, bases } : s;
@@ -433,6 +468,9 @@ const nextSeat = (state: GameState): { index: number; turn: number } => {
 const endPlayerTurn = (state: GameState, map: GameMap): GameState => {
   let s = resolvePendingDamage(state);
   s = runResupplyPhase(s, map);
+  // The scenario's own upkeep — base income, reinforcements, points — runs on
+  // the closing player-turn, before the flags that scope it are cleared.
+  s = turnHookFor(s.scenarioId)?.(s, map) ?? s;
   s = clearPerTurnFlags(s);
 
   const { index, turn } = nextSeat(s);
@@ -604,6 +642,8 @@ const dispatch = (state: GameState, cmd: Command, map: GameMap): Outcome => {
     // --- Ordnance ---
     case 'launchOrdnance':
       return launchOrdnance(state, cmd, map);
+    case 'launchBaseTorpedo':
+      return launchBaseTorpedo(state, cmd, map);
 
     // --- Combat ---
     case 'attack': {
@@ -642,8 +682,6 @@ const dispatch = (state: GameState, cmd: Command, map: GameMap): Outcome => {
     // --- Flow ---
     case 'endPhase':
       return endPhase(state, map);
-    case 'scuttleOrdnance':
-      return scuttleOrdnance(state, cmd);
     case 'concede':
       return concede(state, cmd.by);
   }
@@ -845,6 +883,9 @@ const feasible = (state: GameState, type: CommandType, player: PlayerId, map: Ga
           canLaunch(state, s, 'torpedo', map).ok ||
           canLaunch(state, s, 'nuke', map).ok,
       );
+    case 'launchBaseTorpedo':
+      // "They are capable of launching one torpedo per turn."
+      return Object.values(state.bases).some((b) => canLaunchBaseTorpedo(state, b, player, map).ok);
 
     case 'attack':
     case 'suppressHexside':
@@ -872,9 +913,6 @@ const feasible = (state: GameState, type: CommandType, player: PlayerId, map: Ga
       return mine.some((s) => matchedShips(state, s).length > 0);
     case 'purchaseShip':
       return (state.players[player]?.megacredits ?? 0) > 0;
-
-    case 'scuttleOrdnance':
-      return Object.values(state.ordnance).some((o) => o.owner === player);
   }
 };
 

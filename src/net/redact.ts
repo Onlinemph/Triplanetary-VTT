@@ -255,7 +255,7 @@ export const redactState = (state: GameState, viewer: PlayerId | null, map: Game
  * Does a command come from the player it claims to?
  *
  * The one check a relay cannot skip. Without it any client can end another
- * player's turn, fire their guns, or scuttle their ordnance, because `by` is
+ * player's turn, fire their guns, or launch their ordnance, because `by` is
  * just a string in a JSON frame.
  */
 export const commandIsAuthorised = (seat: PlayerId | null, commandBy: PlayerId): boolean =>

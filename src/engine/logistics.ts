@@ -122,6 +122,12 @@ export interface LogisticsData {
   readonly shards: Readonly<Record<string, number>>;
   /** Outstanding surrender demands: target ship id -> ids of the demanding ships. */
   readonly demands: Readonly<Record<ShipId, readonly ShipId[]>>;
+  /**
+   * Who has looted whom: victim ship id -> the players who took cargo off it.
+   * A scenario may score the act — "The Pirates earn 2 points for each merchant
+   * ship looted" — and looting leaves no other trace once the hold is empty.
+   */
+  readonly looted: Readonly<Record<ShipId, readonly PlayerId[]>>;
 }
 
 const LOGISTICS_KEY = 'logistics';
@@ -131,6 +137,7 @@ const EMPTY_LOGISTICS: LogisticsData = {
   guards: {},
   shards: {},
   demands: {},
+  looted: {},
 };
 
 export const logisticsData = (state: GameState): LogisticsData => {
@@ -288,6 +295,87 @@ export interface ResupplyCheck {
   readonly reason?: string;
 }
 
+// ---------------------------------------------------------------------------
+// Scenario restrictions on what a base will hand out
+// ---------------------------------------------------------------------------
+
+/**
+ * Bases are generous by default — "All bases (planetary, asteroid, and orbital)
+ * carry an unlimited supply of fuel, mines, and torpedoes" — but individual
+ * scenarios shut parts of that down. Those are special rules rather than general
+ * ones, so they are carried in `scenarioData` and read here, at the one place a
+ * base hands a ship anything.
+ */
+const stringsAt = (state: GameState, key: string): readonly string[] | null => {
+  const raw = state.scenarioData[key];
+  return Array.isArray(raw) ? raw.filter((x): x is string => typeof x === 'string') : null;
+};
+
+/** Why this base will supply this player nothing at all, or `null` if it will. */
+const supplyDeniedReason = (
+  state: GameState,
+  base: BaseState,
+  player: PlayerId,
+  map: GameMap,
+): string | null => {
+  // Nova: "Alien ships begin with a full load of mines but cannot resupply or
+  // refuel."
+  const denied = stringsAt(state, 'resupplyDeniedTo');
+  if (denied?.includes(player)) return 'this fleet cannot resupply or refuel';
+
+  // Grand Tour: "Fuel is available only at bases on Terra, Venus, Mars, and
+  // Callisto." Refuelling is what a stop *is* — "Whenever a ship is refueled
+  // from a base, it automatically undergoes maintenance" — so a base with no
+  // fuel to sell is no stop at all.
+  const fuelBases = stringsAt(state, 'fuelBases');
+  if (fuelBases && !fuelBases.includes(baseBodyId(base, map))) {
+    return `no fuel is available at ${base.id} in this scenario`;
+  }
+  return null;
+};
+
+/**
+ * Why this base will not issue this player mines and torpedoes, or `null`.
+ *
+ * Escape: "Mines and torpedoes are not available to either player."
+ * Retribution: "Torpedoes and mines are available only to the Enforcers, but
+ * also only from Terran bases."
+ */
+export const ordnanceDeniedReason = (
+  state: GameState,
+  base: BaseState,
+  player: PlayerId,
+  map: GameMap,
+): string | null => {
+  const available = stringsAt(state, 'ordnanceAvailable');
+  if (available && available.length === 0) {
+    return 'mines and torpedoes are not available in this scenario';
+  }
+  if (stringsAt(state, 'ordnanceDeniedTo')?.includes(player)) {
+    return 'mines and torpedoes are not available to this player';
+  }
+  const sources = state.scenarioData['ordnanceSources'] as
+    Record<string, readonly string[]> | undefined;
+  const worlds = sources?.[player];
+  if (Array.isArray(worlds) && !worlds.includes(baseBodyId(base, map))) {
+    return `${base.id} does not issue mines or torpedoes in this scenario`;
+  }
+  return null;
+};
+
+/**
+ * Which base, if any, this ship may resupply from: one it has matched courses
+ * with, and one the scenario has not closed to it.
+ */
+export function canResupplyAt(state: GameState, ship: Ship, map: GameMap): ResupplyCheck {
+  const match = matchedBase(state, ship, map);
+  if (!match.ok || match.baseId === undefined) return match;
+  const base = state.bases[match.baseId];
+  if (!base) return match;
+  const blocked = supplyDeniedReason(state, base, controllerOf(ship), map);
+  return blocked ? { ok: false, reason: blocked } : match;
+}
+
 /**
  * Which friendly base, if any, this ship has matched courses with (rulebook p. 8).
  *
@@ -302,7 +390,7 @@ export interface ResupplyCheck {
  * Suppression is deliberately *not* consulted: "The base on a suppressed hexside
  * is not affected."
  */
-export function canResupplyAt(state: GameState, ship: Ship, map: GameMap): ResupplyCheck {
+function matchedBase(state: GameState, ship: Ship, map: GameMap): ResupplyCheck {
   if (ship.destroyed) return { ok: false, reason: 'the ship has been destroyed' };
   const player = controllerOf(ship);
 
@@ -437,6 +525,7 @@ export function resupply(
     const counter = orbitalBaseCounter(state, base);
     const spent =
       base.firedThisTurn ||
+      base.launchedThisTurn ||
       (counter !== undefined && (counter.firedThisPhase || counter.launchedOrdnanceThisTurn));
     if (spent) return reject(state, 'that orbital base has already fired this turn');
   }
@@ -457,6 +546,10 @@ export function resupply(
       }
       if (!Number.isInteger(item.quantity) || item.quantity < 0) {
         return reject(state, 'ordnance comes in whole units');
+      }
+      if (item.quantity > 0) {
+        const denied = ordnanceDeniedReason(state, base, controllerOf(ship), map);
+        if (denied) return reject(state, denied);
       }
       loadMass += item.quantity * CARGO[item.kind].mass;
     }
@@ -734,6 +827,15 @@ export function loot(
   }
 
   let s = withShip(withShip(state, giver), taker);
+  if (!areAllied(state, controllerOf(looter), controllerOf(victim))) {
+    const already = logisticsData(s).looted[victim.id] ?? [];
+    const by = controllerOf(looter);
+    if (!already.includes(by)) {
+      s = withLogistics(s, {
+        looted: { ...logisticsData(s).looted, [victim.id]: [...already, by] },
+      });
+    }
+  }
   const haul = cmd.items
     .map((i) => `${i.quantity} ${i.kind === 'fuel' ? 'fuel' : CARGO[i.kind].name}`)
     .join(', ');
@@ -920,6 +1022,33 @@ const purchasableClasses = (state: GameState): readonly ShipClass[] | null => {
 };
 
 /**
+ * What this hull costs in combat-strength points, or `null` if this scenario
+ * prices in MegaCredits.
+ *
+ * "Ships are acquired on the basis of combat strength points... a liner costs 1
+ * point, a transport or tanker costs 1/2 point." A scenario states its own rate
+ * — "2 points for every point of combat strength" (the Patrol and the Pirates)
+ * — or a flat price list — "8 points for a transport, 12 for a packet".
+ */
+const shipPointPrice = (state: GameState, player: PlayerId, cls: ShipClass): number | null => {
+  const rules = state.scenarioData['pointPrices'] as
+    | Record<
+        string,
+        { perCombatStrength?: number; prices?: Partial<Record<ShipClass, number>> } | undefined
+      >
+    | undefined;
+  const rule = rules?.[player];
+  if (!rule) return null;
+  const listed = rule.prices?.[cls];
+  if (listed !== undefined) return listed;
+  if (rule.perCombatStrength === undefined) return null;
+  const def = SHIP_CLASSES[cls];
+  // "Commercial ships with D-suffix strengths cost half the printed strength."
+  const strength = def.defensiveOnly ? def.combatStrength / 2 : def.combatStrength;
+  return rule.perCombatStrength * strength;
+};
+
+/**
  * "New ships and equipment may be purchased on any world as soon as a player
  * accumulates enough money"; in Interplanetary War, "Ships appear immediately"
  * at the world where they were bought.
@@ -943,15 +1072,33 @@ export function purchaseShip(
     return reject(state, `${SHIP_CLASSES[cmd.shipClass].name}s are not for sale in this scenario`);
   }
 
-  const cost = SHIP_CLASSES[cmd.shipClass].cost;
-  if (player.megacredits < cost) {
-    return reject(state, `${player.name} cannot afford MCr ${cost}`);
+  // "Two methods of pricing are available, depending on the scenario." A
+  // scenario that runs on the combat-strength point system says so with a price
+  // rule; otherwise the MegaCredit table applies.
+  const pointPrice = shipPointPrice(state, cmd.by, cmd.shipClass);
+  const cost = pointPrice ?? SHIP_CLASSES[cmd.shipClass].cost;
+  const purse = pointPrice === null ? player.megacredits : player.points;
+  if (purse < cost) {
+    return reject(
+      state,
+      pointPrice === null
+        ? `${player.name} cannot afford MCr ${cost}`
+        : `${player.name} cannot afford ${cost} points`,
+    );
   }
 
   // The yard has to be somewhere: a friendly base on a world.
   const base = cmd.side ? baseAtSide(state, cmd.side) : baseAtHex(state, cmd.at);
   if (!base) return reject(state, 'there is no base there');
   if (!baseIsFriendly(state, base, cmd.by)) return reject(state, 'that base is not friendly');
+  // Interplanetary War: "Ships appear immediately on any world controlled by the
+  // player." A base nobody owns is friendly to everyone, but it is nobody's
+  // shipyard — Mercury, Ceres and Clandestine "take no side in this war".
+  if (state.scenarioData['purchaseRequiresControl'] === true) {
+    if (base.owner === null || !areAllied(state, base.owner, cmd.by)) {
+      return reject(state, 'ships appear only on a world you control');
+    }
+  }
 
   const number = state.nextShipNumber;
   const id = `${cmd.by}-${cmd.shipClass}-${number}`;
@@ -967,10 +1114,17 @@ export function purchaseShip(
 
   let s: GameState = { ...state, nextShipNumber: number + 1 };
   s = withShip(s, ship);
-  s = withPlayer(s, { ...player, megacredits: roundTons(player.megacredits - cost) });
+  s = withPlayer(
+    s,
+    pointPrice === null
+      ? { ...player, megacredits: roundTons(player.megacredits - cost) }
+      : { ...player, points: player.points - cost },
+  );
   s = log(
     s,
-    `${player.name} commissions ${shipLabel(ship)} at ${nameOfBase(s, base.id, map)} for MCr ${cost}.`,
+    `${player.name} commissions ${shipLabel(ship)} at ${nameOfBase(s, base.id, map)} for ${
+      pointPrice === null ? `MCr ${cost}` : `${cost} points`
+    }.`,
     { severity: 'good', focus: [ship.pos] },
   );
   return { state: s, result: okResult };
@@ -1348,6 +1502,7 @@ const emplaceOrbitalBase = (
       suppressed: false,
       hasPlanetaryDefences: true,
       firedThisTurn: false,
+      launchedThisTurn: false,
       resuppliedThisTurn: false,
     };
     let s = withShip(state, addCargo(ship, 'orbitalBase', -1));
@@ -1374,10 +1529,28 @@ const emplaceOrbitalBase = (
     suppressed: false,
     hasPlanetaryDefences: false,
     firedThisTurn: false,
+    launchedThisTurn: false,
     resuppliedThisTurn: false,
   };
   let s = withShip(state, addCargo(ship, 'orbitalBase', -1));
   s = withBase(s, base);
+  // An orbital base is two records: the `BaseState` holds its stores, and a
+  // counter holds the combat strength of 16 the ship table prints for it, since
+  // "An orbital base may launch torpedoes, fire guns, and resupply friendly
+  // ships". Without the counter an emplaced base could never shoot at anything.
+  const number = s.nextShipNumber;
+  s = { ...s, nextShipNumber: number + 1 };
+  s = withShip(
+    s,
+    makeShip({
+      id: `${id}:counter`,
+      owner: player,
+      shipClass: 'orbitalBase',
+      number,
+      pos: ship.pos,
+      location: { kind: 'space' },
+    }),
+  );
   s = log(s, `${shipLabel(ship)} emplaces an orbital base over ${body.name}.`, {
     severity: 'good',
     focus: [ship.pos],

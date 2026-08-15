@@ -29,11 +29,13 @@
  *    but only the bases at Terra and Luna have planetary defenses."
  */
 
-import { DEFAULT_MAP } from '@engine/map.js';
-import { createInitialState } from '@engine/state.js';
-import type { GameState, PlayerId, VictoryState } from '@engine/types.js';
+import { DEFAULT_MAP, type GameMap } from '@engine/map.js';
+import { rollDie } from '@engine/rng.js';
+import { createInitialState, log } from '@engine/state.js';
+import type { GameState, PlayerId, Ship, VictoryState } from '@engine/types.js';
 import {
   type PlayerSpec,
+  baseSidesOf,
   buildBases,
   buildPlayers,
   inOrbit,
@@ -152,6 +154,99 @@ const build = (opts: BuildOptions): GameState => {
   });
 };
 
+interface RetributionData {
+  corvettesTotal?: number;
+  corvettesAppeared?: number;
+  spawnExcludes?: readonly string[];
+  freedomFleet?: { formed?: boolean };
+}
+
+const retributionData = (state: GameState): RetributionData =>
+  (state.scenarioData['retribution'] ?? {}) as RetributionData;
+
+const withRetributionData = (state: GameState, patch: RetributionData): GameState => ({
+  ...state,
+  scenarioData: {
+    ...state.scenarioData,
+    retribution: { ...retributionData(state), ...patch },
+  },
+});
+
+/**
+ * A corvette still flying its mission.
+ *
+ * "A corvette does not appear until the previous one has accomplished its
+ * mission or been destroyed." The two missions are "a flight to Clandestine to
+ * help build the Freedom Fleet, or a suicidal attack on Terra", so a corvette
+ * that has stopped at Clandestine is done — it waits there to be counted into
+ * the Freedom Fleet — and one that is destroyed (crashing into Terra included)
+ * is done. Anything else is still out there.
+ */
+const stillFlying = (state: GameState, map: GameMap): Ship[] =>
+  ownedShips(state, SONS).filter((s) => {
+    if (s.shipClass !== 'corvette') return true;
+    const atClandestine =
+      s.location.kind === 'asteroidBase' && map.bodyAt(s.pos)?.id === 'clandestine';
+    return !atClandestine;
+  });
+
+/**
+ * Release the next corvette.
+ *
+ * "The Sons of Liberty receive a total of ten corvettes... one at a time. A
+ * corvette does not appear until the previous one has accomplished its mission
+ * or been destroyed. Corvettes may appear at any base except Luna, Ceres, or
+ * Terra." The player picks the base at the table; with no command for that
+ * choice the die does it, out of `state.rng` so replays still match. Every base
+ * on the chart but Clandestine is an Enforcer base, so a rebel corvette that
+ * appears at one has necessarily already lifted off: it starts in orbit.
+ */
+const endPlayerTurn = (state: GameState, map: GameMap): GameState => {
+  const data = retributionData(state);
+  const total = data.corvettesTotal ?? CORVETTE_ALLOWANCE;
+  const appeared = data.corvettesAppeared ?? 1;
+  if (appeared >= total) return state;
+  if (data.freedomFleet?.formed === true) return state;
+  if (stillFlying(state, map).length > 0) return state;
+
+  const excluded = new Set(data.spawnExcludes ?? []);
+  const worlds = map.bodies
+    .filter((b) => !excluded.has(b.id))
+    .map((b) => b.id)
+    .filter((id) => baseSidesOf(map, id).length > 0)
+    .sort();
+  if (worlds.length === 0) return state;
+
+  const pick = rollDie(state.rng);
+  const world = worlds[(pick.value - 1) % worlds.length]!;
+  const number = state.nextShipNumber;
+  const corvette = inOrbit(
+    {
+      id: `sol-corvette-${appeared + 1}`,
+      owner: SONS,
+      shipClass: 'corvette',
+      number,
+      name: `Liberty ${appeared + 1}`,
+    },
+    map,
+    world,
+    0,
+  );
+
+  let s: GameState = {
+    ...state,
+    rng: pick.state,
+    nextShipNumber: number + 1,
+    ships: { ...state.ships, [corvette.id]: corvette },
+  };
+  s = withRetributionData(s, { corvettesAppeared: appeared + 1 });
+  return log(
+    s,
+    `Liberty ${appeared + 1} rises from ${map.body(world)?.name ?? world} — corvette ${appeared + 1} of ${total}.`,
+    { severity: 'warn', focus: [corvette.pos] },
+  );
+};
+
 const checkVictory = (state: GameState): VictoryState | null => {
   const data = (state.scenarioData['retribution'] ?? {}) as {
     corvettesTotal?: number;
@@ -220,6 +315,7 @@ export const retribution: ScenarioDef = {
   playerTemplates: templatesOf(SPECS),
   build,
   checkVictory,
+  endPlayerTurn,
   specialRules: [
     'The Sons of Liberty receive ten corvettes one at a time. A corvette does not appear until the previous one has accomplished its mission or been destroyed. Corvettes may appear at any base except Luna, Ceres or Terra.',
     'Each corvette may fly one of two missions: a flight to Clandestine to help build the Freedom Fleet, or a suicidal attack on Terra.',

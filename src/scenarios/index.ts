@@ -10,6 +10,8 @@
  * nothing reaches for `Math.random`, `Date` or the DOM. A scenario is data.
  */
 
+import { DEFAULT_MAP, type GameMap } from '@engine/map.js';
+import { registerTurnHook } from '@engine/reducer.js';
 import type { GameState } from '@engine/types.js';
 
 import { biPlanetary } from './biPlanetary.js';
@@ -81,6 +83,22 @@ export const checkScenarioVictory = (state: GameState): GameState['victory'] => 
   const scenario = scenarioById(state.scenarioId);
   return scenario?.checkVictory?.(state) ?? null;
 };
+
+/**
+ * Run the scenario's own end-of-player-turn upkeep.
+ *
+ * Registered with the engine as `registerTurnHook(applyScenarioTurn)`; scenarios
+ * without upkeep simply return the state they were handed.
+ */
+export const applyScenarioTurn = (state: GameState, map: GameMap = DEFAULT_MAP): GameState => {
+  const scenario = scenarioById(state.scenarioId);
+  return scenario?.endPlayerTurn?.(state, map) ?? state;
+};
+
+// The engine cannot import this table — the scenarios import *it* — so the one
+// callback it needs is handed over as this module loads. Anything that can build
+// a scenario has therefore already registered its upkeep.
+registerTurnHook(applyScenarioTurn);
 
 /**
  * A view of the table suitable for a scenario picker.

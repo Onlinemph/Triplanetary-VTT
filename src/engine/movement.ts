@@ -216,9 +216,17 @@ const driveWorks = (state: GameState, ship: Ship): boolean => {
   return true;
 };
 
+/**
+ * An orbital base is a fixture, not a vessel: "The base remains in that gravity
+ * hex; it does not literally orbit... Once placed, a base cannot be picked up
+ * again or moved." Its counter therefore neither plots nor drifts nor falls.
+ */
+export const isFixedInstallation = (ship: Ship): boolean => ship.shipClass === 'orbitalBase';
+
 /** Can this ship change its course this turn? Landed ships must blast off first. */
 export const canManeuver = (state: GameState, ship: Ship): boolean => {
   if (ship.destroyed) return false;
+  if (isFixedInstallation(ship)) return false;
   if (ship.location.kind === 'landed') return false;
   return driveWorks(state, ship);
 };
@@ -746,7 +754,15 @@ export const takeOff = (
   if (!base || base.destroyed) {
     return reject(state, `${shipLabel(ship)} landed on a hexside with no base and cannot take off`);
   }
-  if (!baseIsFriendly(state, base.id, controllerOf(ship))) {
+  // A scenario may grant a launch permission the ownership of the pad does not:
+  // "Beginning on Day 1, the Pilgrim may launch his ships from Terra in any
+  // manner he wishes", on a world whose bases all belong to the Enforcers.
+  const launchPads = (state.scenarioData['takeoffAllowedFrom'] ?? {}) as Record<
+    string,
+    readonly string[] | undefined
+  >;
+  const granted = launchPads[controllerOf(ship)]?.includes(map.bodyAt(side.hex)?.id ?? '') === true;
+  if (!granted && !baseIsFriendly(state, base.id, controllerOf(ship))) {
     return reject(state, 'boosters are available only at friendly bases');
   }
   if (state.devastatedSides.includes(sideKey(side))) {
@@ -1310,6 +1326,9 @@ export const executeMovementPhase = (state: GameState, map: GameMap): GameState 
     const ship = s.ships[id];
     if (!ship || ship.destroyed) continue;
     if (controllerOf(ship) !== player) continue;
+    // "The base remains in that gravity hex; it does not literally orbit." An
+    // orbital base neither coasts nor is dragged down by the gravity it sits in.
+    if (isFixedInstallation(ship)) continue;
     s = moveShip(s, id, map);
   }
 

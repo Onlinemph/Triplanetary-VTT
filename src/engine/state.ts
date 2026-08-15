@@ -125,6 +125,7 @@ export const createInitialState = (seed: StateSeed): GameState => {
       suppressed: false,
       hasPlanetaryDefences: site.hasPlanetaryDefences,
       firedThisTurn: false,
+      launchedThisTurn: false,
       resuppliedThisTurn: false,
     };
   }
@@ -138,6 +139,7 @@ export const createInitialState = (seed: StateSeed): GameState => {
       suppressed: false,
       hasPlanetaryDefences: false,
       firedThisTurn: false,
+      launchedThisTurn: false,
       resuppliedThisTurn: false,
     };
   }

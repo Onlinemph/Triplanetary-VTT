@@ -100,7 +100,7 @@ the implementation site. Those are called out in the Notes column here too.
 | Rule                                                                                                        | Where                                                                                                | Status | Notes                                                                                                                                                                                                                    |
 | ----------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | One item per ship per turn                                                                                  | `engine/types.ts` → `Ship.launchedOrdnanceThisTurn`; `engine/ordnance.ts` → `canLaunch`              | ✅     |                                                                                                                                                                                                                          |
-| Not while at a base, refuelling, taking off or landing                                                      | `engine/ordnance.ts` → `canLaunch` (`atBase`)                                                        | ✅     | Orbital bases exempt: "capable of launching one torpedo per turn."                                                                                                                                                       |
+| Not while at a base, refuelling, taking off or landing                                                      | `engine/ordnance.ts` → `canLaunch` (`atBase`)                                                        | ✅     | A base's own torpedo is a separate order (`launchBaseTorpedo`), since "They are capable of launching one torpedo per turn" is a rule about the base, not about a ship parked at it.                                      |
 | Detonate on entering a hex containing a ship, astral body, mine, torpedo or nuke                            | `engine/ordnance.ts` → `detonate`, `checkOrdnanceAgainstCourse`                                      | ✅     |                                                                                                                                                                                                                          |
 | All ordnance is affected by gravity                                                                         | `engine/types.ts` → `Ordnance.pendingGravity`; `engine/ordnance.ts` → `moveOrdnancePhase`            | ✅     |                                                                                                                                                                                                                          |
 | Mine takes the launcher's vector; launcher must change course to leave the hex                              | `engine/ordnance.ts` → `ownMineConflict`, `mustAvoidOwnMine`                                         | ✅     |                                                                                                                                                                                                                          |
@@ -145,17 +145,19 @@ the implementation site. Those are called out in the Notes column here too.
 
 ## p. 7 — Bases
 
-| Rule                                                                                                                                          | Where                                                                                                      | Status | Notes                                                                                                 |
-| --------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- | ------ | ----------------------------------------------------------------------------------------------------- |
-| Bases printed on the map; scenarios set ownership                                                                                             | `engine/state.ts` → `createInitialState`; `engine/map.ts` → `allPlanetaryBases`, `allAsteroidBases`        | ✅     | Geography from the chart, ownership from the scenario.                                                |
-| Planetary bases: detection, defence fire, fuel, maintenance                                                                                   | `engine/detection.ts`, `engine/combat.ts` → `firePlanetaryDefence`, `engine/logistics.ts` → `resupply`     | ✅     |                                                                                                       |
-| Base sides: Io and Callisto one each, Mercury two, Terra/Luna/Mars/Venus all six                                                              | `engine/mapdata.ts` → `AstralBody.baseSides`                                                               | ✅     |                                                                                                       |
-| Asteroid bases: ordinary functions, no planetary defences, one torpedo per turn                                                               | `engine/types.ts` → `BaseState.hasPlanetaryDefences`; `engine/ordnance.ts` → `atBase`                      | ✅     |                                                                                                       |
-| "They may not be harmed except by a nuke"                                                                                                     | `engine/ordnance.ts` → `detonate`                                                                          | ◐      | Enforced by nothing else being able to target a base; a scenario that varies this rule has to say so. |
-| "Ships at asteroid bases may attack and be attacked normally"                                                                                 | `engine/combat.ts` → `immuneToGunfire`                                                                     | ✅     | Only _landed_ ships are immune.                                                                       |
-| Orbital bases: bought in play, carried by transport or packet, placed in a gravity hex from orbit or on a bare hexside; cannot be moved again | `engine/logistics.ts` → `emplaceEquipment`                                                                 | ✅     |                                                                                                       |
-| Clandestine: secret, unattackable, ringed by dense asteroids only scanner-equipped ships may enter                                            | `engine/mapdata.ts` → `CLANDESTINE_CORDON`; `engine/movement.ts` → `denseAsteroidsOnCourse`, `hasScanners` | ✅     | The owner's ships have scanners automatically; others are destroyed.                                  |
-| The owner's mines and torpedoes are unaffected by the special asteroids                                                                       | `engine/ordnance.ts` → dense-asteroid handling                                                             | ✅     | Others detonate harmlessly.                                                                           |
+| Rule                                                                                                                                          | Where                                                                                                      | Status | Notes                                                                                                                                  |
+| --------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- | ------ | -------------------------------------------------------------------------------------------------------------------------------------- |
+| Bases printed on the map; scenarios set ownership                                                                                             | `engine/state.ts` → `createInitialState`; `engine/map.ts` → `allPlanetaryBases`, `allAsteroidBases`        | ✅     | Geography from the chart, ownership from the scenario.                                                                                 |
+| Planetary bases: detection, defence fire, fuel, maintenance                                                                                   | `engine/detection.ts`, `engine/combat.ts` → `firePlanetaryDefence`, `engine/logistics.ts` → `resupply`     | ✅     |                                                                                                                                        |
+| Base sides: Io and Callisto one each, Mercury two, Terra/Luna/Mars/Venus all six                                                              | `engine/mapdata.ts` → `AstralBody.baseSides`                                                               | ✅     |                                                                                                                                        |
+| Asteroid bases: ordinary functions, no planetary defences, one torpedo per turn                                                               | `engine/types.ts` → `BaseState.hasPlanetaryDefences`; `engine/ordnance.ts` → `launchBaseTorpedo`           | ✅     | The base itself is the launcher, drawing on the "unlimited supply" p. 8 gives it; `BaseState.launchedThisTurn` holds it to one a turn. |
+| "They may not be harmed except by a nuke"                                                                                                     | `engine/ordnance.ts` → `detonate`                                                                          | ◐      | Enforced by nothing else being able to target a base; a scenario that varies this rule has to say so.                                  |
+| "Ships at asteroid bases may attack and be attacked normally"                                                                                 | `engine/combat.ts` → `immuneToGunfire`                                                                     | ✅     | Only _landed_ ships are immune.                                                                                                        |
+| Orbital bases: bought in play, carried by transport or packet, placed in a gravity hex from orbit or on a bare hexside; cannot be moved again | `engine/logistics.ts` → `emplaceEquipment`                                                                 | ✅     | Emplacement writes both records: the `BaseState` that supplies, and the counter that carries its combat strength of 16.                |
+| "The base remains in that gravity hex; it does not literally orbit"                                                                           | `engine/movement.ts` → `isFixedInstallation`                                                               | ✅     | An orbital-base counter neither plots, coasts nor falls; the gravity it sits in does not pull it down.                                 |
+| An orbital base fires one torpedo a turn, "providing resupply operations are not in progress"                                                 | `engine/ordnance.ts` → `canLaunchBaseTorpedo`; `engine/logistics.ts` → `resupply`                          | ✅     | Enforced both ways within the player-turn.                                                                                             |
+| Clandestine: secret, unattackable, ringed by dense asteroids only scanner-equipped ships may enter                                            | `engine/mapdata.ts` → `CLANDESTINE_CORDON`; `engine/movement.ts` → `denseAsteroidsOnCourse`, `hasScanners` | ✅     | The owner's ships have scanners automatically; others are destroyed.                                                                   |
+| The owner's mines and torpedoes are unaffected by the special asteroids                                                                       | `engine/ordnance.ts` → dense-asteroid handling                                                             | ✅     | Others detonate harmlessly.                                                                                                            |
 
 ## p. 8 — Resupply, defences, and the rest
 
@@ -196,18 +198,18 @@ optional `checkVictory`); the authoritative list is `SCENARIOS` in
 `src/scenarios/index.ts`. The table records the id and what each one needs beyond
 the core rules.
 
-| Scenario            | p.    | Id                   | Special machinery it needs                                                                                                                                |
-| ------------------- | ----- | -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Bi-Planetary        | 9     | `bi-planetary`       | Fewest turns to the other world.                                                                                                                          |
-| Grand Tour, 2037 AD | 9     | `grand-tour`         | Visit one gravity hex of every full-gravity body, return and land; the combat ban is a _social_ rule (▣).                                                 |
-| Escape              | 9–10  | `escape`             | Hidden fugitive transport, decoys revealed only by inspection, four victory levels.                                                                       |
-| Lateral 7           | 10    | `lateral-7`          | Dummy counters, inverted setup, the dreadnaught's release condition on first pirate detection.                                                            |
-| Piracy              | 10–11 | `piracy`             | Three players, delivery cycles, patrol circuits, points and purchases.                                                                                    |
-| Nova                | 11    | `nova`               | Colony rolls, alien entry along the Jupiter edge, nova bomb in solar orbit.                                                                               |
-| Retribution         | 11–12 | `retribution`        | Corvettes one at a time, crashes into Terra, the Freedom Fleet conversion.                                                                                |
-| Fleet Mutiny        | 12    | `fleet-mutiny`       | Rebellion rolls, hexside suppression (`engine/combat.ts` → `suppressHexside`), base capture by landing (`engine/logistics.ts` → `captureBasesByLanding`). |
-| Interplanetary War  | 12    | `interplanetary-war` | MCr budgets, base income, physical transport of Terran MCr, devastation counts.                                                                           |
-| Prospecting         | 13    | `prospecting`        | Ore and CT shards (`engine/logistics.ts` → `runProspecting`, `mineOre`, `emplaceEquipment`, `sellCargo`).                                                 |
+| Scenario            | p.    | Id                   | Special machinery it needs                                                                                                                                                                     |
+| ------------------- | ----- | -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Bi-Planetary        | 9     | `bi-planetary`       | Fewest turns to the other world.                                                                                                                                                               |
+| Grand Tour, 2037 AD | 9     | `grand-tour`         | Visit one gravity hex of every full-gravity body, return and land; the combat ban is a _social_ rule (▣).                                                                                      |
+| Escape              | 9–10  | `escape`             | Hidden fugitive transport, decoys revealed only by inspection, four victory levels.                                                                                                            |
+| Lateral 7           | 10    | `lateral-7`          | Dummy counters, inverted setup. The dreadnaught's release condition is recorded in `scenarioData` and _not_ enforced (◐, see Known gaps).                                                      |
+| Piracy              | 10–11 | `piracy`             | Three players, patrol circuits, points for kills and loots, point-priced purchases. Delivery cycles are _not_ modelled (◐, see Known gaps).                                                    |
+| Nova                | 11    | `nova`               | Colony rolls, alien entry along the Jupiter edge, nova bomb in solar orbit.                                                                                                                    |
+| Retribution         | 11–12 | `retribution`        | Corvettes released one at a time (`endPlayerTurn`), ordnance only to the Enforcers and only from Terra. Terra crashes and the Freedom Fleet conversion are _not_ modelled (◐, see Known gaps). |
+| Fleet Mutiny        | 12    | `fleet-mutiny`       | Rebellion rolls, hexside suppression (`engine/combat.ts` → `suppressHexside`), base capture by landing (`engine/logistics.ts` → `captureBasesByLanding`).                                      |
+| Interplanetary War  | 12    | `interplanetary-war` | MCr budgets, base income (`endPlayerTurn`), purchase only at a world the player controls, devastation counts. Physical transport of Terran MCr is _not_ modelled (◐).                          |
+| Prospecting         | 13    | `prospecting`        | Ore and CT shards (`engine/logistics.ts` → `runProspecting`, `mineOre`, `emplaceEquipment`, `sellCargo`).                                                                                      |
 
 Scenario-specific rules ride in `GameState.scenarioData` rather than in the
 engine, so no scenario can change the rules for another.
@@ -300,13 +302,85 @@ These are the honest ones. Nothing else in the rulebook is silently missing.
 4. **Asteroid hazards resolve at the end of the movement phase**, not during the
    combat phase as the sequence of play lists them. The outcome is identical
    except in the log's ordering.
-5. **Nuke hexside selection is geometric**, not a choice offered to the victim.
-   Deterministic, and never worse for the suffering player than the rule allows.
+5. **Nuke hexside selection is geometric**, not a choice offered to the victim:
+   "If it is not clear which hex side has been affected, the suffering player
+   makes the choice." Deterministic, and never worse for the suffering player
+   than the rule allows.
 6. **Referee options (p. 15), including secret combat results, are not
    implemented.** The full log is visible to everyone at the table.
 7. **There is no point-buy screen** for the combat strength point system (p. 9).
-   Scenario fleets are fixed at build time; the MegaCredit purchases that happen
-   _during_ a game are implemented (`logistics.purchaseShip`).
+   Scenario fleets are fixed at build time; the purchases that happen _during_ a
+   game are implemented (`logistics.purchaseShip`), in MegaCredits or in points,
+   whichever the scenario prices in.
+8. **The p. 9 equipment catalogue and the ore market have no command.**
+   `logistics.purchaseEquipment` and `logistics.sellCargo` implement the printed
+   prices but are not in the `Command` union and have no UI, so in a Prospecting
+   game a miner can dig ore and never sell it, and can never buy PM grapples,
+   scanners, robot guards or a second automated mine. Consequences: "If the ship
+   is equipped with PM grapples, the shard may be picked up and sold, or left for
+   later" is unreachable — every shard explodes — and with it the missing check on
+   handing a shard to a ship without grapples; "Nukes are available only if the
+   scenario specifies" is unenforced in the shop, which no player can reach; and a
+   shard "left for later" is written to a map nothing reads.
+9. **MegaCredits are not cargo any command can create.** `CARGO.megacredits` has
+   the printed mass of one ton per MCr, but nothing mints, transfers-in or banks
+   them, so Interplanetary War's "The Terran player must physically transport all
+   MCr to Terra before they may be used… only in commercial ships" is recorded in
+   `scenarioData` and not modelled — and neither is the restriction to commercial
+   hulls that goes with it.
+10. **Piracy's delivery cycles are not modelled.** "The Merchant earns 2 points for
+    each cargo delivered", the announce-at-take-off destination, and the cycle
+    rollover ("once a planet has received a cargo, it may not get another cargo
+    until all worlds have received a cargo in that cycle") need a cargo-and-
+    destination command surface the engine does not have. Points for destroyed
+    pirate hulls, for merchant hulls lost, and for merchant ships looted _are_
+    scored (`piracy.ts` → `endPlayerTurn`), and ships are bought with them, but
+    the Pirates' "8 points in a single trade cycle" victory cannot fire and the
+    Merchant's growth to six hulls has no income behind it.
+11. **Lateral 7's dreadnaught may move before a pirate is detected.** "The
+    dreadnaught, however, may not move until a pirate is detected by a ship or a
+    base" is recorded as `scenarioData.dreadnaughtHeldUntilContact` and enforced
+    by nothing.
+12. **Retribution's Terra crashes and Freedom Fleet conversion are inert.** "Each
+    corvette which manages to crash into Terra… reassigns one ship to the Terra
+    Security Patrol", the three-crash withdrawal, and the conversion of corvettes
+    stopped at Clandestine into a doubled-strength fleet are all recorded and
+    unimplemented. The corvette release itself is implemented.
+13. **Nova's alien entry arc is not measured from Jupiter.** "They may enter at
+    any point along the map edge closest to Jupiter" — the arc chosen sits 11–14
+    hexes from Jupiter where the nearest rim hex is 7 (`helpers.ts` →
+    `stepToward` breaks a hex-distance tie 60° off the true bearing). Nova's
+    `checkVictory` also applies the printed _variant_ (both blocs win when the
+    aliens are wiped out) rather than the base rule, which is not currently
+    trackable: nothing records which side killed the last alien.
+14. **Robot guards cannot be fought.** "If attacked, they have a combat value of
+    2, but only for defense and counterattacks" — guards are a hex→owner map, not
+    a unit, so a claim can never be jumped once guarded.
+15. **The advanced system chooses which damage to repair.** "A ship recovers from
+    1 D a turn… The owner chooses what kind of damage to recover from" —
+    `combat.ts` → `recoverDamage` repairs drive, then weapon, then structure,
+    because there is no command through which the owner could choose.
+16. **A disabled orbital base still runs its pumps.** p. 6's exception names three
+    things a base may do "while the base itself is slightly (D1) damaged" —
+    launch torpedoes, fire guns, resupply. Guns and torpedoes stop at D2; resupply
+    never does. The general prohibition it is an exception to ("A disabled ship
+    cannot maneuver, launch ordnance, or attack") does not mention resupply
+    either, so the stricter reading is an inference rather than a printed rule.
+17. **"Weapon hits on civilian ships have no effect except to prevent their
+    launching mines" (p. 16) is read two ways.** `combat.ts` reads it strictly — a
+    packet with weapon damage still fires its guns — while `ordnance.ts` reads
+    "mines" as shorthand for ordnance and stops a weapon-damaged civilian
+    launching anything, nukes included. Both readings are defensible; they are not
+    both defensible at once, and whichever the project settles on, both sites have
+    to move together. Reachable only with the advanced system and the nuke variant
+    both switched on.
+18. **Combat decides sides by `owner`, not `controllerOf`.** Everywhere else a
+    captured prize fights for its captor until it is redeemed at his base
+    (`movement.ts` → `controllerOf`); `combat.ts` → `enemyOf` reads `ship.owner`,
+    so for the length of the transit a prize is an enemy of its captor and a
+    friend of the fleet it was taken from. p. 8 says a captured ship "may not fire,
+    or return fire if fired upon", which presupposes its being fired upon by the
+    side that lost it.
 
 ## Auditing this document
 

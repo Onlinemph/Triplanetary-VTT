@@ -44,11 +44,14 @@ export * from './rng.js';
 // ---------------------------------------------------------------------------
 
 export {
+  type TurnHook,
   type VictoryChecker,
   advancePhase,
   applyCommand,
   legalCommands,
+  registerTurnHook,
   registerVictoryCheck,
+  turnHookFor,
   victoryCheckerFor,
 } from './reducer.js';
 

@@ -20,7 +20,9 @@
  * purchase screen; `Player.points` carries the running score.
  */
 
+import { logisticsData } from '@engine/logistics.js';
 import { DEFAULT_MAP } from '@engine/map.js';
+import { SHIP_CLASSES, type ShipClass } from '@engine/ships.js';
 import { createInitialState } from '@engine/state.js';
 import type { GameState, PlayerId, VictoryState } from '@engine/types.js';
 import {
@@ -40,6 +42,21 @@ import type { BuildOptions, ScenarioDef } from './types.js';
 const PATROL: PlayerId = 'patrol';
 const MERCHANTS: PlayerId = 'merchants';
 const PIRATES: PlayerId = 'pirates';
+
+/** "The Merchant... loses 4 points when a merchant ship is captured or destroyed." */
+const MERCHANT_LOSS_POINTS = 4;
+
+/** "The Pirates earn 2 points for each merchant ship looted." */
+const PIRATE_LOOT_POINTS = 2;
+
+/** "2 points for every point of combat strength" — the Patrol's and the Pirates' yard rate. */
+const POINTS_PER_COMBAT_STRENGTH = 2;
+
+/** "New merchant ships may be purchased on Terra: 8 points for a transport, 12 for a packet." */
+const MERCHANT_SHIP_PRICES: Readonly<Partial<Record<ShipClass, number>>> = {
+  transport: 8,
+  packet: 12,
+};
 
 /**
  * The Patrol and the Merchants are on the same side: the Patrol "also wins a
@@ -124,7 +141,7 @@ const build = (opts: BuildOptions): GameState => {
           /** "The Patrol earns points equal to the combat strength of destroyed pirate ships." */
           pointsPerPirateCombatStrength: 1,
           /** "2 points for every point of combat strength." */
-          shipCostPerCombatStrength: 2,
+          shipCostPerCombatStrength: POINTS_PER_COMBAT_STRENGTH,
           purchaseAt: 'luna',
           /** "must first return them to Luna for repair and refit." */
           prizeRefitAt: 'luna',
@@ -137,13 +154,13 @@ const build = (opts: BuildOptions): GameState => {
         },
         merchants: {
           pointsPerDelivery: 2,
-          pointsLostPerShipLost: 4,
+          pointsLostPerShipLost: MERCHANT_LOSS_POINTS,
           purchaseAt: 'terra',
-          shipPrices: { transport: 8, packet: 12 },
+          shipPrices: MERCHANT_SHIP_PRICES,
         },
         pirates: {
-          pointsPerLootedShip: 2,
-          shipCostPerCombatStrength: 2,
+          pointsPerLootedShip: PIRATE_LOOT_POINTS,
+          shipCostPerCombatStrength: POINTS_PER_COMBAT_STRENGTH,
           purchaseAt: 'ganymede',
           prizeRefitAt: 'clandestine',
           /** "or by scoring 8 points in a single trade cycle." */
@@ -155,9 +172,16 @@ const build = (opts: BuildOptions): GameState => {
         /** Points the pirates have scored inside the current trade cycle. */
         pirateCyclePoints: 0,
       },
-      // "The Patrol may buy new ships on Luna"; the Merchant on Terra; the
-      // Pirates on Ganymede. Everything in this scenario is bought with points,
-      // so the MegaCredit catalogue stays shut.
+      // "The Patrol may buy new ships on Luna at a cost of 2 points for every
+      // point of combat strength", the same rate for "The Pirates... on
+      // Ganymede", and a flat list for the Merchant: "8 points for a transport,
+      // 12 for a packet". Everything here is bought with points, so the
+      // MegaCredit catalogue stays shut.
+      pointPrices: {
+        [PATROL]: { perCombatStrength: POINTS_PER_COMBAT_STRENGTH },
+        [PIRATES]: { perCombatStrength: POINTS_PER_COMBAT_STRENGTH },
+        [MERCHANTS]: { prices: MERCHANT_SHIP_PRICES },
+      },
       purchasableClasses: [
         'transport',
         'packet',
@@ -174,6 +198,73 @@ const build = (opts: BuildOptions): GameState => {
 
 const piracyData = (state: GameState): Record<string, unknown> =>
   (state.scenarioData['piracy'] ?? {}) as Record<string, unknown>;
+
+const withPiracyData = (state: GameState, patch: Record<string, unknown>): GameState => ({
+  ...state,
+  scenarioData: { ...state.scenarioData, piracy: { ...piracyData(state), ...patch } },
+});
+
+const award = (state: GameState, player: PlayerId, points: number): GameState => {
+  const purse = state.players[player];
+  if (!purse || points === 0) return state;
+  return {
+    ...state,
+    players: { ...state.players, [player]: { ...purse, points: purse.points + points } },
+  };
+};
+
+/**
+ * Score what happened, once per event.
+ *
+ *   "The Patrol earns points equal to the combat strength of destroyed pirate
+ *    ships."
+ *   "The Merchant... loses 4 points when a merchant ship is captured or
+ *    destroyed."
+ *   "The Pirates earn 2 points for each merchant ship looted."
+ *
+ * `scored` remembers the ships already paid for, so a wreck on the board does
+ * not pay out again every turn. The Merchant's *earnings* — "2 points for each
+ * cargo delivered" — need the delivery-cycle machinery, which is not
+ * implemented; see docs/RULES-MAPPING.md.
+ */
+const endPlayerTurn = (state: GameState): GameState => {
+  const scored = new Set((piracyData(state)['scored'] ?? []) as readonly string[]);
+  const looted = logisticsData(state).looted;
+  let s = state;
+  let touched = false;
+
+  for (const ship of Object.values(state.ships).sort((a, b) => (a.id < b.id ? -1 : 1))) {
+    const lostKey = `lost:${ship.id}`;
+    if (!scored.has(lostKey)) {
+      if (ship.owner === PIRATES && ship.destroyed) {
+        // "points equal to the combat strength of destroyed pirate ships" —
+        // the printed strength, not the halved point *price* of the hull.
+        s = award(s, PATROL, SHIP_CLASSES[ship.shipClass].combatStrength);
+        scored.add(lostKey);
+        touched = true;
+      } else if (
+        ship.owner === MERCHANTS &&
+        (ship.destroyed || (ship.capturedBy !== undefined && ship.capturedBy !== MERCHANTS))
+      ) {
+        s = award(s, MERCHANTS, -MERCHANT_LOSS_POINTS);
+        scored.add(lostKey);
+        touched = true;
+      }
+    }
+    const lootKey = `looted:${ship.id}`;
+    if (
+      !scored.has(lootKey) &&
+      ship.owner === MERCHANTS &&
+      (looted[ship.id] ?? []).includes(PIRATES)
+    ) {
+      s = award(s, PIRATES, PIRATE_LOOT_POINTS);
+      scored.add(lootKey);
+      touched = true;
+    }
+  }
+
+  return touched ? withPiracyData(s, { scored: [...scored].sort() }) : state;
+};
 
 const checkVictory = (state: GameState): VictoryState | null => {
   const patrolShips = ownedShips(state, PATROL).length;
@@ -242,6 +333,7 @@ export const piracy: ScenarioDef = {
   playerTemplates: templatesOf(SPECS),
   build,
   checkVictory,
+  endPlayerTurn,
   specialRules: [
     'For this scenario to work, the Patrol and Merchant players must be willing to ignore undetected pirate ships until they are legally detected.',
     'The Patrol pre-plots circuits in the Inner System (Terra, Mars, Venus, Mercury) and the Outer System (Callisto, Io, Ganymede). Circuits need not land at each world but must pass within 2 hexes. The Patrol may not leave its circuits until a pirate is detected, and must return to them once no pirates are visible; it may modify its circuits at any time while no pirate is detected.',

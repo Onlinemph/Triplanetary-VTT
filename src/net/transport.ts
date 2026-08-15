@@ -95,6 +95,7 @@ const COMMAND_TYPES: Readonly<Record<CommandType, true>> = {
   mineOre: true,
   emplaceEquipment: true,
   launchOrdnance: true,
+  launchBaseTorpedo: true,
   attack: true,
   counterattack: true,
   declineCounterattack: true,
@@ -108,7 +109,6 @@ const COMMAND_TYPES: Readonly<Record<CommandType, true>> = {
   capture: true,
   purchaseShip: true,
   endPhase: true,
-  scuttleOrdnance: true,
   concede: true,
 };
 

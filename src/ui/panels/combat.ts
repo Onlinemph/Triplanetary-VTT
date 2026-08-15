@@ -13,8 +13,9 @@
 
 import { canFire, combatStrength, pendingCounterattack, previewAttack } from '@engine/combat.js';
 import { type OddsColumn, gunDamage } from '@engine/crt.js';
-import { sideGravityHex } from '@engine/hex.js';
+import { add, sideGravityHex } from '@engine/hex.js';
 import { logisticsData } from '@engine/logistics.js';
+import { baseTorpedoAimOptions, canLaunchBaseTorpedo } from '@engine/ordnance.js';
 import { controllerOf } from '@engine/movement.js';
 import { SHIP_CLASSES } from '@engine/ships.js';
 import type { Counterattack } from '@engine/commands.js';
@@ -28,7 +29,7 @@ import {
 } from '@engine/types.js';
 import { type Child, button, el, fill } from '../components/dom.js';
 import { empty, note, section, statRow } from '../components/meters.js';
-import { damageText, shipLabel, signed } from '../format.js';
+import { damageText, hexText, shipLabel, signed } from '../format.js';
 import type { Ctx, Panel } from '../viewmodel.js';
 
 interface CounterDraft {
@@ -60,6 +61,41 @@ export const counterattackCommand = (
   ...(strength !== null ? { strength } : {}),
 });
 
+/**
+ * The base torpedo. A base has no hold to draw from — "All bases (planetary,
+ * asteroid, and orbital) carry an unlimited supply of fuel, mines, and
+ * torpedoes" — and stands still, so its whole vector is the launch boost.
+ */
+const baseTorpedoSection = (ctx: Ctx): Child[] => {
+  const { state, map, act } = ctx;
+  const by = activePlayer(state);
+  const armed = Object.values(state.bases)
+    .filter((b) => canLaunchBaseTorpedo(state, b, by, map).ok)
+    .sort((a, b) => (a.id < b.id ? -1 : 1));
+  if (armed.length === 0) return [];
+
+  return [
+    section(
+      'Base torpedoes',
+      ...armed.map((base) =>
+        el(
+          'div',
+          { class: 'actions' },
+          el('span', { class: 'sel-label', text: base.id }),
+          ...baseTorpedoAimOptions(base, map).map((aim) =>
+            button({
+              label: hexText(add(base.hex, aim)),
+              variant: 'ghost',
+              title: 'One torpedo per turn; it may accelerate one or two hexes in any direction',
+              onClick: () => act.dispatch({ type: 'launchBaseTorpedo', by, base: base.id, aim }),
+            }),
+          ),
+        ),
+      ),
+    ),
+  ];
+};
+
 export const createCombatPanel = (): Panel => {
   const root = el('div', { class: 'combat-panel' });
   let draft: CounterDraft | null = null;
@@ -84,6 +120,15 @@ export const createCombatPanel = (): Panel => {
       return;
     }
     draft = null;
+
+    // "They are capable of launching one torpedo per turn" (Ceres and
+    // Clandestine); an orbital base "may fire one torpedo per turn, providing
+    // resupply operations are not in progress". A base shoots in the ordnance
+    // phase, before anybody moves.
+    if (state.phase === 'ordnance') {
+      fill(root, ...baseTorpedoSection(ctx));
+      return;
+    }
 
     if (state.phase !== 'combat') {
       fill(root);

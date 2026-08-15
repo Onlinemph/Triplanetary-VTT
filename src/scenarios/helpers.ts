@@ -325,6 +325,7 @@ export const buildBases = (map: GameMap, spec: BaseSpec = {}): BaseState[] => {
       suppressed: false,
       hasPlanetaryDefences: defenceOf(site.bodyId, site.hasPlanetaryDefences),
       firedThisTurn: false,
+      launchedThisTurn: false,
       resuppliedThisTurn: false,
     });
   }
@@ -341,6 +342,7 @@ export const buildBases = (map: GameMap, spec: BaseSpec = {}): BaseState[] => {
       // defenses."
       hasPlanetaryDefences: false,
       firedThisTurn: false,
+      launchedThisTurn: false,
       resuppliedThisTurn: false,
     });
   }
@@ -355,6 +357,7 @@ export const buildBases = (map: GameMap, spec: BaseSpec = {}): BaseState[] => {
       suppressed: false,
       hasPlanetaryDefences: false,
       firedThisTurn: false,
+      launchedThisTurn: false,
       resuppliedThisTurn: false,
     });
   }

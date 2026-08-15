@@ -14,6 +14,7 @@
  * and let the players call it.
  */
 
+import type { GameMap } from '@engine/map.js';
 import type { GameOptions, GameState, VictoryState } from '@engine/types.js';
 
 /** Rulebook shorthand for how long a scenario runs. */
@@ -51,6 +52,11 @@ export interface ScenarioDef {
   build(opts: BuildOptions): GameState;
   /** `null` while the game is undecided, or when victory is a judgement call. */
   checkVictory?(state: GameState): VictoryState | null;
+  /**
+   * The scenario's own upkeep, run as each player-turn closes: base income,
+   * reinforcements, points scored. Pure, and any die must come from `state.rng`.
+   */
+  endPlayerTurn?(state: GameState, map: GameMap): GameState;
   /** Rules that apply only to this scenario, quoted for the help panel. */
   readonly specialRules?: readonly string[];
 }

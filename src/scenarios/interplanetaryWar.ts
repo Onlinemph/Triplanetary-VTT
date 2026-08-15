@@ -35,7 +35,14 @@ import type { HexSide } from '@engine/hex.js';
 import { DEFAULT_MAP, type GameMap } from '@engine/map.js';
 import { CARGO, SHIP_CLASSES, type CargoKind, type ShipClass } from '@engine/ships.js';
 import { createInitialState } from '@engine/state.js';
-import type { CargoItem, GameState, PlayerId, Ship, VictoryState } from '@engine/types.js';
+import {
+  type CargoItem,
+  type GameState,
+  type PlayerId,
+  type Ship,
+  type VictoryState,
+  activePlayer,
+} from '@engine/types.js';
 import {
   type PlayerSpec,
   baseSidesOf,
@@ -214,6 +221,9 @@ const build = (opts: BuildOptions): GameState => {
       ...opts.options,
     },
     scenarioData: {
+      // "Ships appear immediately on any world controlled by the player" —
+      // Mercury, Ceres and Clandestine are nobody's shipyard here.
+      purchaseRequiresControl: true,
       interplanetaryWar: {
         allowance: { [TERRA]: TERRAN_ALLOWANCE, [REBELS]: REBEL_ALLOWANCE },
         defaultFleets: { [TERRA]: TERRAN_FLEET, [REBELS]: REBEL_FLEET },
@@ -238,6 +248,35 @@ const build = (opts: BuildOptions): GameState => {
       },
     },
   });
+};
+
+/**
+ * "Each player controls bases which can produce replacement spacecraft and
+ * ordnance. Each base generates MCr 0.1 per turn."
+ *
+ * Booked as each player's own player-turn closes, so every base pays its owner
+ * exactly once a game turn. The Rebels "can use and spend their MCr freely; they
+ * are considered transmitted to Callisto without problem"; the Terran player's
+ * obligation to ship theirs home is recorded in `scenarioData` and is not
+ * modelled (see docs/RULES-MAPPING.md).
+ */
+const endPlayerTurn = (state: GameState): GameState => {
+  const player = activePlayer(state);
+  const bases = Object.values(state.bases).filter((b) => !b.destroyed && b.owner === player);
+  if (bases.length === 0) return state;
+  const purse = state.players[player];
+  if (!purse) return state;
+  const income = Math.round(bases.length * BASE_INCOME_PER_TURN * 1000) / 1000;
+  return {
+    ...state,
+    players: {
+      ...state.players,
+      [player]: {
+        ...purse,
+        megacredits: Math.round((purse.megacredits + income) * 1000) / 1000,
+      },
+    },
+  };
 };
 
 const checkVictory = (state: GameState): VictoryState | null => {
@@ -286,6 +325,7 @@ export const interplanetaryWar: ScenarioDef = {
   playerTemplates: templatesOf(SPECS),
   build,
   checkVictory,
+  endPlayerTurn,
   specialRules: [
     'Terran ships may be placed on — or in orbit around — Terra, Luna and Venus, or stationary in space within detector range of those worlds. Rebel ships likewise at Callisto (the Rebel home world), Io, Ganymede and Mars.',
     'In addition to ships, mines, torpedoes and nukes may be purchased and stockpiled on ships or on bases. These stockpiles must be noted. Fuel is free at bases.',

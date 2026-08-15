@@ -122,12 +122,6 @@ export const ordnanceActions = (ctx: Ctx, ship: Ship): Child[] => {
               class: 'mag-count mono',
               text: `${o.turnsRemaining}/${ORDNANCE_LIFETIME}`,
             }),
-            button({
-              label: 'Scuttle',
-              variant: 'quiet',
-              onClick: () => act.dispatch({ type: 'scuttleOrdnance', by, ordnance: o.id }),
-              title: 'Detonate it harmlessly rather than keep tracking it',
-            }),
           ),
         ),
         statRow('Active life', `${ORDNANCE_LIFETIME} turns, then self-destruct`),

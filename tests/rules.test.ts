@@ -701,6 +701,7 @@ describe('bases', () => {
           suppressed: false,
           hasPlanetaryDefences: false,
           firedThisTurn: false,
+          launchedThisTurn: false,
           resuppliedThisTurn: false,
         },
       ],

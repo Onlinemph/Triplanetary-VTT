@@ -153,11 +153,13 @@ const build = (opts: BuildOptions): GameState => {
 
   const bases: BaseState[] = buildBases(map, {
     sites,
-    // "The colony has only one base" — nothing else on the chart is in play.
-    present: [],
-    // Colonial outposts; the printed planetary-defence batteries are Terran and
-    // Lunar only in this future.
-    defences: ['terra', 'luna'],
+    // "All bases marked on the map are assumed to be in use unless a scenario
+    // indicates differently." Nova says only that "The colony has only one
+    // base", which fixes what each *bloc owns*, not what exists; and it never
+    // switches defences off, unlike Escape ("Planetary defenses are not
+    // operating"), Fleet Mutiny and Retribution, which say so in as many words.
+    // The aliens are kept off the unclaimed bases by the rule that actually
+    // says so: "Alien ships... cannot resupply or refuel."
   });
 
   const baseSidesOwnedBy = (owner: PlayerId): BaseState[] =>
@@ -227,7 +229,8 @@ const build = (opts: BuildOptions): GameState => {
       alienShips: alienIds,
       /** "Each one carries a nova bomb... Nova bombs do not use any cargo capacity." */
       novaBombs: alienIds,
-      alienMayResupply: false,
+      // "Alien ships begin with a full load of mines but cannot resupply or refuel."
+      resupplyDeniedTo: [ALIEN],
       /**
        * "A human player may declare their bases to be friendly to the other
        * human, if they wish." Off until somebody says so; the interface can set

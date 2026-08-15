@@ -215,8 +215,12 @@ const build = (opts: BuildOptions): GameState => {
         venus: null,
         ganymede: null,
       },
-      // Nothing else is in play this scenario.
-      absent: ['mercury', 'luna', 'io', 'ceres'],
+      // "All bases marked on the map are assumed to be in use unless a scenario
+      // indicates differently." Lateral 7 indicates ownership and nothing else,
+      // so every printed base stands — Mercury, Luna, Io and Ceres included.
+      // Ceres in particular is an asteroid base in the belt this scenario is
+      // fought in, and its detectors are one of the two things that can release
+      // the dreadnaught.
     }),
     options: {
       // Inverted counters, an unapproachable pirate base, and a dreadnaught that

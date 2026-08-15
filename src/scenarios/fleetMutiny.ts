@@ -149,8 +149,11 @@ const build = (opts: BuildOptions): GameState => {
     const id = `empire-orbital-${i + 1}`;
     // An orbital base is both a counter that fights and a base that resupplies,
     // so it is seeded as both: the ship carries its combat strength of 16, the
-    // `BaseState` carries its fuel and ordnance stores.
-    ships.push(station({ id, owner: EMPIRE, shipClass: 'orbitalBase', number: 90 + i }, at));
+    // `BaseState` carries its fuel and ordnance stores. It is *not* put in orbit
+    // like the hulls above — "The base remains in that gravity hex; it does not
+    // literally orbit" — because a counter that drifts away from its own
+    // `BaseState` breaks the pairing the p. 8 resupply/fire lockout depends on.
+    ships.push(inSpace({ id, owner: EMPIRE, shipClass: 'orbitalBase', number: 90 + i }, at));
     orbitalBases.push({ id, owner: EMPIRE, hex: at });
   }
 

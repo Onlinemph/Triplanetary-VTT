@@ -118,15 +118,13 @@ const build = (opts: BuildOptions): GameState => {
     players: buildPlayers(SPECS, opts),
     ships,
     bases: buildBases(map, {
-      // "All bases on the map belong to the Enforcers."
+      // "All bases on the map belong to the Enforcers." Every one of them: the
+      // Pilgrims' launch permission is a rule about taking off, not about who
+      // owns the pad, and is granted through `takeoffAllowedFrom` below. Leaving
+      // the three pads unclaimed instead would hand the Pilgrims a free fuel
+      // depot on the one world where they may not even be attacked, in the one
+      // scenario whose victory levels are graded on fuel remaining.
       defaultOwner: ENFORCERS,
-      // ...with three exceptions. "Beginning on Day 1, the Pilgrim may launch his
-      // ships from Terra in any manner he wishes", but "boosters [are] available
-      // only at friendly bases" — so the three pads the Pilgrims "have secretly
-      // prepared" are left unclaimed, and an unclaimed base serves anyone. The
-      // Enforcers lose nothing by it: all six Terran bases sit in Terra's own
-      // hex, so their detection field and their own resupply are unchanged.
-      sites: Object.fromEntries(launchSides.map((d) => [`terra:${d}`, null])),
       // "Only Terra, Venus, and Io have bases."
       absent: ['mercury', 'luna', 'mars', 'ceres', 'clandestine', 'ganymede', 'callisto'],
       // "Planetary defenses are not operating."
@@ -149,6 +147,9 @@ const build = (opts: BuildOptions): GameState => {
       },
       // "Mines and torpedoes are not available to either player."
       ordnanceAvailable: [],
+      // "Beginning on Day 1, the Pilgrim may launch his ships from Terra in any
+      // manner he wishes" — boosters at an Enforcer pad, by scenario fiat.
+      takeoffAllowedFrom: { [PILGRIMS]: ['terra'] },
       noTimeLimit: true,
     },
   });

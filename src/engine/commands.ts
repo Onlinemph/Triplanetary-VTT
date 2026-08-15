@@ -10,7 +10,7 @@
 
 import type { Hex, HexSide } from './hex.js';
 import type { CargoKind, ShipClass } from './ships.js';
-import type { OrdnanceId, OrdnanceKind, PlayerId, ShipId } from './types.js';
+import type { OrdnanceKind, PlayerId, ShipId } from './types.js';
 
 export interface CommandBase {
   readonly by: PlayerId;
@@ -81,6 +81,20 @@ export interface LaunchOrdnance extends CommandBase {
   readonly kind: OrdnanceKind;
   /** Torpedoes only, and only on the launch turn: 1-2 hexes of acceleration. */
   readonly aim?: Hex;
+}
+
+/**
+ * A base firing its own torpedo. Asteroid bases "are capable of launching one
+ * torpedo per turn"; an orbital base "may fire one torpedo per turn, providing
+ * resupply operations are not in progress". Neither has a hold to draw from —
+ * "All bases (planetary, asteroid, and orbital) carry an unlimited supply of
+ * fuel, mines, and torpedoes" — so the launcher is the base itself, not a ship.
+ */
+export interface LaunchBaseTorpedo extends CommandBase {
+  readonly type: 'launchBaseTorpedo';
+  readonly base: string;
+  /** The torpedo's resulting vector: 1-2 hexes from a standing start. */
+  readonly aim: Hex;
 }
 
 // --- Combat ----------------------------------------------------------------
@@ -184,12 +198,6 @@ export interface EndPhase extends CommandBase {
   readonly type: 'endPhase';
 }
 
-/** Detonate ordnance the owner no longer wants to track (self-destruct). */
-export interface ScuttleOrdnance extends CommandBase {
-  readonly type: 'scuttleOrdnance';
-  readonly ordnance: OrdnanceId;
-}
-
 export interface ConcedeGame extends CommandBase {
   readonly type: 'concede';
 }
@@ -203,6 +211,7 @@ export type Command =
   | MineOre
   | EmplaceEquipment
   | LaunchOrdnance
+  | LaunchBaseTorpedo
   | Attack
   | Counterattack
   | DeclineCounterattack
@@ -216,7 +225,6 @@ export type Command =
   | Capture
   | PurchaseShip
   | EndPhase
-  | ScuttleOrdnance
   | ConcedeGame;
 
 export type CommandType = Command['type'];

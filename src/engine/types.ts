@@ -194,6 +194,12 @@ export interface BaseState {
   /** Planetary defences fire at 2:1 into the gravity hex above the base. */
   readonly hasPlanetaryDefences: boolean;
   readonly firedThisTurn: boolean;
+  /**
+   * Asteroid and orbital bases "are capable of launching one torpedo per turn";
+   * tracked apart from `firedThisTurn` because the ordnance phase comes before
+   * the combat phase, where planetary-defence fire is booked.
+   */
+  readonly launchedThisTurn: boolean;
   readonly resuppliedThisTurn: boolean;
 }
 
