@@ -38,9 +38,18 @@ validates every command, assigns seats, and — in fog-of-war scenarios — send
 each player only the state they are entitled to see. See
 [docs/MULTIPLAYER.md](docs/MULTIPLAYER.md).
 
-To publish the client to GitHub Pages, first enable it for the repository
-(**Settings → Pages → Build and deployment → GitHub Actions**); the
-`Deploy to GitHub Pages` workflow then runs on pushes to `main`.
+### Publishing to GitHub Pages
+
+Set **Settings → Pages → Build and deployment → Source** to **GitHub Actions**.
+The `Deploy to GitHub Pages` workflow then builds and publishes on every push to
+the default branch.
+
+The Source setting is the one that catches people out. Left on *"Deploy from a
+branch"*, Pages serves the repository as-is — which looks like it worked and did
+not. The root `index.html` is Vite's development entry, and its only script tag
+points at `/src/main.ts`; no browser can execute TypeScript, so the page loads,
+`#root` stays empty, and you get a blank grey screen with nothing in the console
+to explain it. Only the built `dist/` is servable, and only Actions produces it.
 
 Then pick a scenario and press **New game**. Everything else:
 
