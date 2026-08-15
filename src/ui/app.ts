@@ -238,7 +238,21 @@ export const createApp = (deps: AppDeps): App => {
       };
       if (focus && id && session) {
         const ship = session.state.ships[id];
-        if (ship) renderer?.focusOn(ship.pos);
+        if (ship) {
+          // During astrogation, frame the decision rather than the ship: the
+          // coast point and every hex a burn can reach. Fitted to the whole
+          // chart those endpoints are a few pixels across, which is why the
+          // plotting step reads as "nothing happened" until you zoom in by hand.
+          const plot =
+            session.state.phase === 'astrogation'
+              ? reachableEndpoints(session.state, ship, session.map)
+              : [];
+          if (plot.length > 0) {
+            renderer?.frameHexes([ship.pos, ...plot.map((o) => o.endpoint)]);
+          } else {
+            renderer?.focusOn(ship.pos);
+          }
+        }
       }
       render();
     },

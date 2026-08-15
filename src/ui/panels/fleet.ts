@@ -76,10 +76,19 @@ export const createFleetPanel = (): Panel => {
         el('span', { class: 'group-caret' }, icon('chevron', 12)),
         el('i', { class: 'player-dot' }),
         el('span', { class: 'group-name', text: player.name }),
-        el('span', {
-          class: 'group-meta mono',
-          text: `${list.length} · ${strength}`,
-        }),
+        // "2 · 4" read as a score, a ratio, or a version number to everyone who
+        // saw it. Say which number is which.
+        el(
+          'span',
+          {
+            class: 'group-meta',
+            title: `${list.length} ship${list.length === 1 ? '' : 's'}, ${strength} combat strength between them`,
+          },
+          el('span', { class: 'meta-num mono', text: String(list.length) }),
+          el('span', { class: 'meta-unit', text: list.length === 1 ? 'ship' : 'ships' }),
+          el('span', { class: 'meta-num mono', text: String(strength) }),
+          el('span', { class: 'meta-unit', text: 'str' }),
+        ),
       );
 
       const rows = collapsed ? [] : list.map((ship) => shipRow(ctx, ship));

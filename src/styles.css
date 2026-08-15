@@ -308,14 +308,29 @@ canvas.map.is-dragging {
   transform: rotate(180deg);
 }
 
+/*
+ * The right panel is a frame, not a scroller. Letting the whole frame scroll
+ * (`display: block; overflow-y: auto`) carried the pinned header away with the
+ * content, so a selected ship's name and status scrolled off the top and the
+ * only scrollbar was a thin one against the window edge -- easy to miss and
+ * awkward to grab. The body scrolls instead, under a header that stays put.
+ */
 .panel-right {
-  overflow-y: auto;
-  display: block;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
 }
 
 .inspector {
   display: flex;
   flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.panel-right .panel-body {
+  min-height: 0;
+  scrollbar-gutter: stable;
 }
 
 /* --- Top bar -------------------------------------------------------------- */
@@ -1947,4 +1962,28 @@ kbd {
 
 *::-webkit-scrollbar-track {
   background: transparent;
+}
+
+/* --- Fleet group meta ----------------------------------------------------- */
+
+.group-meta {
+  display: flex;
+  align-items: baseline;
+  gap: 3px;
+  font-size: 11px;
+  color: var(--ink-faint);
+  white-space: nowrap;
+}
+
+.group-meta .meta-num {
+  color: var(--ink-dim);
+}
+
+.group-meta .meta-unit {
+  font-size: 10px;
+  letter-spacing: 0.04em;
+}
+
+.group-meta .meta-unit + .meta-num {
+  margin-left: 5px;
 }

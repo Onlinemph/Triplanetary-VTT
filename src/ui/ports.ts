@@ -56,6 +56,8 @@ export interface RendererPort {
   /** Frame the whole chart disc, for when there is no game yet. */
   fitChart(): void;
   focusOn(h: Hex): void;
+  /** Frame a set of hexes at a workable zoom (used to make a plot legible). */
+  frameHexes(hexes: readonly Hex[], opts?: { minHexPx?: number; maxHexPx?: number }): void;
   /** Re-read the canvas' CSS size and device pixel ratio. */
   resize(): void;
   /** Screen edges hidden behind floating panels, in CSS pixels. */

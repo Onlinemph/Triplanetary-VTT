@@ -64,6 +64,12 @@ export const createInspector = (): Panel => {
     const mine = controller === activePlayer(state);
 
     const nodes: Child[] = [];
+    // Orders come first. The thing a player has to *do* this phase — plot a
+    // course, pick a target, refuel — was previously last, under five blocks of
+    // reference stats, and on a short window it sat below the fold with the
+    // scrollbar easy to miss. Reference material can be scrolled to; the action
+    // cannot be, because you do not know it is there.
+    const orders: Child[] = [];
 
     nodes.push(
       el(
@@ -219,17 +225,17 @@ export const createInspector = (): Panel => {
         ),
       );
     } else if (state.victory) {
-      nodes.push(section('Orders', note('info', 'The game is over.')));
+      orders.push(section('Orders', note('info', 'The game is over.')));
     } else {
       switch (state.phase) {
         case 'astrogation':
-          nodes.push(...astrogationActions(ctx, ship));
+          orders.push(...astrogationActions(ctx, ship));
           break;
         case 'ordnance':
-          nodes.push(...ordnanceActions(ctx, ship));
+          orders.push(...ordnanceActions(ctx, ship));
           break;
         case 'movement':
-          nodes.push(
+          orders.push(
             section(
               'Movement',
               note(
@@ -240,7 +246,7 @@ export const createInspector = (): Panel => {
           );
           break;
         case 'combat':
-          nodes.push(
+          orders.push(
             section(
               'Combat',
               ship.firedThisPhase
@@ -269,12 +275,13 @@ export const createInspector = (): Panel => {
           );
           break;
         case 'resupply':
-          nodes.push(...logisticsSection(ctx, ship));
+          orders.push(...logisticsSection(ctx, ship));
           break;
       }
     }
 
-    fill(body, ...nodes);
+    // Header, then orders, then the reference stats.
+    fill(body, nodes[0]!, ...orders, ...nodes.slice(1));
   };
 
   return { el: root, update };

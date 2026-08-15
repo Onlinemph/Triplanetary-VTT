@@ -217,6 +217,48 @@ export class MapRenderer {
     this.cam.centreOnHex(h);
   }
 
+  /**
+   * Frame a set of hexes, holding them at a workable size.
+   *
+   * Fitting the whole chart is the right first impression and the wrong working
+   * view: at that zoom a ship's nineteen reachable endpoints span about ten
+   * pixels, so the one decision the astrogation phase asks for is invisible and
+   * unclickable. `minHexPx` keeps the plot legible; `maxHexPx` stops a single
+   * stationary ship from filling the screen.
+   */
+  frameHexes(
+    hexes: readonly Hex[],
+    opts: { minHexPx?: number; maxHexPx?: number; padding?: number } = {},
+  ): void {
+    if (hexes.length === 0) return;
+
+    let x0 = Infinity;
+    let y0 = Infinity;
+    let x1 = -Infinity;
+    let y1 = -Infinity;
+    for (const h of hexes) {
+      const p = toPixel(h, this.cam.hexSize);
+      if (p.x < x0) x0 = p.x;
+      if (p.y < y0) y0 = p.y;
+      if (p.x > x1) x1 = p.x;
+      if (p.y > y1) y1 = p.y;
+    }
+    // A hex's own radius plus a little, so edge hexes are not clipped.
+    const margin = this.cam.hexSize * 1.7;
+    this.cam.fitWorldRect(
+      { x0: x0 - margin, y0: y0 - margin, x1: x1 + margin, y1: y1 + margin },
+      opts.padding ?? 36,
+    );
+
+    const min = opts.minHexPx ?? 26;
+    const max = opts.maxHexPx ?? 58;
+    const px = this.cam.hexSize * this.cam.zoom;
+    if (px < min || px > max) {
+      this.cam.setZoom(Math.min(max, Math.max(min, px)) / this.cam.hexSize);
+      this.cam.centreOnWorld((x0 + x1) / 2, (y0 + y1) / 2);
+    }
+  }
+
   /** Frame the whole chart disc. */
   fitChart(): void {
     const r = MAP_RADIUS * this.cam.pitch + this.cam.pitch;

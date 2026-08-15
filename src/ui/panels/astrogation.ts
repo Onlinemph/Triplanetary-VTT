@@ -135,7 +135,16 @@ export const astrogationActions = (ctx: Ctx, ship: Ship): Child[] => {
         { class: 'hint' },
         plotted
           ? 'Click another highlighted hex to re-plot; the old burn is refunded.'
-          : `Click one of the ${options.length} highlighted hexes to plot.`,
+          : // Count what is actually drawn. The overload hexes are only
+            // highlighted once overload is armed, so quoting the full option
+            // count sent players hunting for hexes that were not on the chart.
+            (() => {
+              const shownCount = options.filter((o) => o.accel <= (ui.overload ? 2 : 1)).length;
+              const extra = options.length - shownCount;
+              return extra > 0
+                ? `Click one of the ${shownCount} highlighted hexes to plot — or arm the overload below for ${extra} more.`
+                : `Click one of the ${shownCount} highlighted hexes to plot.`;
+            })(),
       ),
     ),
   );
