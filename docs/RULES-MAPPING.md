@@ -242,6 +242,49 @@ engine, so no scenario can change the rules for another.
 
 ---
 
+## Movement, verified rule by rule
+
+`tests/movement.test.ts` is written against the rulebook's clauses rather than
+against the implementation, so a test that merely restates what the code already
+does would be worthless there. Each case quotes the clause it enforces.
+
+| Rule           | Clause                                                                                                        |
+| -------------- | ------------------------------------------------------------------------------------------------------------- |
+| Coasting       | "will move as it did in the previous turn, in the same direction, and traveling an equal distance"            |
+| Fuel           | "One fuel point allows a ship to alter its predicted course by one hex in any direction"                      |
+| Velocity       | "A straight line from the ship's original position to the new endpoint represents the ship's velocity"        |
+| Braking        | "This may result in turning, speeding up, or slowing down" -- one hex of speed per turn, no one-turn reversal |
+| Dry tanks      | "further acceleration (except by gravity) is impossible"                                                      |
+| Overload       | two points, two hexes, warships only, "one overload maneuver between maintenance stopovers"                   |
+| Gravity        | "takes effect on the turn after an object enters"; "cumulative and mandatory"                                 |
+| Weak gravity   | first of a consecutive run optional, "the second and later hexes have the effect of full gravity hexes"       |
+| Orbits         | one hex per turn between adjacent gravity hexes, held for every full-gravity body without fuel                |
+| Crashes        | "must intersect the printed image of the astral body itself" -- clipping the hex is not a crash               |
+| Squeezing past | "A ship which passes between a gravity hex and the planetary outline is affected by the gravity hex"          |
+| Chart edge     | "Any ship whose final course places it off the map is considered eliminated"                                  |
+| Takeoff        | free boosters, one hex, "leaving the ship stationary"; falls back "unless fuel is spent on the next turn"     |
+| Orbit entry    | "the ship may enter clockwise or counter-clockwise orbit" -- exactly two of six burns, opposite senses        |
+| Landing        | "one fuel point while in orbit"; asteroids "by simply stopping in the hex"                                    |
+| Ramming        | "must pass through the center of the hex"; "results apply to both ships"; one target per turn                 |
+| Asteroids      | rolled only above speed 1, never re-rolling the hex a course starts in                                        |
+| Disablement    | "It may only drift on its current course"                                                                     |
+
+### Two clauses worth their own note
+
+**Reversing.** There is no one-turn reversal, but retrograde burning is
+ordinary and explicitly permitted -- "slowing down" is one of the three listed
+outcomes of a burn. Shedding speed N costs N turns and N fuel points. The Escape
+scenario depends on precisely this arithmetic when it asks for "sufficient fuel
+remaining to make a dead stop, plus one fuel point": that phrase only means
+anything if stopping costs a point per hex of speed.
+
+**Squeezing past a planet.** A body's disc is smaller than its hex, so a course
+can cross the hex without touching the disc and without crashing. The rulebook
+closes the obvious exploit -- threading the gap to dodge the pull -- with "a
+ship which passes between a gravity hex and the planetary outline is affected by
+the gravity hex". Here that holds by construction: the gravity ring completely
+encloses the body, so no course reaches the body's hex without entering it.
+
 ## Known gaps
 
 These are the honest ones. Nothing else in the rulebook is silently missing.
