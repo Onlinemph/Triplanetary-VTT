@@ -30,15 +30,15 @@ the implementation site. Those are called out in the Notes column here too.
 
 ## p. 2 — Sequence of play
 
-| Rule                                                           | Where                                                                                     | Status | Notes                                                                                                                                                                                                                      |
-| -------------------------------------------------------------- | ----------------------------------------------------------------------------------------- | ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| "Each turn represents one day"                                 | `engine/types.ts` → `GameState.turn`                                                      | ✅     |                                                                                                                                                                                                                            |
-| Five phases: astrogation, ordnance, movement, combat, resupply | `engine/types.ts` → `Phase`, `PHASES`                                                     | ✅     |                                                                                                                                                                                                                            |
-| Phase and player-turn advance                                  | `engine/reducer.ts` → `applyCommand` (`endPhase`)                                         | ✅     | Runs the phase engines below in order.                                                                                                                                                                                     |
-| Movement phase runs ships and the phasing player's ordnance    | `engine/movement.ts` → `executeMovementPhase`; `engine/ordnance.ts` → `moveOrdnancePhase` | ✅     | "Mines, torpedoes, and nukes launched by the phasing player (on this or previous turns) also move at this time."                                                                                                           |
-| Astrogation hazards resolved in the combat phase               | `engine/movement.ts` → asteroid hazard rolls                                              | ◐      | Rolled at the end of movement rather than in the combat phase, so a ship disabled by asteroids cannot then shoot. The rulebook's ordering has the same effect on the same turn; the difference is only visible in the log. |
-| Damage recovery at the end of resupply                         | `engine/combat.ts` → `recoverDamage`; `engine/logistics.ts` → `runResupplyPhase`          | ✅     |                                                                                                                                                                                                                            |
-| Order of players decided by die roll or consent                | `scenarios/*` → `playerOrder`                                                             | ▣      | Seat order is the scenario's; no in-game roll-off.                                                                                                                                                                         |
+| Rule                                                           | Where                                                                                     | Status | Notes                                                                                                                                                                                                                                          |
+| -------------------------------------------------------------- | ----------------------------------------------------------------------------------------- | ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| "Each turn represents one day"                                 | `engine/types.ts` → `GameState.turn`                                                      | ✅     |                                                                                                                                                                                                                                                |
+| Five phases: astrogation, ordnance, movement, combat, resupply | `engine/types.ts` → `Phase`, `PHASES`                                                     | ✅     |                                                                                                                                                                                                                                                |
+| Phase and player-turn advance                                  | `engine/reducer.ts` → `applyCommand` (`endPhase`)                                         | ✅     | Runs the phase engines below in order.                                                                                                                                                                                                         |
+| Movement phase runs ships and the phasing player's ordnance    | `engine/movement.ts` → `executeMovementPhase`; `engine/ordnance.ts` → `moveOrdnancePhase` | ✅     | "Mines, torpedoes, and nukes launched by the phasing player (on this or previous turns) also move at this time."                                                                                                                               |
+| Astrogation hazards resolved in the combat phase               | `engine/movement.ts` → `recordAsteroidHazards`, `resolveAstrogationHazards`               | ✅     | Encountered during movement, rolled as the combat phase opens, which is where the sequence of play puts them. Visible, not cosmetic: rams settle first, so a ship the asteroids are about to maul is still at full strength when it is rammed. |
+| Damage recovery at the end of resupply                         | `engine/combat.ts` → `recoverDamage`; `engine/logistics.ts` → `runResupplyPhase`          | ✅     |                                                                                                                                                                                                                                                |
+| Order of players decided by die roll or consent                | `scenarios/*` → `playerOrder`                                                             | ▣      | Seat order is the scenario's; no in-game roll-off.                                                                                                                                                                                             |
 
 ## p. 2–3 — Movement and astrogation
 
@@ -183,12 +183,12 @@ the implementation site. Those are called out in the Notes column here too.
 
 ## p. 9 — Prices
 
-| Rule                                                                                              | Where                                                       | Status | Notes                                                                                                                                                                                                        |
-| ------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| MegaCredit costs for ships and equipment                                                          | `engine/ships.ts` → `SHIP_CLASSES[].cost`, `CARGO[].cost`   | ✅     |                                                                                                                                                                                                              |
-| Purchasing ships and equipment                                                                    | `engine/logistics.ts` → `purchaseShip`, `purchaseEquipment` | ✅     | Scenarios restrict the buyable classes through `scenarioData.purchasableClasses`.                                                                                                                            |
-| Combat strength point system (D-suffix ships cost half: a liner 1 point, a transport or tanker ½) | —                                                           | ○      | Not mechanised. The scenarios that use it (Nova, Retribution, Fleet Mutiny) fix their fleets at build time in `src/scenarios/`, so the arithmetic happens once, on paper, rather than in a point-buy screen. |
-| "Fuel is too cheap to keep track of… i.e., free" unless the scenario prices it                    | `engine/logistics.ts` → `FUEL_PRICE`, `resupply`            | ✅     |                                                                                                                                                                                                              |
+| Rule                                                                                              | Where                                                                                     | Status | Notes                                                                                                                                                                                                                                                                                                                                       |
+| ------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| MegaCredit costs for ships and equipment                                                          | `engine/ships.ts` → `SHIP_CLASSES[].cost`, `CARGO[].cost`                                 | ✅     |                                                                                                                                                                                                                                                                                                                                             |
+| Purchasing ships and equipment                                                                    | `engine/logistics.ts` → `purchaseShip`, `purchaseEquipment`                               | ✅     | Scenarios restrict the buyable classes through `scenarioData.purchasableClasses`.                                                                                                                                                                                                                                                           |
+| Combat strength point system (D-suffix ships cost half: a liner 1 point, a transport or tanker ½) | `scenarios/helpers.ts` → `combatPointCost`; `ScenarioDef.pointBuy`; `BuildOptions.fleets` | ✅     | Both halves. In play, `logistics.purchaseShip` charges points wherever a scenario prices in them. At setup, a scenario declaring a `pointBuy` budget gets a buy screen in the picker; Nova declares its "fleets of 50 combat points each". A fleet over budget falls back to the printed one rather than starting from an illegal position. |
+| "Fuel is too cheap to keep track of… i.e., free" unless the scenario prices it                    | `engine/logistics.ts` → `FUEL_PRICE`, `resupply`                                          | ✅     |                                                                                                                                                                                                                                                                                                                                             |
 
 ## p. 9–13 — Scenarios
 
@@ -198,18 +198,18 @@ optional `checkVictory`); the authoritative list is `SCENARIOS` in
 `src/scenarios/index.ts`. The table records the id and what each one needs beyond
 the core rules.
 
-| Scenario            | p.    | Id                   | Special machinery it needs                                                                                                                                                                     |
-| ------------------- | ----- | -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Bi-Planetary        | 9     | `bi-planetary`       | Fewest turns to the other world.                                                                                                                                                               |
-| Grand Tour, 2037 AD | 9     | `grand-tour`         | Visit one gravity hex of every full-gravity body, return and land; the combat ban is a _social_ rule (▣).                                                                                      |
-| Escape              | 9–10  | `escape`             | Hidden fugitive transport, decoys revealed only by inspection, four victory levels.                                                                                                            |
-| Lateral 7           | 10    | `lateral-7`          | Dummy counters, inverted setup. The dreadnaught's release condition is recorded in `scenarioData` and _not_ enforced (◐, see Known gaps).                                                      |
-| Piracy              | 10–11 | `piracy`             | Three players, patrol circuits, points for kills and loots, point-priced purchases. Delivery cycles are _not_ modelled (◐, see Known gaps).                                                    |
-| Nova                | 11    | `nova`               | Colony rolls, alien entry along the Jupiter edge, nova bomb in solar orbit.                                                                                                                    |
-| Retribution         | 11–12 | `retribution`        | Corvettes released one at a time (`endPlayerTurn`), ordnance only to the Enforcers and only from Terra. Terra crashes and the Freedom Fleet conversion are _not_ modelled (◐, see Known gaps). |
-| Fleet Mutiny        | 12    | `fleet-mutiny`       | Rebellion rolls, hexside suppression (`engine/combat.ts` → `suppressHexside`), base capture by landing (`engine/logistics.ts` → `captureBasesByLanding`).                                      |
-| Interplanetary War  | 12    | `interplanetary-war` | MCr budgets, base income (`endPlayerTurn`), purchase only at a world the player controls, devastation counts. Physical transport of Terran MCr is _not_ modelled (◐).                          |
-| Prospecting         | 13    | `prospecting`        | Ore and CT shards (`engine/logistics.ts` → `runProspecting`, `mineOre`, `emplaceEquipment`, `sellCargo`).                                                                                      |
+| Scenario            | p.    | Id                   | Special machinery it needs                                                                                                                                                                          |
+| ------------------- | ----- | -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Bi-Planetary        | 9     | `bi-planetary`       | Fewest turns to the other world.                                                                                                                                                                    |
+| Grand Tour, 2037 AD | 9     | `grand-tour`         | Visit one gravity hex of every full-gravity body, return and land; the combat ban is a _social_ rule (▣).                                                                                           |
+| Escape              | 9–10  | `escape`             | Hidden fugitive transport, decoys revealed only by inspection, four victory levels.                                                                                                                 |
+| Lateral 7           | 10    | `lateral-7`          | Dummy counters, inverted setup, and the dreadnaught held until a pirate is detected (`movement.ts` → `heldForContact`).                                                                             |
+| Piracy              | 10–11 | `piracy`             | Three players, patrol circuits, points for kills and loots, point-priced purchases, and delivery cycles: announce at take-off, deliver, score, roll the cycle over (`piracy.ts` → `handleCommand`). |
+| Nova                | 11    | `nova`               | Colony rolls, alien entry along the Jupiter edge, nova bomb in solar orbit.                                                                                                                         |
+| Retribution         | 11–12 | `retribution`        | Corvettes released one at a time, ordnance only to the Enforcers and only from Terra, Terra crashes pinning ships to the Security Patrol, and the Freedom Fleet muster (`convertFleet`).            |
+| Fleet Mutiny        | 12    | `fleet-mutiny`       | Rebellion rolls, hexside suppression (`engine/combat.ts` → `suppressHexside`), base capture by landing (`engine/logistics.ts` → `captureBasesByLanding`).                                           |
+| Interplanetary War  | 12    | `interplanetary-war` | MCr budgets, base income (`endPlayerTurn`), purchase only at a world the player controls, devastation counts, and MegaCredits as freight — one ton per credit, commercial hulls only (`loadCargo`). |
+| Prospecting         | 13    | `prospecting`        | Ore and CT shards (`engine/logistics.ts` → `runProspecting`, `mineOre`, `emplaceEquipment`, `sellCargo`).                                                                                           |
 
 Scenario-specific rules ride in `GameState.scenarioData` rather than in the
 engine, so no scenario can change the rules for another.
@@ -223,9 +223,9 @@ engine, so no scenario can change the rules for another.
 
 ## p. 15 — Orbital bases variant
 
-| Rule                                                                                                                         | Where                                                 | Status | Notes                                                                                                                                                                                                               |
-| ---------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| "Every planetary base has a highly developed orbital base overhead": refuel by passing over in orbit, deliver cargo to orbit | `engine/types.ts` → `GameOptions.orbitalBasesVariant` | ○      | The option exists and the scenario picker offers it, but no engine module reads it yet. Note that resupply-by-orbit is already the _standard_ rule (p. 8); what the variant adds is cargo delivery without landing. |
+| Rule                                                                                                                         | Where                                | Status | Notes                                                                                                                                                                                                                                                                               |
+| ---------------------------------------------------------------------------------------------------------------------------- | ------------------------------------ | ------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| "Every planetary base has a highly developed orbital base overhead": refuel by passing over in orbit, deliver cargo to orbit | `engine/logistics.ts` → `canTradeAt` | ✅     | Refuel-by-orbit is already the _standard_ rule (p. 8), so the variant's actual content is cargo: freight is handed over at the base — landed, stopped on the rock, or matched with an orbital base — and the variant lifts that to orbit anywhere. Piracy's deliveries read it too. |
 
 ## p. 16 — Advanced combat system
 
@@ -289,98 +289,95 @@ encloses the body, so no course reaches the body's hex without entering it.
 
 ## Known gaps
 
-These are the honest ones. Nothing else in the rulebook is silently missing.
+Four. The first two are cases where the rulebook itself stops short of a
+mechanism and hands the job to a person; the last two are setup choices the
+engine makes for the players instead of asking them. Nothing else in the
+rulebook is silently missing.
 
-1. **Fog of war is presentation, not security** (`GameOptions.fogOfWar`). Every
-   client computes the whole state from the command log, so hidden information
-   depends on players not looking. Making it real needs a server that filters per
-   player — see [MULTIPLAYER.md](MULTIPLAYER.md#fog-of-war-needs-a-server).
-2. **The orbital bases variant (p. 15) is declared but not implemented.** The
-   option is offered in the scenario picker and read by nothing.
-3. **The campaign game (p. 13–15) is not mechanised.** Its economy is refereed by
-   design; the underlying rules it leans on are all present.
-4. **Asteroid hazards resolve at the end of the movement phase**, not during the
-   combat phase as the sequence of play lists them. The outcome is identical
-   except in the log's ordering.
-5. **Nuke hexside selection is geometric**, not a choice offered to the victim:
-   "If it is not clear which hex side has been affected, the suffering player
-   makes the choice." Deterministic, and never worse for the suffering player
-   than the rule allows.
-6. **Referee options (p. 15), including secret combat results, are not
-   implemented.** The full log is visible to everyone at the table.
-7. **There is no point-buy screen** for the combat strength point system (p. 9).
-   Scenario fleets are fixed at build time; the purchases that happen _during_ a
-   game are implemented (`logistics.purchaseShip`), in MegaCredits or in points,
-   whichever the scenario prices in.
-8. **The p. 9 equipment catalogue and the ore market have no command.**
-   `logistics.purchaseEquipment` and `logistics.sellCargo` implement the printed
-   prices but are not in the `Command` union and have no UI, so in a Prospecting
-   game a miner can dig ore and never sell it, and can never buy PM grapples,
-   scanners, robot guards or a second automated mine. Consequences: "If the ship
-   is equipped with PM grapples, the shard may be picked up and sold, or left for
-   later" is unreachable — every shard explodes — and with it the missing check on
-   handing a shard to a ship without grapples; "Nukes are available only if the
-   scenario specifies" is unenforced in the shop, which no player can reach; and a
-   shard "left for later" is written to a map nothing reads.
-9. **MegaCredits are not cargo any command can create.** `CARGO.megacredits` has
-   the printed mass of one ton per MCr, but nothing mints, transfers-in or banks
-   them, so Interplanetary War's "The Terran player must physically transport all
-   MCr to Terra before they may be used… only in commercial ships" is recorded in
-   `scenarioData` and not modelled — and neither is the restriction to commercial
-   hulls that goes with it.
-10. **Piracy's delivery cycles are not modelled.** "The Merchant earns 2 points for
-    each cargo delivered", the announce-at-take-off destination, and the cycle
-    rollover ("once a planet has received a cargo, it may not get another cargo
-    until all worlds have received a cargo in that cycle") need a cargo-and-
-    destination command surface the engine does not have. Points for destroyed
-    pirate hulls, for merchant hulls lost, and for merchant ships looted _are_
-    scored (`piracy.ts` → `endPlayerTurn`), and ships are bought with them, but
-    the Pirates' "8 points in a single trade cycle" victory cannot fire and the
-    Merchant's growth to six hulls has no income behind it.
-11. **Lateral 7's dreadnaught may move before a pirate is detected.** "The
-    dreadnaught, however, may not move until a pirate is detected by a ship or a
-    base" is recorded as `scenarioData.dreadnaughtHeldUntilContact` and enforced
-    by nothing.
-12. **Retribution's Terra crashes and Freedom Fleet conversion are inert.** "Each
-    corvette which manages to crash into Terra… reassigns one ship to the Terra
-    Security Patrol", the three-crash withdrawal, and the conversion of corvettes
-    stopped at Clandestine into a doubled-strength fleet are all recorded and
-    unimplemented. The corvette release itself is implemented.
-13. **Nova's alien entry arc is not measured from Jupiter.** "They may enter at
-    any point along the map edge closest to Jupiter" — the arc chosen sits 11–14
-    hexes from Jupiter where the nearest rim hex is 7 (`helpers.ts` →
-    `stepToward` breaks a hex-distance tie 60° off the true bearing). Nova's
-    `checkVictory` also applies the printed _variant_ (both blocs win when the
-    aliens are wiped out) rather than the base rule, which is not currently
-    trackable: nothing records which side killed the last alien.
-14. **Robot guards cannot be fought.** "If attacked, they have a combat value of
-    2, but only for defense and counterattacks" — guards are a hex→owner map, not
-    a unit, so a claim can never be jumped once guarded.
-15. **The advanced system chooses which damage to repair.** "A ship recovers from
-    1 D a turn… The owner chooses what kind of damage to recover from" —
-    `combat.ts` → `recoverDamage` repairs drive, then weapon, then structure,
-    because there is no command through which the owner could choose.
-16. **A disabled orbital base still runs its pumps.** p. 6's exception names three
-    things a base may do "while the base itself is slightly (D1) damaged" —
-    launch torpedoes, fire guns, resupply. Guns and torpedoes stop at D2; resupply
-    never does. The general prohibition it is an exception to ("A disabled ship
-    cannot maneuver, launch ordnance, or attack") does not mention resupply
-    either, so the stricter reading is an inference rather than a printed rule.
-17. **"Weapon hits on civilian ships have no effect except to prevent their
-    launching mines" (p. 16) is read two ways.** `combat.ts` reads it strictly — a
-    packet with weapon damage still fires its guns — while `ordnance.ts` reads
-    "mines" as shorthand for ordnance and stops a weapon-damaged civilian
-    launching anything, nukes included. Both readings are defensible; they are not
-    both defensible at once, and whichever the project settles on, both sites have
-    to move together. Reachable only with the advanced system and the nuke variant
-    both switched on.
-18. **Combat decides sides by `owner`, not `controllerOf`.** Everywhere else a
-    captured prize fights for its captor until it is redeemed at his base
-    (`movement.ts` → `controllerOf`); `combat.ts` → `enemyOf` reads `ship.owner`,
-    so for the length of the transit a prize is an enemy of its captor and a
-    friend of the fleet it was taken from. p. 8 says a captured ship "may not fire,
-    or return fire if fired upon", which presupposes its being fired upon by the
-    side that lost it.
+This list used to hold eighteen. Fifteen of them were closed by code, and each
+is now held down by a test in `tests/rules-gaps.test.ts` — 68 cases, every one
+written from the printed clause before being run against the engine, because a
+test written from the code would agree with whatever the code does, including
+the omission it is supposed to catch. A sixteenth, fog of war, was neither
+closed nor abandoned but split in two, and has its own section below. The two
+that survive unchanged are the first two here.
+
+Entries 3 and 4 are new. Closing the others surfaced them: both are places where
+a rule is implemented but its _choice_ is not offered, which is the same class of
+defect as the ones that were closed and is recorded rather than quietly kept.
+
+1. **The campaign game (pp. 13–15) is not mechanised.** It is explicitly a
+   framework for a refereed table rather than a rules module — "This is a
+   roleplaying game as well as a tactical one", with a referee setting prices,
+   regulating trade and adjudicating a political climate. The pieces it leans on
+   are all present and reachable: purchases, the equipment catalogue, looting,
+   capture, prospecting, detection, delivery cycles. What is missing is the
+   referee, and a referee is a person.
+2. **Referee options (p. 15), including secret combat results, are not
+   implemented.** The full log is visible to everyone at the table. Real
+   secrecy here would need a referee's seat that sees a different state from
+   the players' — the server can already redact per player (`src/net/redact.ts`),
+   so this is a UI and role question rather than an engine one.
+3. **Nova's shared-victory variant is off by default and has to be switched on
+   in `scenarioData`.** The base rule is what runs: "The EastBloc or the
+   WestBloc wins by capturing or destroying the last Alien ship", singular, with
+   "when one player wins, both others lose". The printed variant — both blocs
+   winning marginally when the aliens are wiped out — is implemented but is
+   reached only by setting `novaSharedVictory`, because there is no scenario
+   option in the picker for it. A variant behind a flag rather than a checkbox.
+4. **The Nova colony draw and the Terra/Luna hexside split are defaults, not
+   choices.** "EastBloc and WestBloc must roll dice to determine where their
+   colonies are and decide which parts of Terra they rule... The EastBloc
+   selects three adjacent Terran hexsides; the WestBloc gets the other three."
+   The die roll is faithful and seeded; the _selections_ are fixed at build
+   time (EastBloc takes sides 0–2, WestBloc 3–5, Luna 0 and 3). The point-buy
+   screen is the shape the fix would take, and `BuildOptions` is where it would
+   arrive.
+
+### Fog of war is only as real as the seat you play from
+
+`GameOptions.fogOfWar` means two different things depending on how a game is
+being played, and neither is a defect so much as a fact about tables.
+
+- **Networked.** Real. The server holds the authoritative state and sends each
+  player a `redactState` view — undetected enemy ships and ordnance removed,
+  scenario secrets withheld — so the hidden information is not on the client to
+  begin with. See `server/room.ts` and `src/net/redact.ts`.
+- **Hot seat.** Presentational, necessarily. One browser, one screen, one state:
+  the interface hides what the phasing player should not see, and the players
+  agree not to lean over. Piracy says so itself — "For this scenario to work,
+  the Patrol and Merchant players must be willing to ignore undetected pirate
+  ships until they are legally detected."
+
+The redactor is tested (`tests/multiplayer.test.ts`) and fails closed: a
+scenario secret that names nobody identifiable is withheld from everyone, and an
+entry naming only other players' ships is withheld too. A scenario that needs to
+publish something says so by name, once, through `publicKeys` — Piracy's
+announced destinations are the case, because the player who most needs to hear
+them owns none of the ships they name.
+
+### Two readings the project has had to settle
+
+Both are cases where the printed text supports more than one reading. Each is
+decided, decided the same way everywhere, and recorded here so the choice is
+visible rather than buried in a comment.
+
+- **"Weapon hits on civilian ships have no effect except to prevent their
+  launching mines" (p. 16)** is read strictly: _mines_, not ordnance in general.
+  The rulebook enumerates the three kinds separately everywhere it means all of
+  them ("one mine, one torpedo, or one nuke"), and the clause exists to say that
+  weapon damage to an unarmed hull is nearly harmless. Civilians may not launch
+  torpedoes at any damage level, so the only case this decides is a
+  weapon-damaged freighter with a nuke in the hold — and it may still drop it.
+  `combat.ts` → `weaponsOperational` and `ordnance.ts` → `canLaunch` agree.
+- **A disabled orbital base stops resupplying when it stops shooting.** p. 6's
+  exception names three things a base may do "while the base itself is slightly
+  (D1) damaged" — launch torpedoes, fire guns, resupply. An exception listing
+  three permissions at D1 is not a licence for one of them at D5, so the pumps
+  stop where the guns do. The general prohibition it is an exception to ("A
+  disabled ship cannot maneuver, launch ordnance, or attack") does not mention
+  resupply, which is why this is an inference; it is the stricter of the two
+  readings and the one that makes the D1 clause mean something.
 
 ## Auditing this document
 

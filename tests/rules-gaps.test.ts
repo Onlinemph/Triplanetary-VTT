@@ -60,7 +60,7 @@ import {
   sub,
   updateDetection,
 } from '../src/engine/index.js';
-import { buildScenario } from '../src/scenarios/index.js';
+import { buildScenario, scenarioById } from '../src/scenarios/index.js';
 import { redactState } from '../src/net/redact.js';
 
 const map = DEFAULT_MAP;
@@ -885,6 +885,9 @@ describe('the Terra Security Patrol keeps to its beat (Retribution)', () => {
 // Gap 13 — Nova's alien entry arc
 // ---------------------------------------------------------------------------
 
+/** Nova's own verdict on a state, bypassing the reducer's sticky-victory cache. */
+const novaVictory = (s: GameState) => scenarioById('nova')!.checkVictory!(s);
+
 describe('the aliens enter along the edge closest to Jupiter (Nova)', () => {
   // "They may enter at any point along the map edge closest to Jupiter at a
   //  speed of one hex per turn. They are detected immediately."
@@ -924,6 +927,52 @@ describe('the aliens enter along the edge closest to Jupiter (Nova)', () => {
       // on that arc — within a hex or two of the true minimum, not eleven.
       expect(distance(alien.pos, jupiter.hex)).toBeLessThanOrEqual(nearest + 2);
     }
+  });
+
+  /** Wipe out the alien fleet, crediting each kill to `killer` (or to nobody). */
+  const alienFleetDown = (killer: PlayerId | null): GameState => {
+    const s = buildScenario('nova');
+    const ids = s.scenarioData['alienShips'] as readonly string[];
+    const ships = { ...s.ships };
+    for (const id of ids) {
+      ships[id] = {
+        ...ships[id]!,
+        destroyed: true,
+        destroyedBy: killer === null ? 'crashed into Jupiter' : 'gunfire',
+        ...(killer === null ? {} : { destroyedByPlayer: killer }),
+      };
+    }
+    return { ...s, ships };
+  };
+
+  it('gives the win to the bloc that took the last alien, and to it alone', () => {
+    // "The EastBloc or the WestBloc wins by capturing or destroying the last
+    //  Alien ship... When one player wins, both others lose."
+    const west = novaVictory(alienFleetDown('westbloc'));
+    expect(west?.winners).toEqual(['westbloc']);
+    expect(west?.level).toBe('decisive');
+
+    const east = novaVictory(alienFleetDown('eastbloc'));
+    expect(east?.winners).toEqual(['eastbloc']);
+  });
+
+  it('shares the credit when no bloc can claim the last kill', () => {
+    // The fleet came apart on its own; nobody "captured or destroyed" it.
+    const v = novaVictory(alienFleetDown(null));
+    expect([...(v?.winners ?? [])].sort()).toEqual(['eastbloc', 'westbloc']);
+    expect(v?.level).toBe('marginal');
+  });
+
+  it('applies the printed shared-victory variant only when it is switched on', () => {
+    // "Variant: Both the EastBloc and the WestBloc win marginal victories if all
+    //  Aliens are destroyed." A variant, so it is off unless asked for.
+    const base = alienFleetDown('westbloc');
+    const variant: GameState = {
+      ...base,
+      scenarioData: { ...base.scenarioData, novaSharedVictory: true },
+    };
+    expect(novaVictory(base)?.winners).toEqual(['westbloc']);
+    expect([...(novaVictory(variant)?.winners ?? [])].sort()).toEqual(['eastbloc', 'westbloc']);
   });
 
   it('has them arriving at one hex per turn, and already seen', () => {
