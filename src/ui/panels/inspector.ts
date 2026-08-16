@@ -246,10 +246,30 @@ export const createInspector = (): Panel => {
     // --- Orders ------------------------------------------------------------
 
     if (!mine) {
+      // An enemy ship in the combat phase is still something you can *do*
+      // something to. Attackers had a button while targets could only be added
+      // by clicking the chart, which is two mechanisms for one job and no hint
+      // that the second exists; now either side is picked the same way.
+      const targeted = ui.targets.includes(ship.id);
       nodes.push(
         section(
           'Orders',
           note('info', `${state.players[controller]?.name ?? controller} commands this ship.`),
+          state.phase === 'combat' && !state.victory
+            ? el(
+                'div',
+                { class: 'actions' },
+                button({
+                  label: targeted ? 'Remove from targets' : 'Add as target',
+                  variant: targeted ? 'ghost' : 'danger',
+                  disabled: ship.attackedThisPhase,
+                  title: ship.attackedThisPhase
+                    ? 'No ship may be attacked more than once per combat phase'
+                    : 'Add this ship to the attack being built below',
+                  onClick: () => act.toggleTarget(ship.id),
+                }),
+              )
+            : null,
         ),
       );
     } else if (state.victory) {
@@ -284,7 +304,7 @@ export const createInspector = (): Panel => {
                   )
                 : note(
                     'info',
-                    'Click ships on the chart to build an attack. The odds board is below.',
+                    'Add your ships here or on the chart, then pick enemy ships the same way. The odds are shown below, answer first.',
                   ),
               el(
                 'div',

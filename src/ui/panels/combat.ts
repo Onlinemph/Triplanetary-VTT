@@ -12,7 +12,7 @@
  */
 
 import { canFire, combatStrength, pendingCounterattack, previewAttack } from '@engine/combat.js';
-import { type OddsColumn, gunDamage } from '@engine/crt.js';
+import { type OddsColumn, DESTRUCTION_THRESHOLD, gunDamage } from '@engine/crt.js';
 import { add, sideGravityHex, sideKey } from '@engine/hex.js';
 import { logisticsData } from '@engine/logistics.js';
 import {
@@ -102,6 +102,38 @@ const baseTorpedoSection = (ctx: Ctx): Child[] => {
   ];
 };
 
+/**
+ * What the last shot actually did.
+ *
+ * The engine already writes the roll and its result into the log — "Ares fires
+ * on Hermes at 2:1 (4:2), roll 5 +1 = 6: D3" — but the log is a scrolling
+ * record of the whole game, and after pressing Fire a player is looking at the
+ * combat panel. So the same entries are surfaced where the shot was taken.
+ *
+ * Read out of the log rather than kept in the state: the log is already the
+ * game's own account of what happened, and a second copy could disagree with it.
+ */
+const lastShot = (ctx: Ctx): Child[] => {
+  const { state } = ctx;
+  const combatWords = /\b(fires? on|returns? fire|planetary defences|destroyed by|disabled for)\b/i;
+  const recent = state.log
+    .filter((e) => e.turn === state.turn && e.phase === 'combat' && combatWords.test(e.text))
+    .slice(-4);
+  if (recent.length === 0) return [];
+
+  return [
+    section(
+      'Last shot',
+      ...recent.map((e) =>
+        el('p', {
+          class: `shot-line tone-${e.severity}`,
+          text: e.text,
+        }),
+      ),
+    ),
+  ];
+};
+
 export const createCombatPanel = (): Panel => {
   const root = el('div', { class: 'combat-panel' });
   let draft: CounterDraft | null = null;
@@ -151,7 +183,7 @@ export const createCombatPanel = (): Panel => {
       return;
     }
 
-    const nodes: Child[] = [];
+    const nodes: Child[] = [...lastShot(ctx)];
     const attackers = ui.attackers
       .map((id) => state.ships[id])
       .filter((s): s is Ship => s !== undefined && !s.destroyed);
@@ -208,38 +240,49 @@ export const createCombatPanel = (): Panel => {
         ui.limitedStrength ?? undefined,
         'attack',
       );
-      nodes.push(oddsBlock(ctx, preview));
+      nodes.push(oddsBlock(ctx, preview, targets));
 
+      // "A ship may always attack or counterattack with less than its rated
+      // combat strength, if it hopes to disable a target without destroying
+      // it." A real choice, and a rare one — so it is offered as a disclosure
+      // rather than a slider standing permanently between the odds and the
+      // trigger.
       const maxStrength = attackers.reduce((n, s) => n + combatStrength(s), 0);
-      nodes.push(
-        section(
-          'Limited attack',
+      if (maxStrength > 1) {
+        nodes.push(
           el(
-            'div',
-            { class: 'row-inline' },
-            el('input', {
-              type: 'range',
-              min: '1',
-              max: String(Math.max(1, maxStrength)),
-              value: String(ui.limitedStrength ?? maxStrength),
-              class: 'slider',
-              'aria-label': 'Attack strength',
-              oninput: (ev: Event) => {
-                const v = Number((ev.target as HTMLInputElement).value);
-                act.setLimitedStrength(v >= maxStrength ? null : v);
-              },
+            'details',
+            { class: 'odds-detail', ...(ui.limitedStrength !== null ? { open: 'open' } : {}) },
+            el('summary', {
+              text:
+                ui.limitedStrength !== null
+                  ? `Holding back — firing at ${ui.limitedStrength} of ${maxStrength}`
+                  : 'Pull the punch, to capture rather than kill',
             }),
-            el('span', {
-              class: 'mono strength-readout',
-              text: String(ui.limitedStrength ?? maxStrength),
-            }),
+            el(
+              'div',
+              { class: 'row-inline' },
+              el('input', {
+                type: 'range',
+                min: '1',
+                max: String(Math.max(1, maxStrength)),
+                value: String(ui.limitedStrength ?? maxStrength),
+                class: 'slider',
+                'aria-label': 'Attack strength',
+                oninput: (ev: Event) => {
+                  const v = Number((ev.target as HTMLInputElement).value);
+                  act.setLimitedStrength(v >= maxStrength ? null : v);
+                },
+              }),
+              el('span', {
+                class: 'mono strength-readout',
+                text: String(ui.limitedStrength ?? maxStrength),
+              }),
+            ),
+            note('info', 'A disabled ship can be looted or captured; a destroyed one cannot.'),
           ),
-          note(
-            'info',
-            'Attack with less than full strength to disable a prize without destroying it.',
-          ),
-        ),
-      );
+        );
+      }
 
       nodes.push(
         el(
@@ -401,6 +444,91 @@ const selChip = (ship: Ship, onRemove: () => void, color?: string): HTMLElement 
     el('span', { class: 'sel-chip-x', text: '×' }),
   );
 
+// ---------------------------------------------------------------------------
+// What will happen if I fire?
+// ---------------------------------------------------------------------------
+
+/**
+ * The outcome of a shot, in the only terms a player is actually asking about.
+ *
+ * One die decides a gun attack, so the forecast is not a simulation or an
+ * estimate — it is a count of the six faces, exact. The odds column and the
+ * modifiers are how the rulebook *computes* that; they are not the answer to
+ * "what happens if I fire", and leading with them made a simple question look
+ * like homework.
+ *
+ * Whether a damage result kills depends on what the target has already taken:
+ * "damage is cumulative; if a ship ever reaches a condition of D6 or greater,
+ * it is destroyed." A face that would finish somebody is counted as a kill,
+ * which is the distinction a player cares about most.
+ */
+export interface Forecast {
+  readonly destroy: number;
+  readonly damage: number;
+  readonly nothing: number;
+  /** True when a plain damage result would finish a target outright. */
+  readonly finishes: boolean;
+}
+
+export const forecastOf = (
+  column: OddsColumn | null,
+  modifier: number,
+  targets: readonly Ship[],
+): Forecast => {
+  let destroy = 0;
+  let damage = 0;
+  let nothing = 0;
+  let finishes = false;
+  if (column === null) return { destroy: 0, damage: 0, nothing: 6, finishes: false };
+
+  for (let face = 1; face <= 6; face += 1) {
+    const result = gunDamage(column, face + modifier);
+    if (result === null) {
+      nothing += 1;
+    } else if (result === 'E') {
+      destroy += 1;
+    } else if (targets.some((s) => s.disabled + result >= DESTRUCTION_THRESHOLD)) {
+      // "If a ship which will be disabled for 3 more turns receives a D3
+      // result, it is destroyed."
+      destroy += 1;
+      finishes = true;
+    } else {
+      damage += 1;
+    }
+  }
+  return { destroy, damage, nothing, finishes };
+};
+
+/** The forecast as a row of chips: the first thing in the panel, and the answer. */
+const forecastBlock = (f: Forecast, finishesNote: boolean): HTMLElement =>
+  el(
+    'div',
+    { class: 'forecast' },
+    el(
+      'div',
+      { class: 'forecast-row' },
+      ...(
+        [
+          ['destroyed', f.destroy, 'kill'],
+          ['damaged', f.damage, 'hurt'],
+          ['no effect', f.nothing, 'miss'],
+        ] as const
+      )
+        .filter(([, n]) => n > 0)
+        .map(([label, n, tone]) =>
+          el(
+            'span',
+            { class: `forecast-chip is-${tone}` },
+            el('span', { class: 'forecast-odds mono', text: `${n}/6` }),
+            el('span', { class: 'forecast-label', text: label }),
+          ),
+        ),
+    ),
+    finishesNote
+      ? note('warn', 'A damage result would finish a target outright — it is already hurt.')
+      : null,
+  );
+
 interface PreviewLike {
   legal: boolean;
   reason?: string;
@@ -418,9 +546,18 @@ interface PreviewLike {
   blockedBy?: string;
 }
 
-/** The whole combat calculation, broken out the way the rulebook computes it. */
-const oddsBlock = (ctx: Ctx, p: PreviewLike): HTMLElement => {
+/**
+ * The odds, answer first.
+ *
+ * The forecast goes on top because it is the question; the rulebook's own
+ * arithmetic — strengths, column, range and velocity modifiers, and the face-by-
+ * face table — is folded away underneath it. Nothing is removed: a player who
+ * wants to check the computation, or to learn it, opens one disclosure and sees
+ * every number that produced the answer.
+ */
+const oddsBlock = (ctx: Ctx, p: PreviewLike, targets: readonly Ship[] = []): HTMLElement => {
   const { map } = ctx;
+  const forecast = forecastOf(p.column, p.modifiers.total, targets);
   const rows: Child[] = [
     statRow('Attack strength', p.attackStrength),
     statRow('Defence strength', p.defenceStrength),
@@ -440,16 +577,6 @@ const oddsBlock = (ctx: Ctx, p: PreviewLike): HTMLElement => {
   rows.push(
     statRow('Die modifier', signed(p.modifiers.total), p.modifiers.total < 0 ? 'warn' : 'good'),
   );
-
-  if (p.blockedBy) {
-    rows.push(
-      note(
-        'bad',
-        `Line of sight is blocked by ${map.body(p.blockedBy)?.name ?? p.blockedBy}. Attacks may not be made through moons, planets or Sol.`,
-      ),
-    );
-  }
-  if (!p.legal && p.reason) rows.push(note('warn', p.reason));
 
   if (p.column) {
     // Show the actual outcome of each face, modifiers already applied — the
@@ -473,7 +600,30 @@ const oddsBlock = (ctx: Ctx, p: PreviewLike): HTMLElement => {
     );
   }
 
-  return section('Odds', ...rows);
+  // Anything that stops the shot outright belongs above the fold, not inside a
+  // disclosure: it is the reason there is nothing to forecast.
+  const blockers: Child[] = [];
+  if (p.blockedBy) {
+    blockers.push(
+      note(
+        'bad',
+        `Line of sight is blocked by ${map.body(p.blockedBy)?.name ?? p.blockedBy}. Attacks may not be made through moons, planets or Sol.`,
+      ),
+    );
+  }
+  if (!p.legal && p.reason) blockers.push(note('warn', p.reason));
+
+  return section(
+    'Odds',
+    ...blockers,
+    p.legal ? forecastBlock(forecast, forecast.finishes) : null,
+    el(
+      'details',
+      { class: 'odds-detail' },
+      el('summary', { text: 'How this is worked out' }),
+      ...rows,
+    ),
+  );
 };
 
 // ---------------------------------------------------------------------------
@@ -616,9 +766,15 @@ const counterattackPrompt = (
     el(
       'div',
       { class: 'counter-banner' },
-      el('strong', { text: `${defenderName} may return fire` }),
+      el('span', { class: 'counter-turn', text: 'Over to the defender' }),
+      el('strong', { text: `${defenderName}: your ships were shot at. Fire back?` }),
+      // The genuinely disorienting part, said outright: the attack you just
+      // watched has not happened yet. "Ships which are attacked may return fire
+      // against any or all of their attackers during the combat phase, before
+      // any damage is implemented" — so both results are rolled against
+      // undamaged ships and land together.
       el('span', {
-        text: 'Damage from the attack is held until this is answered — odds are recomputed in favour of the new defender.',
+        text: 'Nothing has been damaged yet. Your return fire is rolled against the attackers at full strength, and both results are applied together — so a ship about to be destroyed still shoots back.',
       }),
     ),
     section(
@@ -632,7 +788,9 @@ const counterattackPrompt = (
       ),
       toggleRow(marks, draft.targets, 'At', () => null),
     ),
-    preview ? oddsBlock(ctx, preview) : empty('Choose at least one ship on each side.'),
+    preview
+      ? oddsBlock(ctx, preview, chosenTargets)
+      : empty('Choose at least one ship on each side.'),
     maxStrength > 1
       ? section(
           'Limited return fire',
@@ -686,7 +844,7 @@ const counterattackPrompt = (
             type: 'declineCounterattack',
             by: defender ?? activePlayer(state),
           }),
-        title: 'Take the damage as rolled',
+        title: 'Decline: the attack’s damage is applied and nothing is fired back',
       }),
     ),
   ];

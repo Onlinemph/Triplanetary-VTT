@@ -2025,3 +2025,88 @@ kbd {
 .course-step.is-current .course-tick {
   color: var(--accent);
 }
+
+/* --- Combat: answer first ------------------------------------------------ */
+/* The forecast is the question a player is asking, so it gets the space and
+   the contrast; the rulebook's arithmetic sits under a disclosure below it. */
+.forecast {
+  margin: 6px 0 2px;
+}
+.forecast-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.forecast-chip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 5px 9px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--hair);
+  background: var(--panel-raised);
+}
+.forecast-odds {
+  font-size: 15px;
+  font-weight: 700;
+}
+.forecast-label {
+  font-size: 12px;
+  color: var(--ink-dim);
+}
+.forecast-chip.is-kill {
+  border-color: rgba(255, 125, 132, 0.5);
+}
+.forecast-chip.is-kill .forecast-odds {
+  color: var(--bad);
+}
+.forecast-chip.is-hurt {
+  border-color: rgba(245, 193, 104, 0.45);
+}
+.forecast-chip.is-hurt .forecast-odds {
+  color: var(--warn);
+}
+.forecast-chip.is-miss .forecast-odds {
+  color: var(--ink-faint);
+}
+
+.odds-detail {
+  margin-top: 8px;
+}
+.odds-detail > summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--ink-dim);
+  padding: 4px 0;
+  user-select: none;
+}
+.odds-detail > summary:hover {
+  color: var(--ink);
+}
+
+.shot-line {
+  margin: 3px 0;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--ink-dim);
+}
+.shot-line.tone-bad {
+  color: var(--bad);
+}
+.shot-line.tone-warn {
+  color: var(--warn);
+}
+.shot-line.tone-good {
+  color: var(--good);
+}
+
+/* The hand-over to the defender has to read as a change of turn, not as more
+   of the same panel. */
+.counter-turn {
+  display: block;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin-bottom: 2px;
+}
