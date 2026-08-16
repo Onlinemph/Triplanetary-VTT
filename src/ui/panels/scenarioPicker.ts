@@ -32,6 +32,8 @@ export const openScenarioPicker = (
   let selected = defaults.id ?? scenarios[0]?.id ?? '';
   let options: GameOptions = { ...defaults.options };
   let seed = defaults.seed;
+  /** Hulls bought on the point-buy screen, by player id. Empty means "printed". */
+  let fleets: Record<string, string[]> = {};
 
   const list = el('div', {
     class: 'scenario-list',
@@ -52,7 +54,17 @@ export const openScenarioPicker = (
       {
         label: 'Begin',
         variant: 'primary',
-        onClick: () => onStart({ id: selected, opts: { seed, options } }),
+        onClick: () =>
+          onStart({
+            id: selected,
+            // An empty selection is not a choice — it means the player never
+            // opened the buy screen, and the scenario should field its own list.
+            opts: {
+              seed,
+              options,
+              ...(Object.values(fleets).some((f) => f.length > 0) ? { fleets } : {}),
+            },
+          }),
       },
     ],
   });
@@ -69,6 +81,7 @@ export const openScenarioPicker = (
             role: 'option',
             'aria-selected': String(s.id === selected),
             onclick: () => {
+              if (s.id !== selected) fleets = {};
               selected = s.id;
               draw();
             },
@@ -99,6 +112,7 @@ export const openScenarioPicker = (
             el('p', { class: 'scenario-desc', text: chosen.description }),
           )
         : el('p', { class: 'empty', text: 'No scenarios are available.' }),
+      ...(chosen?.pointBuy ? [pointBuyPane(chosen.pointBuy)] : []),
       el(
         'div',
         { class: 'scenario-options' },
@@ -155,6 +169,98 @@ export const openScenarioPicker = (
       ),
     );
   };
+
+  /**
+   * The combat strength point system, as a setup screen (p. 9).
+   *
+   *   "Ships are acquired on the basis of combat strength points. Basically, a
+   *    ship costs points equal to its combat strength; a liner costs 1 point, a
+   *    transport or tanker costs 1/2 point."
+   *
+   * Each side spends its own budget. Leaving a side untouched leaves it with the
+   * fleet the scenario prints, which is what a player who does not care wants —
+   * and what a player who overspends gets, since the engine refuses a fleet over
+   * budget rather than trimming one.
+   */
+  const pointBuyPane = (buy: NonNullable<ScenarioDescriptor['pointBuy']>): HTMLElement =>
+    el(
+      'div',
+      { class: 'scenario-options' },
+      el('h3', { class: 'sect-title', text: 'Fleets' }),
+      el('p', {
+        class: 'hint',
+        text: 'Ships cost points equal to their combat strength; a liner costs 1, a transport or tanker 1/2. Leave a side alone to use the printed fleet.',
+      }),
+      ...buy.sides.map((side) => {
+        const chosenFleet = fleets[side.id] ?? [];
+        const spent = chosenFleet.reduce(
+          (n, id) => n + (buy.catalogue.find((c) => c.id === id)?.cost ?? 0),
+          0,
+        );
+        const left = side.budget - spent;
+        return el(
+          'div',
+          { class: 'buy-side' },
+          el(
+            'div',
+            { class: 'row-inline' },
+            el('span', { class: 'sel-label', text: side.name }),
+            el('span', {
+              class: `mono${left < 0 ? ' tone-bad' : ''}`,
+              text: `${spent} / ${side.budget} points`,
+            }),
+            chosenFleet.length > 0
+              ? button({
+                  label: 'Clear',
+                  variant: 'quiet',
+                  onClick: () => {
+                    fleets = { ...fleets, [side.id]: [] };
+                    draw();
+                  },
+                })
+              : null,
+          ),
+          el(
+            'div',
+            { class: 'chips' },
+            ...buy.catalogue.map((entry) => {
+              const owned = chosenFleet.filter((id) => id === entry.id).length;
+              return button({
+                label: `${entry.name} ${entry.cost}${owned > 0 ? ` ×${owned}` : ''}`,
+                variant: owned > 0 ? 'primary' : 'quiet',
+                disabled: entry.cost > left,
+                title:
+                  entry.cost > left
+                    ? `${entry.cost} points; ${left} left`
+                    : `Add a ${entry.name} for ${entry.cost} points`,
+                onClick: () => {
+                  fleets = { ...fleets, [side.id]: [...chosenFleet, entry.id] };
+                  draw();
+                },
+              });
+            }),
+          ),
+          chosenFleet.length > 0
+            ? el(
+                'div',
+                { class: 'chips' },
+                ...[...new Set(chosenFleet)].map((id) =>
+                  button({
+                    label: `− ${buy.catalogue.find((c) => c.id === id)?.name ?? id}`,
+                    variant: 'ghost',
+                    onClick: () => {
+                      const next = [...chosenFleet];
+                      next.splice(next.lastIndexOf(id), 1);
+                      fleets = { ...fleets, [side.id]: next };
+                      draw();
+                    },
+                  }),
+                ),
+              )
+            : null,
+        );
+      }),
+    );
 
   const optionToggle = (label: string, key: keyof GameOptions, hint: string): HTMLElement =>
     toggle(

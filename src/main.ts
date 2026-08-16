@@ -13,6 +13,7 @@ import type { GameState } from '@engine/types.js';
 import { GameSession } from '@net/session.js';
 import { MapRenderer } from '@render/renderer.js';
 import { SCENARIO_SUMMARIES, buildScenario } from '@scenarios/index.js';
+import { SHIP_CLASSES, type ShipClass } from '@engine/ships.js';
 import { createApp } from '@ui/app.js';
 import type { RendererPort, ScenarioDescriptor, SessionPort } from '@ui/ports.js';
 import './styles.css';
@@ -61,7 +62,24 @@ const app = createApp({
   // `ScenarioDef.players` is a {min, max} range, `ScenarioDescriptor.players` a
   // single seat count.
   scenarios: SCENARIO_SUMMARIES satisfies readonly ScenarioDescriptor[],
-  buildScenario: (id, opts) => buildScenario(id, opts),
+  // The shell's port speaks in plain strings — it has no business knowing the
+  // `ShipClass` union — so a fleet chosen on the buy screen is narrowed here, at
+  // the one seam where the scenario table is actually in scope. A name the table
+  // does not know is dropped, and the scenario falls back to its printed fleet.
+  buildScenario: (id, { fleets, ...rest }) =>
+    buildScenario(id, {
+      ...rest,
+      ...(fleets
+        ? {
+            fleets: Object.fromEntries(
+              Object.entries(fleets).map(([player, fleet]) => [
+                player,
+                fleet.filter((c): c is ShipClass => c in SHIP_CLASSES),
+              ]),
+            ),
+          }
+        : {}),
+    }),
   createSession,
   createRenderer,
   // The seed is the only place the shell reaches for entropy; the engine itself

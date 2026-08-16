@@ -13,9 +13,14 @@
 
 import { canFire, combatStrength, pendingCounterattack, previewAttack } from '@engine/combat.js';
 import { type OddsColumn, gunDamage } from '@engine/crt.js';
-import { add, sideGravityHex } from '@engine/hex.js';
+import { add, sideGravityHex, sideKey } from '@engine/hex.js';
 import { logisticsData } from '@engine/logistics.js';
-import { baseTorpedoAimOptions, canLaunchBaseTorpedo } from '@engine/ordnance.js';
+import {
+  type PendingDevastation,
+  baseTorpedoAimOptions,
+  canLaunchBaseTorpedo,
+  pendingDevastation,
+} from '@engine/ordnance.js';
 
 import { SHIP_CLASSES } from '@engine/ships.js';
 import type { Counterattack } from '@engine/commands.js';
@@ -103,6 +108,16 @@ export const createCombatPanel = (): Panel => {
 
   const update = (ctx: Ctx): void => {
     const { state, map, ui, act } = ctx;
+
+    // A nuke strike whose bearing was unclear stops everything until its victim
+    // names the hexside; nothing else can be ordered while it stands, so it takes
+    // the panel outright rather than sitting under something else.
+    const strike = pendingDevastation(state);
+    if (strike) {
+      fill(root, ...devastationPrompt(ctx, strike));
+      return;
+    }
+
     const pending = pendingCounterattack(state);
 
     if (pending) {
@@ -462,6 +477,64 @@ const oddsBlock = (ctx: Ctx, p: PreviewLike): HTMLElement => {
 };
 
 // ---------------------------------------------------------------------------
+
+/**
+ * "If it is not clear which hex side has been affected, the suffering player
+ * makes the choice."
+ *
+ * The choice is between the hexsides the warhead could actually have come in
+ * over — never a free pick — so each candidate is shown with what it would cost:
+ * the base on it, and any ship that landed through it.
+ */
+const devastationPrompt = (ctx: Ctx, strike: PendingDevastation): Child[] => {
+  const { state, act } = ctx;
+  const victim = state.players[strike.sufferer]?.name ?? strike.sufferer;
+  // The sufferer answers inside somebody else's player-turn, exactly as a
+  // counterattack is answered; at a hot seat the button simply belongs to them.
+  const mine = !state.players[strike.sufferer]?.eliminated;
+
+  const cost = (side: (typeof strike.candidates)[number]): string => {
+    const k = sideKey(side);
+    const base = Object.values(state.bases).find(
+      (b) => b.side !== undefined && sideKey(b.side) === k && !b.destroyed,
+    );
+    const landed = Object.values(state.ships).filter(
+      (s) => !s.destroyed && s.location.kind === 'landed' && sideKey(s.location.side) === k,
+    );
+    const parts: string[] = [];
+    if (base) parts.push(`the base at ${base.id}`);
+    if (landed.length > 0) parts.push(`${landed.length} ship(s) landed there`);
+    return parts.length === 0 ? 'nothing on it' : parts.join(', ');
+  };
+
+  return [
+    section(
+      'Nuke strike',
+      note(
+        'bad',
+        `A warhead has hit ${strike.bodyName} on an unclear bearing. ${victim} must say which hexside took it.`,
+      ),
+      ...strike.candidates.map((side) =>
+        el(
+          'div',
+          { class: 'actions' },
+          button({
+            label: `Hexside ${side.dir} — ${cost(side)}`,
+            variant: 'danger',
+            disabled: !mine,
+            title: mine ? 'Everything on this hexside is destroyed' : `Only ${victim} may answer`,
+            onClick: () =>
+              act.dispatch({ type: 'chooseDevastatedSide', by: strike.sufferer, side }),
+          }),
+        ),
+      ),
+      note(
+        'info',
+        'Left unanswered, the phase closes on whichever hexside costs the sufferer least.',
+      ),
+    ),
+  ];
+};
 
 const counterattackPrompt = (
   ctx: Ctx,

@@ -1987,3 +1987,13 @@ kbd {
 .group-meta .meta-unit + .meta-num {
   margin-left: 5px;
 }
+
+/* --- Point-buy (p. 9 combat strength points) ----------------------------- */
+/* Each side gets its own block so two budgets never read as one running total. */
+.buy-side {
+  padding: 8px 0;
+  border-top: 1px solid var(--line);
+}
+.buy-side:first-of-type {
+  border-top: 0;
+}

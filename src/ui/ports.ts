@@ -76,11 +76,34 @@ export interface ScenarioDescriptor {
   /** Either a turn count or a phrase like "short"; both are rendered. */
   readonly length: string | number;
   readonly description: string;
+  /**
+   * The opening fleets this scenario prices in combat strength points, if any.
+   *
+   * Nova is the one that does: "Both the EastBloc and the WestBloc players select
+   * fleets of 50 combat points each." Present here so the picker can offer the
+   * buy screen without importing the scenario table.
+   */
+  readonly pointBuy?: {
+    /** Budget per player id, and the faction name to show beside it. */
+    readonly sides: readonly {
+      readonly id: string;
+      readonly name: string;
+      readonly budget: number;
+    }[];
+    /** Hulls the scenario will sell, with what each costs in points. */
+    readonly catalogue: readonly {
+      readonly id: string;
+      readonly name: string;
+      readonly cost: number;
+    }[];
+  };
 }
 
 export interface ScenarioBuildOptions {
   readonly seed: number;
   readonly options: Partial<GameOptions>;
+  /** Fleets bought on the point-buy screen, by player id. */
+  readonly fleets?: Readonly<Record<string, readonly string[]>>;
 }
 
 // ---------------------------------------------------------------------------

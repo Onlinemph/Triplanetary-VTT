@@ -7,7 +7,7 @@
  * engine, and their refusal text is shown as the button's tooltip.
  */
 
-import { combatStrength, isDisabled } from '@engine/combat.js';
+import { combatStrength, isDisabled, repairTarget, repairableTracks } from '@engine/combat.js';
 import { isZero } from '@engine/hex.js';
 import { cargoMass } from '@engine/logistics.js';
 
@@ -21,6 +21,7 @@ import type { Ctx, Panel } from '../viewmodel.js';
 import { astrogationActions } from './astrogation.js';
 import { createLogisticsSection, supplyStats } from './logistics.js';
 import { ordnanceActions } from './ordnance.js';
+import { scenarioOrders } from './scenarioOrders.js';
 
 export const createInspector = (): Panel => {
   const head = el('div', { class: 'panel-head' });
@@ -166,6 +167,33 @@ export const createInspector = (): Panel => {
             )
           : null,
         ship.heroic ? note('good', 'Heroic — +1 to every gun attack roll, permanently.') : null,
+        // "A ship recovers from 1 D a turn ... The owner chooses what kind of
+        // damage to recover from." Only worth asking when more than one track is
+        // still worth working on; with one there is no choice to make.
+        mine && state.options.advancedCombat && repairableTracks(ship).length > 1
+          ? el(
+              'div',
+              { class: 'chips' },
+              el('span', { class: 'sel-label', text: 'Repair' }),
+              ...repairableTracks(ship).map((track) =>
+                button({
+                  label: track,
+                  variant: repairTarget(ship) === track ? 'primary' : 'quiet',
+                  title:
+                    repairTarget(ship) === track
+                      ? 'The damage-control party is working on this'
+                      : `Work on the ${track} instead, one D at the end of each resupply phase`,
+                  onClick: () =>
+                    act.dispatch({
+                      type: 'chooseRepair',
+                      by: activePlayer(state),
+                      ship: ship.id,
+                      track,
+                    }),
+                }),
+              ),
+            )
+          : null,
         statRow('Overload', ship.overloadAvailable ? 'available' : 'spent'),
         state.options.fogOfWar
           ? statRow(
@@ -278,6 +306,9 @@ export const createInspector = (): Panel => {
           orders.push(...logisticsSection(ctx, ship));
           break;
       }
+      // Orders a single scenario adds — a cargo run, a muster. They belong with
+      // the rest of this ship's orders rather than in a panel of their own.
+      orders.push(...scenarioOrders(ctx, ship));
     }
 
     // Header, then orders, then the reference stats.

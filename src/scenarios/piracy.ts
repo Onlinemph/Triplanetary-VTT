@@ -188,6 +188,10 @@ const build = (opts: BuildOptions): GameState => {
           /** "or by scoring 8 points in a single trade cycle." */
           cycleTarget: 8,
         },
+        // Which seat runs cargoes. The interface reads this rather than knowing
+        // the scenario's player ids, so the cargo-run controls appear for the one
+        // player who can actually use them.
+        cargoPlayer: MERCHANTS,
         inhabitedWorlds: inhabitedWorlds(),
         /** Worlds that have already received a cargo in the current cycle. */
         cycleDeliveries: [],

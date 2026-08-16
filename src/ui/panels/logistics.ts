@@ -10,15 +10,20 @@
 import { isDisabled } from '@engine/combat.js';
 import {
   RESUPPLY_ORDNANCE,
+  canCarry,
   canResupplyAt,
+  canTradeAt,
   cargoMass,
   cargoSpace,
+  equipmentCatalogue,
   fuelCapacity,
   hasUnlimitedFuel,
   matchedShips,
+  salePrice,
   surrenderedToSide,
 } from '@engine/logistics.js';
-import { CARGO, type CargoKind, SHIP_CLASSES } from '@engine/ships.js';
+import { CARGO, type CargoKind, SHIP_CLASSES, isCommercial } from '@engine/ships.js';
+import { cargoCount } from '@engine/state.js';
 import { type Ship, activePlayer, areAllied } from '@engine/types.js';
 import { type Child, button, el } from '../components/dom.js';
 import { bar, empty, note, section, statRow } from '../components/meters.js';
@@ -129,6 +134,10 @@ export const createLogisticsSection = (): LogisticsSection => {
           : null,
       ),
     );
+
+    // --- The p. 9 catalogue, the ore market, and the payroll ---------------
+
+    out.push(...marketSection(ctx, ship));
 
     // --- Course-matched neighbours ----------------------------------------
 
@@ -291,6 +300,135 @@ export const createLogisticsSection = (): LogisticsSection => {
 
     return out;
   };
+};
+
+/**
+ * The shop, the market and the strongbox, for a ship stopped at a base.
+ *
+ * Three separate printed rules share one panel because they share one situation:
+ * the ship is alongside and the hold is open. Each half only appears when it has
+ * something to offer — no empty shelf, no market at a world that does not buy.
+ */
+const marketSection = (ctx: Ctx, ship: Ship): Child[] => {
+  const { state, map, act } = ctx;
+  const by = activePlayer(state);
+  const trade = canTradeAt(state, ship, map);
+  if (!trade.ok || trade.baseId === undefined) return [];
+
+  const base = state.bases[trade.baseId];
+  if (!base) return [];
+  const purse = state.players[by]?.megacredits ?? 0;
+  const rows: Child[] = [];
+
+  // "Ships, equipment, ordnance, and other items are purchased for MegaCredits."
+  const stock = equipmentCatalogue(state).filter((kind) => canCarry(ship, kind, 1) === null);
+  if (stock.length > 0) {
+    rows.push(
+      el(
+        'div',
+        { class: 'chips' },
+        ...stock.map((kind) => {
+          const price = CARGO[kind].cost ?? 0;
+          return button({
+            label: `${CARGO[kind].name} · ${num(price)}`,
+            variant: 'quiet',
+            disabled: purse < price,
+            title:
+              purse < price
+                ? `MCr ${num(price)}; you have ${num(purse)}`
+                : `${CARGO[kind].remarks ?? CARGO[kind].name} — ${CARGO[kind].mass} t, MCr ${num(price)}`,
+            onClick: () =>
+              act.dispatch({ type: 'purchaseEquipment', by, ship: ship.id, kind, quantity: 1 }),
+          });
+        }),
+      ),
+    );
+  }
+
+  // "Ore may be sold at Ceres (MCr 2 per ton) or at Luna (MCr 3 per ton).
+  //  CT shards sell for MCr 100 at Ceres or MCr 200 at Luna."
+  const sellable = (['ore', 'ctShard'] as const)
+    .map((kind) => ({
+      kind,
+      held: cargoCount(ship, kind),
+      unit: salePrice(state, base, kind, map),
+    }))
+    .filter((row) => row.held > 0 && row.unit !== null);
+  if (sellable.length > 0) {
+    rows.push(
+      el(
+        'div',
+        { class: 'chips' },
+        ...sellable.map((row) =>
+          button({
+            label: `Sell ${num(row.held)} ${CARGO[row.kind].name} · ${num(row.held * row.unit!)}`,
+            variant: 'primary',
+            title: `MCr ${num(row.unit!)} per unit here`,
+            onClick: () =>
+              act.dispatch({
+                type: 'sellCargo',
+                by,
+                ship: ship.id,
+                kind: row.kind,
+                quantity: row.held,
+              }),
+          }),
+        ),
+      ),
+    );
+  }
+
+  // "The MCr may be transported only in commercial ships" — Interplanetary War.
+  const aboard = cargoCount(ship, 'megacredits');
+  if (isCommercial(ship.shipClass) && (purse > 0 || aboard > 0)) {
+    const room = Math.max(0, Math.floor(cargoSpace(ship) / CARGO.megacredits.mass));
+    const draw = Math.min(Math.floor(purse), room);
+    rows.push(
+      el(
+        'div',
+        { class: 'chips' },
+        draw > 0
+          ? button({
+              label: `Load MCr ${num(draw)}`,
+              variant: 'quiet',
+              title: 'One ton of hold per credit; only a commercial hull may carry it',
+              onClick: () =>
+                act.dispatch({
+                  type: 'loadCargo',
+                  by,
+                  ship: ship.id,
+                  kind: 'megacredits',
+                  quantity: draw,
+                }),
+            })
+          : null,
+        aboard > 0
+          ? button({
+              label: `Bank MCr ${num(aboard)}`,
+              variant: 'primary',
+              title: 'Money in the treasury is money you can spend',
+              onClick: () =>
+                act.dispatch({
+                  type: 'loadCargo',
+                  by,
+                  ship: ship.id,
+                  kind: 'megacredits',
+                  quantity: -aboard,
+                }),
+            })
+          : null,
+      ),
+    );
+  }
+
+  if (rows.length === 0) return [];
+  return [
+    section(
+      'Market',
+      note('info', `Alongside ${trade.baseId}. Treasury: MCr ${num(purse)}.`),
+      ...rows,
+    ),
+  ];
 };
 
 /** Fuel and hold read-outs, shown in every phase. */

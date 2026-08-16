@@ -13,6 +13,7 @@
 import { DEFAULT_MAP, type GameMap } from '@engine/map.js';
 import { registerCommandHook, registerTurnHook } from '@engine/reducer.js';
 import type { Command, CommandResult } from '@engine/commands.js';
+import { SHIP_CLASSES } from '@engine/ships.js';
 import type { GameState } from '@engine/types.js';
 
 import { biPlanetary } from './biPlanetary.js';
@@ -29,6 +30,7 @@ import type { BuildOptions, PlayerTemplate, ScenarioDef, ScenarioLength } from '
 
 export type { BuildOptions, PlayerTemplate, ScenarioDef, ScenarioLength };
 export * from './helpers.js';
+import { combatPointCost } from './helpers.js';
 
 export const SCENARIOS: readonly ScenarioDef[] = [
   biPlanetary,
@@ -130,13 +132,51 @@ export interface ScenarioSummary {
   readonly blurb: string;
   readonly length: string;
   readonly description: string;
+  /** Flattened `pointBuy`, ready for a buy screen that cannot import this table. */
+  readonly pointBuy?: {
+    readonly sides: readonly {
+      readonly id: string;
+      readonly name: string;
+      readonly budget: number;
+    }[];
+    readonly catalogue: readonly {
+      readonly id: string;
+      readonly name: string;
+      readonly cost: number;
+    }[];
+  };
 }
 
-export const SCENARIO_SUMMARIES: readonly ScenarioSummary[] = SCENARIOS.map((s) => ({
-  id: s.id,
-  name: s.name,
-  players: s.players.max,
-  blurb: s.blurb,
-  length: s.length,
-  description: s.description,
-}));
+/**
+ * "Ships are acquired on the basis of combat strength points... a liner costs 1
+ * point, a transport or tanker costs 1/2 point."
+ */
+const buyScreenFor = (s: ScenarioDef): ScenarioSummary['pointBuy'] => {
+  if (!s.pointBuy) return undefined;
+  const seats = s.playerTemplates;
+  return {
+    sides: Object.entries(s.pointBuy.budgets).map(([id, budget], i) => ({
+      id,
+      name: seats[i]?.faction ?? id,
+      budget,
+    })),
+    catalogue: s.pointBuy.classes.map((cls) => ({
+      id: cls,
+      name: SHIP_CLASSES[cls].name,
+      cost: combatPointCost(cls),
+    })),
+  };
+};
+
+export const SCENARIO_SUMMARIES: readonly ScenarioSummary[] = SCENARIOS.map((s) => {
+  const buy = buyScreenFor(s);
+  return {
+    id: s.id,
+    name: s.name,
+    players: s.players.max,
+    blurb: s.blurb,
+    length: s.length,
+    description: s.description,
+    ...(buy ? { pointBuy: buy } : {}),
+  };
+});
