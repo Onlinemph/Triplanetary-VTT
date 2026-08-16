@@ -13,11 +13,12 @@
  *     answers are all derivable from the course record each ship carries.
  */
 
+import { toPlane } from '@engine/geometry.js';
 import {
   type Hex,
   type HexSide,
   ORIGIN,
-  add,
+  hex,
   directionTo,
   distance,
   eq,
@@ -29,6 +30,7 @@ import {
   withinRadius,
 } from '@engine/hex.js';
 import { type GameMap } from '@engine/map.js';
+import { MAP_RADIUS } from '@engine/mapdata.js';
 import { type RngState, shuffle } from '@engine/rng.js';
 import { CARGO, SHIP_CLASSES, type CargoKind, type ShipClass } from '@engine/ships.js';
 import { ZERO, makePlayer, makeShip } from '@engine/state.js';
@@ -451,17 +453,31 @@ export const pickSpaced = (
   return { rng: shuffled.state, hexes: chosen };
 };
 
-/** Unit vector pointing from `from` toward `to`, or zero when they coincide. */
+/**
+ * Unit vector pointing from `from` toward `to`, or zero when they coincide.
+ *
+ * Hex distance is flat-topped: from most hexes two or three of the six
+ * directions reduce it by exactly one, and picking the first of them by index
+ * can end up 60° off the true bearing. Ties therefore break on the *geometric*
+ * heading — the direction whose plane vector best aligns with the real one —
+ * which is the step a player tracing a straight edge would take.
+ */
 export const stepToward = (from: Hex, to: Hex): Hex => {
   const d = distance(from, to);
   if (d === 0) return ZERO;
+  const bearing = toPlane(sub(to, from));
   let best = ZERO;
   let bestDistance = d;
+  let bestAlignment = -Infinity;
   for (let dir = 0; dir < 6; dir++) {
     const candidate = neighbor(from, dir);
     const cd = distance(candidate, to);
-    if (cd < bestDistance) {
+    if (cd > bestDistance) continue;
+    const unit = toPlane(sub(candidate, from));
+    const alignment = unit.x * bearing.x + unit.y * bearing.y;
+    if (cd < bestDistance || alignment > bestAlignment) {
       bestDistance = cd;
+      bestAlignment = alignment;
       best = sub(candidate, from);
     }
   }
@@ -472,9 +488,15 @@ export const stepToward = (from: Hex, to: Hex): Hex => {
  * Entry points along "the map edge closest to Jupiter", and the inward unit
  * vector an arriving fleet flies on.
  *
- * The chart is a disc centred on Sol, so "the edge closest to Jupiter" is the
- * arc the Sol-to-Jupiter ray runs out through. Walking that ray to the last
- * in-bounds hex fixes the arc; the entry hexes are the edge hexes nearest it.
+ * "Closest to Jupiter" is measured to Jupiter, not to a ray traced out past it:
+ * the rim is enumerated in full and sorted by its actual hex distance to the
+ * body. An earlier version walked outward from the target along `stepToward` and
+ * took the hexes nearest the resulting apex, which put the alien fleet 11-14
+ * hexes from Jupiter when the nearest rim hex is 7 — the ray's tie-break landed
+ * 60° off the true bearing and the arc followed it there.
+ *
+ * `inward` is the heading from the chosen arc back toward Sol, which is the
+ * course an arriving fleet flies at "a speed of one hex per turn".
  */
 export const edgeToward = (
   map: GameMap,
@@ -482,27 +504,30 @@ export const edgeToward = (
   count: number,
 ): { hexes: Hex[]; inward: Hex } => {
   const sol = map.body('sol')?.hex ?? ORIGIN;
-  const outward = stepToward(sol, toward);
-  const inward = { q: -outward.q, r: -outward.r };
 
-  let apex = toward;
-  while (map.inBounds(add(apex, outward))) apex = add(apex, outward);
-
-  // Everything within reach of the apex that is genuinely on the rim: in bounds,
-  // with the next step outward off the chart.
+  // The rim: in bounds, with at least one neighbour off the chart.
   const rim: Hex[] = [];
-  for (let dq = -8; dq <= 8; dq++) {
-    for (let dr = -8; dr <= 8; dr++) {
-      const h = add(apex, { q: dq, r: dr });
-      if (!map.inBounds(h) || map.inBounds(add(h, outward))) continue;
-      rim.push(h);
+  const span = MAP_RADIUS + 2;
+  for (let q = -span; q <= span; q++) {
+    for (let r = -span; r <= span; r++) {
+      const h = hex(q, r);
+      if (!map.inBounds(h)) continue;
+      for (let dir = 0; dir < 6; dir++) {
+        if (!map.inBounds(neighbor(h, dir))) {
+          rim.push(h);
+          break;
+        }
+      }
     }
   }
   rim.sort((a, b) => {
-    const d = distance(a, apex) - distance(b, apex);
+    const d = distance(a, toward) - distance(b, toward);
     return d !== 0 ? d : key(a).localeCompare(key(b));
   });
-  return { hexes: rim.slice(0, count), inward };
+
+  const hexes = rim.slice(0, Math.max(0, count));
+  const anchor = hexes[0] ?? toward;
+  return { hexes, inward: stepToward(anchor, sol) };
 };
 
 /**

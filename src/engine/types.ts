@@ -154,6 +154,16 @@ export interface Ship {
   readonly destroyed: boolean;
   /** How the ship was lost, for the log and after-action report. */
   readonly destroyedBy?: string;
+  /**
+   * Which side killed it, when a side did.
+   *
+   * Absent for a crash, a map-edge exit, or the asteroids — those are nobody's
+   * kill. Nova needs it for the printed base rule: "The EastBloc or the WestBloc
+   * wins by capturing or destroying the last Alien ship", where *which* bloc
+   * lands the blow decides who wins, and "when one player wins, both others
+   * lose."
+   */
+  readonly destroyedByPlayer?: PlayerId;
 
   /** Flags set during a player-turn and cleared at its end. */
   readonly firedThisPhase: boolean;

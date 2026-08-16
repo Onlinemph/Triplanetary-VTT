@@ -715,19 +715,20 @@ const applyOther = (
   roll: number,
   target: ShipId,
   cause: string,
+  by?: PlayerId,
 ): GameState => {
   if (state.options.advancedCombat) {
-    return applyAdvancedHits(state, target, otherToHit(kind, roll), cause).state;
+    return applyAdvancedHits(state, target, otherToHit(kind, roll), cause, by).state;
   }
-  return applyDamage(state, target, otherDamage(kind, roll), cause);
+  return applyDamage(state, target, otherDamage(kind, roll), cause, by);
 };
 
 /** Did this roll actually hurt the target? Used for the torpedo's single hit. */
 const scored = (state: GameState, kind: OtherAttackKind, roll: number): boolean =>
   state.options.advancedCombat ? otherToHit(kind, roll) > 0 : otherDamage(kind, roll) !== null;
 
-const destroyShip = (state: GameState, id: ShipId, cause: string): GameState =>
-  applyDamage(state, id, 'E' as DamageResult, cause);
+const destroyShip = (state: GameState, id: ShipId, cause: string, by?: PlayerId): GameState =>
+  applyDamage(state, id, 'E' as DamageResult, cause, by);
 
 // ---------------------------------------------------------------------------
 // Detonation
@@ -880,7 +881,7 @@ export function detonate(
       if (!current || current.destroyed) continue;
       const roll = rollDie(s.rng);
       s = { ...s, rng: roll.state };
-      s = applyOther(s, 'mine', roll.value, victim.id, cause);
+      s = applyOther(s, 'mine', roll.value, victim.id, cause, item.owner);
     }
     return { state: sweepStruck(drop(s, id)), consumed: true };
   }
@@ -901,7 +902,7 @@ export function detonate(
     const roll = rollDie(s.rng);
     s = { ...s, rng: roll.state };
     const damaged = scored(s, 'torpedo', roll.value);
-    s = applyOther(s, 'torpedo', roll.value, victimId, cause);
+    s = applyOther(s, 'torpedo', roll.value, victimId, cause, item.owner);
     if (damaged) {
       hit = true;
       break;
@@ -1067,6 +1068,8 @@ export interface PendingDevastation {
   readonly cause: string;
   readonly candidates: readonly HexSide[];
   readonly sufferer: PlayerId;
+  /** Who launched the warhead, so the kills are credited across the pause. */
+  readonly by: PlayerId;
 }
 
 export const pendingDevastation = (state: GameState): PendingDevastation | null => {
@@ -1089,6 +1092,7 @@ const applyDevastation = (
   side: HexSide,
   cause: string,
   nukeName: string,
+  by: PlayerId,
 ): GameState => {
   const k = sideKey(side);
   let s = log(state, `${nukeName} strikes ${bodyName} and devastates hexside ${side.dir}.`, {
@@ -1108,7 +1112,7 @@ const applyDevastation = (
   for (const ship of shipsInHex(s, at).sort(byId)) {
     const landedElsewhere = ship.location.kind === 'landed' && sideKey(ship.location.side) !== k;
     if (landedElsewhere) continue;
-    s = destroyShip(s, ship.id, cause);
+    s = destroyShip(s, ship.id, cause, by);
   }
   for (const other of ordnanceInHex(s, at).sort(byId)) {
     s = discard(s, other.id, `is destroyed by ${nukeName}`);
@@ -1141,6 +1145,7 @@ export function chooseDevastatedSide(
     chosen,
     pending.cause,
     pending.cause,
+    pending.by,
   );
   return { state: s, result: { ok: true } };
 }
@@ -1162,6 +1167,7 @@ export function resolvePendingDevastation(state: GameState): GameState {
     side,
     pending.cause,
     pending.cause,
+    pending.by,
   );
 }
 
@@ -1194,6 +1200,7 @@ const detonateNuke = (
         cause: ordnanceLabel(nuke),
         candidates,
         sufferer,
+        by: nuke.owner,
       };
       s = log(
         s,
@@ -1208,7 +1215,7 @@ const detonateNuke = (
       };
     }
 
-    s = applyDevastation(s, at, body.name, candidates[0]!, cause, ordnanceLabel(nuke));
+    s = applyDevastation(s, at, body.name, candidates[0]!, cause, ordnanceLabel(nuke), nuke.owner);
     return { state: s, consumed: true };
   }
 
@@ -1223,7 +1230,7 @@ const detonateNuke = (
   if (opts.triggeringShip !== undefined && !caught.includes(opts.triggeringShip)) {
     caught.push(opts.triggeringShip);
   }
-  for (const shipId of caught.sort()) s = destroyShip(s, shipId, cause);
+  for (const shipId of caught.sort()) s = destroyShip(s, shipId, cause, nuke.owner);
 
   // "mines, torpedoes, and nukes automatically destroy mines and are themselves
   // destroyed" — nothing survives the fireball.

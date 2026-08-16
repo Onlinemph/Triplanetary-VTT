@@ -444,8 +444,12 @@ export function previewAttack(
 // Damage application
 // ---------------------------------------------------------------------------
 
-const destroy = (state: GameState, ship: Ship, cause: string): GameState => {
-  const next = updateShip(state, ship.id, { destroyed: true, destroyedBy: cause });
+const destroy = (state: GameState, ship: Ship, cause: string, by?: PlayerId): GameState => {
+  const next = updateShip(state, ship.id, {
+    destroyed: true,
+    destroyedBy: cause,
+    ...(by !== undefined ? { destroyedByPlayer: by } : {}),
+  });
   return log(next, `${shipLabel(ship)} destroyed by ${cause}.`, {
     severity: 'bad',
     focus: [ship.pos],
@@ -464,6 +468,7 @@ export function applyDamage(
   target: ShipId,
   result: DamageResult,
   cause: string,
+  by?: PlayerId,
 ): GameState {
   const ship = state.ships[target];
   if (!ship || ship.destroyed) return state;
@@ -471,7 +476,7 @@ export function applyDamage(
 
   if (result === 'E') {
     // "E – Eliminated. The target ship is destroyed."
-    return destroy(state, ship, cause);
+    return destroy(state, ship, cause, by);
   }
 
   const total = ship.disabled + result;
@@ -509,6 +514,7 @@ const applyHitTotals = (
   target: ShipId,
   totals: HitTotals,
   cause: string,
+  by?: PlayerId,
 ): GameState => {
   const ship = state.ships[target];
   if (!ship || ship.destroyed) return state;
@@ -529,7 +535,7 @@ const applyHitTotals = (
   });
 
   if (structure >= ADVANCED_TRACK_LIMIT) {
-    return destroy(next, ship, `${cause} (structural failure)`);
+    return destroy(next, ship, `${cause} (structural failure)`, by);
   }
   if (drive >= ADVANCED_TRACK_LIMIT && ship.advancedDamage.drive < ADVANCED_TRACK_LIMIT) {
     // "may not be repaired; it will be lost when it reaches the edge of the map."
@@ -558,6 +564,7 @@ export function applyAdvancedHits(
   target: ShipId,
   hits: number,
   cause: string,
+  by?: PlayerId,
 ): { state: GameState } {
   if (hits <= 0) return { state };
   let rng = state.rng;
@@ -572,7 +579,7 @@ export function applyAdvancedHits(
       structure: totals.structure + loc.structure,
     };
   }
-  return { state: applyHitTotals({ ...state, rng }, target, totals, cause) };
+  return { state: applyHitTotals({ ...state, rng }, target, totals, cause, by) };
 }
 
 // ---------------------------------------------------------------------------
@@ -852,8 +859,8 @@ const applyPending = (state: GameState, pending: PendingAttack): GameState => {
   let next = state;
   for (const d of pending.damage) {
     next = d.advanced
-      ? applyHitTotals(next, d.target, d.advanced, pending.cause)
-      : applyDamage(next, d.target, d.result, pending.cause);
+      ? applyHitTotals(next, d.target, d.advanced, pending.cause, pending.by)
+      : applyDamage(next, d.target, d.result, pending.cause, pending.by);
   }
   return next;
 };
@@ -1049,8 +1056,8 @@ export function resolveCounterattack(
   next = clearPending(next);
   for (const d of rolled.damage) {
     next = d.advanced
-      ? applyHitTotals(next, d.target, d.advanced, cause)
-      : applyDamage(next, d.target, d.result, cause);
+      ? applyHitTotals(next, d.target, d.advanced, cause, cmd.by)
+      : applyDamage(next, d.target, d.result, cause, cmd.by);
   }
 
   return { state: next, result: { ok: true } };
@@ -1154,8 +1161,8 @@ export function firePlanetaryDefence(
   const cause = `planetary defences at ${base.id}`;
   for (const d of rolled.damage) {
     next = d.advanced
-      ? applyHitTotals(next, d.target, d.advanced, cause)
-      : applyDamage(next, d.target, d.result, cause);
+      ? applyHitTotals(next, d.target, d.advanced, cause, owner)
+      : applyDamage(next, d.target, d.result, cause, owner);
   }
   return { state: next, result: { ok: true } };
 }

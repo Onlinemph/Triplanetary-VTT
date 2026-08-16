@@ -16,6 +16,7 @@
 
 import type { Command, CommandResult } from '@engine/commands.js';
 import type { GameMap } from '@engine/map.js';
+import type { ShipClass } from '@engine/ships.js';
 import type { GameOptions, GameState, VictoryState } from '@engine/types.js';
 
 /** Rulebook shorthand for how long a scenario runs. */
@@ -38,6 +39,25 @@ export interface BuildOptions {
   /** Player names in seat order; blanks fall back to the template's default. */
   readonly playerNames?: readonly string[];
   readonly options?: Partial<GameOptions>;
+  /**
+   * Fleets bought with combat strength points, by player id.
+   *
+   * The p. 9 point system is a *setup* rule — "Both the EastBloc and the
+   * WestBloc players select fleets of 50 combat points each" — so the choice has
+   * to arrive with the build, not as a command inside the game. A scenario that
+   * prices its opening fleet in points advertises the budget through
+   * `pointBuy`; anything it is not given falls back to a printed default, so a
+   * caller that does not care can ignore this entirely.
+   */
+  readonly fleets?: Readonly<Record<string, readonly ShipClass[]>>;
+}
+
+/** A scenario's opening point-buy: who has a budget, and how much. */
+export interface PointBuy {
+  /** Budget per player id, in combat strength points. */
+  readonly budgets: Readonly<Record<string, number>>;
+  /** Hulls this scenario will sell at setup. */
+  readonly classes: readonly ShipClass[];
 }
 
 export interface ScenarioDef {
@@ -71,6 +91,14 @@ export interface ScenarioDef {
     cmd: Command,
     map: GameMap,
   ): { state: GameState; result: CommandResult } | null;
+  /**
+   * The opening fleets this scenario prices in combat strength points, if any.
+   *
+   * Present only for scenarios that say so — Nova's "fleets of 50 combat points
+   * each". A setup screen reads it, offers the catalogue, and hands the result
+   * back through `BuildOptions.fleets`.
+   */
+  readonly pointBuy?: PointBuy;
   /** Rules that apply only to this scenario, quoted for the help panel. */
   readonly specialRules?: readonly string[];
 }

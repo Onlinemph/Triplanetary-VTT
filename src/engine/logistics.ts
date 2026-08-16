@@ -386,6 +386,34 @@ export const ordnanceDeniedReason = (
 };
 
 /**
+ * Which base, if any, this ship may *trade* with — buy, sell, load, unload.
+ *
+ * Refuelling and ordnance resupply happen from orbit under the standard rules:
+ * "The ship must either land on the world in the same hex side as the base, or
+ * pass through the gravity hex directly above the base's hex side while in
+ * orbit." Cargo is different. Freight has to be physically handed over, so it
+ * needs the ship to be *at* the base — landed, stopped on the rock, or matched
+ * with an orbital base, which exists to "resupply friendly ships" and carries
+ * "an unlimited fuel store and cargo hold" for the purpose.
+ *
+ * The p. 15 variant is precisely the rule that lifts this: "Cargo can be
+ * delivered to orbit, which speeds commerce! The ship does not land, but makes
+ * delivery, and picks up new cargo, on the turn it enters orbit. This saves fuel
+ * and precious time." With the variant on, orbit is enough anywhere.
+ */
+export function canTradeAt(state: GameState, ship: Ship, map: GameMap): ResupplyCheck {
+  const check = canResupplyAt(state, ship, map);
+  if (!check.ok || check.baseId === undefined) return check;
+  if (state.options.orbitalBasesVariant) return check;
+  if (ship.location.kind === 'landed' || ship.location.kind === 'asteroidBase') return check;
+  if (state.bases[check.baseId]?.kind === 'orbital') return check;
+  return {
+    ok: false,
+    reason: 'cargo has to be handed over at the base — land, or play the orbital bases variant',
+  };
+}
+
+/**
  * Which base, if any, this ship may resupply from: one it has matched courses
  * with, and one the scenario has not closed to it.
  */
@@ -1198,7 +1226,7 @@ export function purchaseEquipment(
     );
   }
 
-  const check = canResupplyAt(state, ship, map);
+  const check = canTradeAt(state, ship, map);
   if (!check.ok) return reject(state, check.reason ?? 'not at a base');
 
   const objection = canCarry(ship, kind, quantity);
@@ -1247,7 +1275,7 @@ export function sellCargo(
   const seller = state.players[controllerOf(ship)];
   if (!seller) return reject(state, 'no such player');
 
-  const check = canResupplyAt(state, ship, map);
+  const check = canTradeAt(state, ship, map);
   if (!check.ok || check.baseId === undefined)
     return reject(state, check.reason ?? 'not at a base');
   const base = state.bases[check.baseId]!;
@@ -1317,7 +1345,7 @@ export function loadCargo(
     return reject(state, 'quantity must be a whole number of credits');
   }
 
-  const check = canResupplyAt(state, ship, map);
+  const check = canTradeAt(state, ship, map);
   if (!check.ok || check.baseId === undefined) {
     return reject(state, check.reason ?? 'not at a base');
   }

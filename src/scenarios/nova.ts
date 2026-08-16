@@ -95,6 +95,37 @@ const EAST_FLEET: readonly ShipClass[] = [
   'packet', // 2 -> 50
 ];
 
+/**
+ * Hulls a bloc may buy at setup.
+ *
+ * The whole printed ship table except the orbital base, which is emplaced from a
+ * hold rather than fielded, and the robot-guard emplacement, which is equipment.
+ */
+export const NOVA_BUY_CLASSES: readonly ShipClass[] = (Object.keys(SHIP_CLASSES) as ShipClass[])
+  .filter((c) => c !== 'orbitalBase' && !SHIP_CLASSES[c].emplacement)
+  .sort((a, b) => combatPointCost(b) - combatPointCost(a) || a.localeCompare(b));
+
+/** Points a fleet costs: "a liner costs 1 point, a transport or tanker 1/2 point." */
+export const fleetCost = (fleet: readonly ShipClass[]): number =>
+  fleet.reduce((n, c) => n + combatPointCost(c), 0);
+
+/**
+ * A chosen fleet, if it is one this scenario would actually sell; otherwise the
+ * printed default.
+ *
+ * Rejects rather than trims: a fleet that busts the budget is a bug in whatever
+ * built it, and silently deleting the last frigate would be a worse answer than
+ * starting from the book's own list.
+ */
+const affordableFleet = (
+  chosen: readonly ShipClass[] | undefined,
+  fallback: readonly ShipClass[],
+): readonly ShipClass[] => {
+  if (!chosen || chosen.length === 0) return fallback;
+  if (chosen.some((c) => !NOVA_BUY_CLASSES.includes(c))) return fallback;
+  return fleetCost(chosen) <= COMBAT_POINT_ALLOWANCE ? chosen : fallback;
+};
+
 /** "1=Venus, 2=Mars, 3=Ceres, 4=Callisto, 5=Clandestine, and 6=Mercury." */
 const COLONY_TABLE: readonly string[] = [
   'venus',
@@ -177,8 +208,12 @@ const build = (opts: BuildOptions): GameState => {
     });
   };
 
-  placeFleet(WEST, WEST_FLEET);
-  placeFleet(EAST, EAST_FLEET);
+  // "Both the EastBloc and the WestBloc players select fleets of 50 combat
+  // points each." A caller that has run the buy screen hands the selection in;
+  // anything over budget, unsellable, or simply absent falls back to the printed
+  // default fleet, so a build can never start from an illegal position.
+  placeFleet(WEST, affordableFleet(opts.fleets?.[WEST], WEST_FLEET));
+  placeFleet(EAST, affordableFleet(opts.fleets?.[EAST], EAST_FLEET));
 
   // "they may enter at any point along the map edge closest to Jupiter at a speed
   // of one hex per turn."
@@ -267,17 +302,26 @@ const checkVictory = (state: GameState): VictoryState | null => {
   const stillFlying = aliens.filter(
     (s) => !s.destroyed && s.capturedBy === undefined && s.owner === ALIEN,
   );
-  if (aliens.length > 0 && stillFlying.length === 0) {
-    // Variant, and the more interesting reading of the two: "a human decisive
-    // victory goes only to a force that captures an Alien vessel and returns it
-    // to a friendly base. Both human Blocs may therefore win." A prize that has
-    // reached a friendly base has changed owner.
-    const claimants = [WEST, EAST].filter((bloc) =>
+  if (aliens.length === 0 || stillFlying.length > 0) return null;
+
+  // A hull taken home for study has changed hands; one still under a prize crew
+  // has been captured but not yet redeemed. Both count as "capturing".
+  const captors = [WEST, EAST].filter((bloc) =>
+    aliens.some((s) => !s.destroyed && (s.owner === bloc || s.capturedBy === bloc)),
+  );
+
+  // The printed variant: "Both the EastBloc and the WestBloc win marginal
+  // victories if all Aliens are destroyed. However, a human decisive victory
+  // goes only to a force that captures an Alien vessel and returns it to a
+  // friendly base. Both human Blocs may therefore win." Off by default — it is
+  // printed as a variant, not as the rule.
+  if (state.scenarioData['novaSharedVictory'] === true) {
+    const redeemed = [WEST, EAST].filter((bloc) =>
       aliens.some((s) => !s.destroyed && s.owner === bloc),
     );
-    if (claimants.length > 0) {
+    if (redeemed.length > 0) {
       return victory(
-        claimants,
+        redeemed,
         'decisive',
         'The alien fleet is broken and a hull has been taken home for study.',
       );
@@ -289,7 +333,36 @@ const checkVictory = (state: GameState): VictoryState | null => {
     );
   }
 
-  return null;
+  // The base rule. "When one player wins, both others lose", so the win belongs
+  // to whichever bloc actually finished the last alien — not to both.
+  //
+  // The last alien is the one that stopped flying last; with the fleet already
+  // wiped out, the one to look at is whichever was killed or taken most
+  // recently. Captures are unordered, so a captor takes precedence: a hull under
+  // a prize crew is a live claim, while a kill is a finished one.
+  if (captors.length === 1) {
+    return victory([captors[0]!], 'decisive', 'The last alien ship has been taken intact.');
+  }
+  const killers = new Set(
+    aliens.map((s) => s.destroyedByPlayer).filter((id): id is PlayerId => id !== undefined),
+  );
+  const blocKillers = [WEST, EAST].filter((bloc) => killers.has(bloc));
+  if (captors.length === 0 && blocKillers.length === 1) {
+    return victory(
+      [blocKillers[0]!],
+      'decisive',
+      'The last alien ship is destroyed. The System survives.',
+    );
+  }
+
+  // Nobody's kill to claim — the fleet came apart on the asteroids, off the map
+  // edge, or under both blocs' guns at once. The System still survives, and both
+  // human players share the credit.
+  return victory(
+    captors.length > 0 ? captors : [WEST, EAST],
+    'marginal',
+    'The alien fleet is gone, with no single bloc able to claim the last kill.',
+  );
 };
 
 export const nova: ScenarioDef = {
@@ -308,6 +381,13 @@ export const nova: ScenarioDef = {
   playerTemplates: templatesOf(SPECS),
   build,
   checkVictory,
+  // "Both the EastBloc and the WestBloc players select fleets of 50 combat
+  // points each." The setup screen reads this and hands the answer back through
+  // `BuildOptions.fleets`.
+  pointBuy: {
+    budgets: { [WEST]: COMBAT_POINT_ALLOWANCE, [EAST]: COMBAT_POINT_ALLOWANCE },
+    classes: NOVA_BUY_CLASSES,
+  },
   specialRules: [
     'Each bloc selects a fleet of 50 combat points. Commercial ships cost half their printed strength: a liner 1 point, a transport or tanker half a point.',
     'The EastBloc selects three adjacent Terran hexsides; the WestBloc gets the other three. The WestBloc then selects one Luna hexside, the EastBloc any other. Each side rolls a die for its farther colony: 1=Venus, 2=Mars, 3=Ceres, 4=Callisto, 5=Clandestine, 6=Mercury, rerolling ties. That colony has only one base.',

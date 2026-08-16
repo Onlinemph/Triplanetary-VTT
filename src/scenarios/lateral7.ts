@@ -232,8 +232,8 @@ const build = (opts: BuildOptions): GameState => {
       [LATERAL7_DUMMIES_KEY]: dummies,
       dummyAssignments: assignments,
       // "The dreadnaught, however, may not move until a pirate is detected by a
-      // ship or a base."
-      dreadnaughtHeldUntilContact: 'tycho-brahe',
+      // ship or a base." Read by `movement.ts` → `heldForContact`.
+      heldUntilContact: ['tycho-brahe'],
       // "Because ship sailings are published, the pirate knows the location of
       // the liner." Detection alone would not give the pirate that, so the
       // liner is declared permanently visible to them; see src/net/redact.ts.

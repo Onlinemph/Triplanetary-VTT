@@ -489,6 +489,9 @@ const checkPlot = (
   if (ship.fuel < accel) {
     return fail(`${shipLabel(ship)} has only ${ship.fuel} fuel point(s) remaining`);
   }
+  // A scenario may confine a ship to a beat; see `leashBroken`.
+  const leash = leashBroken(state, ship, endpoint, map);
+  if (leash) return fail(leash);
   return { ok: true, accel, ship, base };
 };
 
@@ -541,7 +544,92 @@ const authorise = (
   }
   if (by !== activePlayer(state)) return { reason: 'it is not your player-turn' };
   if (by !== controllerOf(ship)) return { reason: `${shipLabel(ship)} is not under your command` };
+  const held = heldForContact(state, ship);
+  if (held) return { reason: held };
   return { ship };
+};
+
+/** A scenario's leash: ships confined to the neighbourhood of certain worlds. */
+interface HeldNear {
+  readonly ships: readonly string[];
+  readonly worlds: readonly string[];
+  /** Hexes from the world's centre. Defaults to a planetary base's detector range. */
+  readonly range?: number;
+}
+
+/** "All ships and bases have detectors" — five hexes for a planetary base (p. 8). */
+const PLANETARY_DETECTOR_RANGE = 5;
+
+const heldNear = (state: GameState): HeldNear | null => {
+  const raw = state.scenarioData['heldNear'];
+  if (typeof raw !== 'object' || raw === null) return null;
+  const v = raw as Partial<HeldNear>;
+  return Array.isArray(v.ships) && Array.isArray(v.worlds)
+    ? { ships: v.ships, worlds: v.worlds, ...(v.range !== undefined ? { range: v.range } : {}) }
+    : null;
+};
+
+/**
+ * Would this course take a leashed ship off its beat?
+ *
+ * Retribution: "Ships on Terra Security Patrol may not venture beyond detector
+ * range of Terra or Luna until after the Freedom Fleet has been formed." The
+ * whole course is checked, not just its endpoint — a ship cannot slingshot out
+ * past Mars and back inside one turn and call it staying home.
+ *
+ * Returns the refusal, or `null`.
+ */
+export const leashBroken = (
+  state: GameState,
+  ship: Ship,
+  endpoint: Hex,
+  map: GameMap,
+): string | null => {
+  const leash = heldNear(state);
+  if (!leash || !leash.ships.includes(ship.id)) return null;
+  const range = leash.range ?? PLANETARY_DETECTOR_RANGE;
+
+  const anchors = leash.worlds
+    .map((id) => map.body(id))
+    .filter((b): b is AstralBody => b !== undefined);
+  if (anchors.length === 0) return null;
+
+  const inside = (h: Hex): boolean => anchors.some((b) => distance(h, b.hex) <= range);
+  const path = traceSegment(ship.pos, endpoint).entered;
+  if (path.every(inside)) return null;
+
+  const names = anchors.map((b) => b.name).join(' or ');
+  return `${shipLabel(ship)} is confined to detector range of ${names}`;
+};
+
+/**
+ * Ships a scenario has ordered to sit still until the enemy shows itself.
+ *
+ * Lateral 7: "The dreadnaught, however, may not move until a pirate is detected
+ * by a ship or a base." `scenarioData.heldUntilContact` lists the hulls under
+ * that standing order; the order lifts the moment *any* enemy is detected by the
+ * holding side, which is exactly what "by a ship or a base" means — detection is
+ * a fleet-wide fact, not a per-hull one.
+ *
+ * Returns the refusal, or `null` if the ship is free to fly.
+ */
+export const heldForContact = (state: GameState, ship: Ship): string | null => {
+  const raw = state.scenarioData['heldUntilContact'];
+  const held = Array.isArray(raw)
+    ? raw.filter((x): x is string => typeof x === 'string')
+    : typeof raw === 'string'
+      ? [raw]
+      : [];
+  if (!held.includes(ship.id)) return null;
+
+  const side = controllerOf(ship);
+  const contact = Object.values(state.ships).some(
+    (other) =>
+      !other.destroyed &&
+      !areAllied(state, side, controllerOf(other)) &&
+      other.detectedBy.some((viewer) => areAllied(state, side, viewer)),
+  );
+  return contact ? null : `${shipLabel(ship)} may not move until the enemy is detected`;
 };
 
 /** Commit this turn's course, charging fuel. */
