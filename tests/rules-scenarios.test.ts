@@ -121,12 +121,20 @@ const at = (s: GameState, phase: GameState['phase'], who: string): GameState => 
   throw new Error(`never reached ${phase} for ${who}`);
 };
 
-/** Whole turns, all seats. */
+/**
+ * Whole turns, all seats — stopping the moment somebody wins.
+ *
+ * A finished game refuses every order, which is correct: `applyCommand` turns
+ * away anything once `state.victory` is set. Advancing past that point is not
+ * something a caller can want, so this returns the winning state rather than
+ * throwing "the game is over" from inside a clock helper.
+ */
 const turns = (s: GameState, n: number): GameState => {
   let cur = s;
   const phases = 5 * cur.playerOrder.length;
   for (let t = 0; t < n; t++) {
     for (let i = 0; i < phases; i++) {
+      if (cur.victory) return cur;
       const out = run(cur, { type: 'endPhase', by: cur.playerOrder[cur.activePlayerIndex]! });
       if (!out.ok) throw new Error(out.why ?? 'phase machine stalled');
       cur = out.state;
@@ -1352,13 +1360,35 @@ describe('Retribution (pp. 11-12)', () => {
     // And the rebellion can actually be spent, which is what the Enforcer win
     // is gated on. Shoot each corvette down as it appears.
     let cur = later;
-    for (let i = 0; i < 12 && checkScenarioVictory(cur) === null; i++) {
+    for (let i = 0; i < 12 && cur.victory === null; i++) {
       for (const rebel of live(cur, 'sons-of-liberty')) {
         cur = patch(cur, rebel.id, { destroyed: true, destroyedBy: 'gunfire' });
       }
       cur = turns(cur, 1);
     }
-    expect(checkScenarioVictory(cur)?.winners).toEqual(['enforcers']);
+    // Read off the state, not by calling the checker: the point is that the
+    // reducer declares the winner on its own, without anybody asking.
+    expect(cur.victory?.winners).toEqual(['enforcers']);
+  });
+
+  it('declares the winner through the reducer, without anybody calling the checker', () => {
+    // The wiring, not the condition. Every scenario's `checkVictory` was written,
+    // exported and tested by direct call for a long time while nothing had
+    // registered it with the reducer — so no game ever ended on its own. Calling
+    // the function proves the function; only playing a game proves the wiring.
+    const s0 = build('retribution');
+    let cur = s0;
+    for (const rebel of live(cur, 'sons-of-liberty')) {
+      cur = patch(cur, rebel.id, { destroyed: true, destroyedBy: 'gunfire' });
+    }
+    for (const boss of live(cur, 'enforcers')) {
+      cur = patch(cur, boss.id, { destroyed: true, destroyedBy: 'gunfire' });
+    }
+    expect(cur.victory).toBeNull();
+    // "The Sons of Liberty win by destroying the Enforcer fleet."
+    const out = run(cur, { type: 'endPhase', by: cur.playerOrder[cur.activePlayerIndex]! });
+    expect(out.ok).toBe(true);
+    expect(out.state.victory?.winners).toEqual(['sons-of-liberty']);
   });
 
   it('gives the Enforcers every base but Clandestine, with defences only on Terra and Luna', () => {

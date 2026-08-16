@@ -31,7 +31,7 @@ import {
 import { type Ship, activePlayer, areAllied, liveShips } from '@engine/types.js';
 import { type Child, button, el, toggle } from '../components/dom.js';
 import { note, section, statRow } from '../components/meters.js';
-import { hexText, shipLabel, vectorText } from '../format.js';
+import { hexText, num, shipLabel, vectorText } from '../format.js';
 import type { Ctx } from '../viewmodel.js';
 
 export const astrogationActions = (ctx: Ctx, ship: Ship): Child[] => {
@@ -131,7 +131,9 @@ export const astrogationActions = (ctx: Ctx, ship: Ship): Child[] => {
       statRow('Endpoint', hexText(shown)),
       statRow('Next vector', vectorText(preview.velocity)),
       statRow('Fuel burned', String(preview.accel)),
-      statRow('Fuel after', String(preview.fuelAfter)),
+      // `num` renders a torch's unlimited tank as ∞, the way every other fuel
+      // read-out in the interface does. `String()` printed "Infinity".
+      statRow('Fuel after', num(preview.fuelAfter)),
       preview.orbitBody
         ? statRow(
             'Result',

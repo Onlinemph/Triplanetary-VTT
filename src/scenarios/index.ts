@@ -11,7 +11,7 @@
  */
 
 import { DEFAULT_MAP, type GameMap } from '@engine/map.js';
-import { registerCommandHook, registerTurnHook } from '@engine/reducer.js';
+import { registerCommandHook, registerTurnHook, registerVictoryCheck } from '@engine/reducer.js';
 import type { Command, CommandResult } from '@engine/commands.js';
 import { SHIP_CLASSES } from '@engine/ships.js';
 import type { GameState } from '@engine/types.js';
@@ -19,6 +19,7 @@ import type { GameState } from '@engine/types.js';
 import { biPlanetary } from './biPlanetary.js';
 import { escape } from './escape.js';
 import { fleetMutiny } from './fleetMutiny.js';
+import { flightSchool } from './flightSchool.js';
 import { grandTour } from './grandTour.js';
 import { interplanetaryWar } from './interplanetaryWar.js';
 import { lateral7 } from './lateral7.js';
@@ -33,6 +34,9 @@ export * from './helpers.js';
 import { combatPointCost } from './helpers.js';
 
 export const SCENARIOS: readonly ScenarioDef[] = [
+  // Not from the rulebook, and first on the list on purpose: it is the one to
+  // fly before any of the printed scenarios.
+  flightSchool,
   biPlanetary,
   grandTour,
   escape,
@@ -46,6 +50,7 @@ export const SCENARIOS: readonly ScenarioDef[] = [
 ];
 
 export {
+  flightSchool,
   biPlanetary,
   grandTour,
   escape,
@@ -112,7 +117,16 @@ export const applyScenarioCommand = (
 
 // The engine cannot import this table — the scenarios import *it* — so the
 // callbacks it needs are handed over as this module loads. Anything that can
-// build a scenario has therefore already registered its upkeep and its orders.
+// build a scenario has therefore already registered them, which is the property
+// that matters: there is no separate wiring step for an app to forget.
+//
+// `registerVictoryCheck` in particular was missing for a long time. Every
+// scenario's `checkVictory` was written, exported and tested — by calling it
+// directly — and never once ran inside a real game, because nothing had handed
+// it to the reducer. A test that calls a function proves the function; only a
+// test that plays a game proves the wiring, and `tests/rules-scenarios.test.ts`
+// now does both.
+registerVictoryCheck(checkScenarioVictory);
 registerTurnHook(applyScenarioTurn);
 for (const s of SCENARIOS) {
   if (s.handleCommand) registerCommandHook(s.id, applyScenarioCommand);

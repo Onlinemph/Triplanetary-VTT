@@ -1992,8 +1992,36 @@ kbd {
 /* Each side gets its own block so two budgets never read as one running total. */
 .buy-side {
   padding: 8px 0;
-  border-top: 1px solid var(--line);
+  border-top: 1px solid var(--hair);
 }
 .buy-side:first-of-type {
   border-top: 0;
+}
+
+/* --- Flight School course card ------------------------------------------- */
+/* A checklist, not a list of buttons: the eye should land on the step you are
+   on, so finished steps recede and the current one keeps its full contrast. */
+.course-step {
+  padding: 4px 0;
+}
+.course-step + .course-step {
+  border-top: 1px solid var(--hair);
+}
+.course-tick {
+  display: inline-block;
+  width: 1.1em;
+  font-family: var(--mono);
+  color: var(--ink-faint);
+}
+.course-step.is-done .course-name {
+  color: var(--ink-faint);
+}
+.course-step.is-done .course-tick {
+  color: var(--good);
+}
+.course-step.is-current .course-name {
+  font-weight: 600;
+}
+.course-step.is-current .course-tick {
+  color: var(--accent);
 }

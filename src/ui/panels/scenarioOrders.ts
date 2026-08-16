@@ -16,9 +16,11 @@
 import { combatStrength } from '@engine/combat.js';
 import { DEFAULT_MAP } from '@engine/map.js';
 import { cargoCount } from '@engine/state.js';
+import { FLIGHT_SCHOOL_EXERCISES, flightSchoolProgress } from '../../scenarios/flightSchool.js';
+import { fuelBurned } from '../../scenarios/helpers.js';
 import { type GameState, type Ship, activePlayer, controllerOf } from '@engine/types.js';
 import { type Child, button, el } from '../components/dom.js';
-import { note, section } from '../components/meters.js';
+import { note, section, statRow } from '../components/meters.js';
 import type { Ctx } from '../viewmodel.js';
 
 const piracyData = (state: GameState): Record<string, unknown> =>
@@ -197,8 +199,58 @@ const retributionSection = (ctx: Ctx, ship: Ship): Child[] => {
   return rows.length > 0 ? [section('Freedom Fleet', ...rows)] : [];
 };
 
+/**
+ * Flight School's course card.
+ *
+ * The only "order" here is knowing what to do next, so this is a checklist
+ * rather than a row of buttons: every exercise, in order, with the rulebook
+ * clause it teaches and — for the one you are on — how to actually fly it. The
+ * hint for a finished exercise is folded away; the hint for the next one is the
+ * whole point of the panel.
+ */
+const flightSchoolSection = (ctx: Ctx): Child[] => {
+  const { state } = ctx;
+  const progress = flightSchoolProgress(state);
+  if (state.scenarioId !== 'flight-school') return [];
+
+  const done = new Set(progress.done);
+  const next = FLIGHT_SCHOOL_EXERCISES.find((e) => !done.has(e.id));
+  const burned = Object.values(state.ships).reduce((n, s) => n + fuelBurned(s), 0);
+
+  return [
+    section(
+      'Course card',
+      ...FLIGHT_SCHOOL_EXERCISES.map((exercise) => {
+        const finished = done.has(exercise.id);
+        const current = next?.id === exercise.id;
+        return el(
+          'div',
+          { class: `course-step${finished ? ' is-done' : ''}${current ? ' is-current' : ''}` },
+          el(
+            'div',
+            { class: 'row-inline' },
+            el('span', { class: 'course-tick', text: finished ? '✓' : current ? '›' : '·' }),
+            el('span', { class: 'course-name', text: exercise.name }),
+          ),
+          current ? el('p', { class: 'hint', text: exercise.hint }) : null,
+          current ? el('p', { class: 'blurb', text: exercise.clause }) : null,
+        );
+      }),
+      statRow(
+        'Fuel burned',
+        `${burned} / ${progress.par} par`,
+        burned > progress.par ? 'warn' : 'good',
+      ),
+      next === undefined
+        ? note('good', 'Course complete.')
+        : note('info', `${FLIGHT_SCHOOL_EXERCISES.length - done.size} exercise(s) to go.`),
+    ),
+  ];
+};
+
 /** Every scenario-only control that applies to this ship, right now. */
 export const scenarioOrders = (ctx: Ctx, ship: Ship): Child[] => [
+  ...flightSchoolSection(ctx),
   ...piracySection(ctx, ship),
   ...retributionSection(ctx, ship),
 ];
