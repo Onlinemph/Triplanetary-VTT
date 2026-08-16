@@ -20,11 +20,26 @@
  * purchase screen; `Player.points` carries the running score.
  */
 
-import { logisticsData } from '@engine/logistics.js';
+import type {
+  AnnounceDestination,
+  Command,
+  CommandResult,
+  DeliverCargo,
+} from '@engine/commands.js';
+import { canCarry, logisticsData } from '@engine/logistics.js';
 import { DEFAULT_MAP } from '@engine/map.js';
+import { shipLabel } from '@engine/movement.js';
+import { PUBLIC_KEYS_KEY } from '../net/redact.js';
 import { SHIP_CLASSES, type ShipClass } from '@engine/ships.js';
-import { createInitialState } from '@engine/state.js';
-import type { GameState, PlayerId, VictoryState } from '@engine/types.js';
+import { addCargo, cargoCount, createInitialState, log, withShip } from '@engine/state.js';
+import {
+  type GameState,
+  type PlayerId,
+  type Ship,
+  type VictoryState,
+  controllerOf,
+} from '@engine/types.js';
+
 import {
   type PlayerSpec,
   atAsteroidBase,
@@ -38,6 +53,13 @@ import {
   victory,
 } from './helpers.js';
 import type { BuildOptions, ScenarioDef } from './types.js';
+
+type ScenarioOutcome = { state: GameState; result: CommandResult };
+
+const refuse = (state: GameState, reason: string): ScenarioOutcome => ({
+  state,
+  result: { ok: false, reason },
+});
 
 const PATROL: PlayerId = 'patrol';
 const MERCHANTS: PlayerId = 'merchants';
@@ -171,7 +193,15 @@ const build = (opts: BuildOptions): GameState => {
         cycleDeliveries: [],
         /** Points the pirates have scored inside the current trade cycle. */
         pirateCyclePoints: 0,
+        /** Announced destinations, by ship. Public — that is what "announce" means. */
+        destinations: {},
       },
+      // "The Merchant must announce the destination when a ship takes off" — to
+      // the table, pirate included, which is the whole tension of the scenario.
+      // Without this the fog-of-war filter would withhold the announcement from
+      // the one player it is meant to inform, because the record names merchant
+      // ships and the pirate owns none of them.
+      [PUBLIC_KEYS_KEY]: ['piracy'],
       // "The Patrol may buy new ships on Luna at a cost of 2 points for every
       // point of combat strength", the same rate for "The Pirates... on
       // Ganymede", and a flat list for the Merchant: "8 points for a transport,
@@ -224,14 +254,15 @@ const award = (state: GameState, player: PlayerId, points: number): GameState =>
  *
  * `scored` remembers the ships already paid for, so a wreck on the board does
  * not pay out again every turn. The Merchant's *earnings* — "2 points for each
- * cargo delivered" — need the delivery-cycle machinery, which is not
- * implemented; see docs/RULES-MAPPING.md.
+ * cargo delivered" — are booked by `deliverCargo` as they happen, since a
+ * delivery is an order rather than a state of the board.
  */
 const endPlayerTurn = (state: GameState): GameState => {
   const scored = new Set((piracyData(state)['scored'] ?? []) as readonly string[]);
   const looted = logisticsData(state).looted;
   let s = state;
   let touched = false;
+  let cyclePoints = Number(piracyData(state)['pirateCyclePoints'] ?? 0);
 
   for (const ship of Object.values(state.ships).sort((a, b) => (a.id < b.id ? -1 : 1))) {
     const lostKey = `lost:${ship.id}`;
@@ -258,12 +289,191 @@ const endPlayerTurn = (state: GameState): GameState => {
       (looted[ship.id] ?? []).includes(PIRATES)
     ) {
       s = award(s, PIRATES, PIRATE_LOOT_POINTS);
+      // "The Pirates may win... by scoring 8 points in a single trade cycle", so
+      // the same points are counted twice: once on the scoreboard, once against
+      // the window that `deliverCargo` resets when a cycle closes.
+      cyclePoints += PIRATE_LOOT_POINTS;
       scored.add(lootKey);
       touched = true;
     }
   }
 
-  return touched ? withPiracyData(s, { scored: [...scored].sort() }) : state;
+  return touched
+    ? withPiracyData(s, { scored: [...scored].sort(), pirateCyclePoints: cyclePoints })
+    : state;
+};
+
+// ---------------------------------------------------------------------------
+// Delivery cycles
+// ---------------------------------------------------------------------------
+
+/** Worlds that have taken a cargo since the last rollover. */
+const cycleDeliveries = (state: GameState): readonly string[] =>
+  (piracyData(state)['cycleDeliveries'] ?? []) as readonly string[];
+
+/** Announced destinations, by ship id. */
+const destinations = (state: GameState): Readonly<Record<string, string>> =>
+  (piracyData(state)['destinations'] ?? {}) as Readonly<Record<string, string>>;
+
+const worlds = (state: GameState): readonly string[] =>
+  (piracyData(state)['inhabitedWorlds'] ?? []) as readonly string[];
+
+/**
+ * "Once a planet has received a cargo, it may not get another cargo until all
+ * worlds have received a cargo in that cycle... Exception: Terra may always
+ * receive a cargo from any other world."
+ *
+ * The exception is about *scoring*, not about permission: the Merchant "gets no
+ * points for visiting a world that has already been visited in the cycle", and
+ * Terra is exempted from that. So Terra pays every time, and never blocks.
+ */
+const TERRA = 'terra';
+
+const paysThisCycle = (state: GameState, world: string): boolean =>
+  world === TERRA || !cycleDeliveries(state).includes(world);
+
+/** Which world this ship is sitting on, landed or stopped, if any. */
+const worldUnder = (state: GameState, ship: Ship): string | undefined => {
+  if (ship.location.kind === 'landed') return DEFAULT_MAP.bodyAt(ship.location.side.hex)?.id;
+  // "Cargo can be delivered to orbit... The ship does not land, but makes
+  // delivery, and picks up new cargo, on the turn it enters orbit" — the p. 15
+  // variant, and only when it is switched on.
+  if (!state.options.orbitalBasesVariant) return undefined;
+  return DEFAULT_MAP.orbitOf(ship.pos, ship.velocity)?.id;
+};
+
+/**
+ * "The Merchant starts with two Transports on Terra, and announces their first
+ * destinations... The Merchant must announce the destination when a ship takes
+ * off."
+ *
+ * Announcing is also when the hold is filled: "there is plenty of cargo out
+ * there, so merchants can pick up a load whenever they are ready." Making the
+ * cargo a real item rather than a flag is what lets a pirate steal it — "A
+ * stolen cargo, regardless of its origin or the ship carrying it" is worth MCr
+ * to him — and what makes the loot rules and the delivery rules the same rules.
+ */
+const announceDestination = (
+  state: GameState,
+  cmd: AnnounceDestination,
+): { state: GameState; result: CommandResult } | null => {
+  const ship = state.ships[cmd.ship];
+  if (!ship || ship.destroyed) return refuse(state, 'no such ship');
+  if (controllerOf(ship) !== cmd.by) return refuse(state, 'that ship is not yours');
+  if (cmd.by !== MERCHANTS) return refuse(state, 'only the Merchant runs cargoes');
+
+  const here = worldUnder(state, ship);
+  if (here === undefined) {
+    return refuse(state, 'a destination is announced at take-off, from the world you are leaving');
+  }
+  if (!worlds(state).includes(cmd.destination)) {
+    return refuse(state, `${cmd.destination} is not an inhabited world`);
+  }
+  if (cmd.destination === here) {
+    return refuse(state, 'a cargo must go somewhere else');
+  }
+
+  let s = state;
+  if (cargoCount(ship, 'freight') <= 0) {
+    const objection = canCarry(ship, 'freight', 1);
+    if (objection) return refuse(state, objection);
+    s = withShip(s, addCargo(ship, 'freight', 1));
+  }
+  s = withPiracyData(s, { destinations: { ...destinations(s), [cmd.ship]: cmd.destination } });
+  s = log(s, `${shipLabel(ship)} loads at ${here} and announces for ${cmd.destination}.`, {
+    severity: 'info',
+    focus: [ship.pos],
+  });
+  return { state: s, result: { ok: true } };
+};
+
+/**
+ * Land the cargo and score it.
+ *
+ *   "The Merchant earns 2 points for each cargo delivered... and gets no points
+ *    for visiting a world that has already been visited in the cycle."
+ *   "Cargo is delivered in 'cycles' — once a planet has received a cargo, it may
+ *    not get another cargo until all worlds have received a cargo in that cycle."
+ *
+ * A run to a world already served this cycle still *happens* — the cargo is
+ * unloaded — it simply pays nothing, which is what "gets no points for visiting"
+ * says. The cycle rolls over once every world has been served.
+ */
+const deliverCargo = (
+  state: GameState,
+  cmd: DeliverCargo,
+): { state: GameState; result: CommandResult } | null => {
+  const ship = state.ships[cmd.ship];
+  if (!ship || ship.destroyed) return refuse(state, 'no such ship');
+  if (controllerOf(ship) !== cmd.by) return refuse(state, 'that ship is not yours');
+  if (cmd.by !== MERCHANTS) return refuse(state, 'only the Merchant runs cargoes');
+  if (cargoCount(ship, 'freight') <= 0) return refuse(state, `${shipLabel(ship)} carries no cargo`);
+
+  const here = worldUnder(state, ship);
+  if (here === undefined) {
+    return refuse(
+      state,
+      state.options.orbitalBasesVariant
+        ? 'the ship must be landed on the destination world, or in orbit over it'
+        : 'the ship must be landed on the destination world',
+    );
+  }
+  const announced = destinations(state)[cmd.ship];
+  if (announced !== undefined && announced !== here) {
+    return refuse(state, `${shipLabel(ship)} was announced for ${announced}, not ${here}`);
+  }
+
+  const pays = paysThisCycle(state, here);
+  let s = withShip(state, addCargo(ship, 'freight', -1));
+
+  const cleared = { ...destinations(s) };
+  delete cleared[cmd.ship];
+  s = withPiracyData(s, { destinations: cleared });
+
+  if (pays) {
+    const rate = Number(
+      (piracyData(s)['merchants'] as { pointsPerDelivery?: number } | undefined)
+        ?.pointsPerDelivery ?? 2,
+    );
+    s = award(s, MERCHANTS, rate);
+    s = log(s, `${shipLabel(ship)} delivers her cargo to ${here}: ${rate} points.`, {
+      severity: 'good',
+      focus: [ship.pos],
+    });
+  } else {
+    s = log(
+      s,
+      `${shipLabel(ship)} unloads at ${here}, which has already taken a cargo this cycle — no points.`,
+      { severity: 'warn', focus: [ship.pos] },
+    );
+  }
+
+  // Terra "may always receive a cargo", so it never fills a slot in the cycle;
+  // if it did, the exception would close the cycle a world early.
+  if (here !== TERRA && !cycleDeliveries(s).includes(here)) {
+    const served = [...cycleDeliveries(s), here].sort();
+    const outstanding = worlds(s).filter((w) => w !== TERRA && !served.includes(w));
+    if (outstanding.length === 0) {
+      // "...until all worlds have received a cargo in that cycle." The cycle is
+      // complete: it starts again, and with it the pirates' 8-point window.
+      s = withPiracyData(s, { cycleDeliveries: [], pirateCyclePoints: 0 });
+      s = log(s, 'Every world has taken a cargo — a new trade cycle begins.', {
+        severity: 'info',
+        player: null,
+      });
+    } else {
+      s = withPiracyData(s, { cycleDeliveries: served });
+    }
+  }
+
+  return { state: s, result: { ok: true } };
+};
+
+/** Route the two orders this scenario adds; everything else is not ours. */
+const handleCommand = (state: GameState, cmd: Command): ScenarioOutcome | null => {
+  if (cmd.type === 'announceDestination') return announceDestination(state, cmd);
+  if (cmd.type === 'deliverCargo') return deliverCargo(state, cmd);
+  return null;
 };
 
 const checkVictory = (state: GameState): VictoryState | null => {
@@ -334,6 +544,7 @@ export const piracy: ScenarioDef = {
   build,
   checkVictory,
   endPlayerTurn,
+  handleCommand,
   specialRules: [
     'For this scenario to work, the Patrol and Merchant players must be willing to ignore undetected pirate ships until they are legally detected.',
     'The Patrol pre-plots circuits in the Inner System (Terra, Mars, Venus, Mercury) and the Outer System (Callisto, Io, Ganymede). Circuits need not land at each world but must pass within 2 hexes. The Patrol may not leave its circuits until a pirate is detected, and must return to them once no pirates are visible; it may modify its circuits at any time while no pirate is detected.',

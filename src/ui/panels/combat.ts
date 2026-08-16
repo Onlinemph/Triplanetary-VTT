@@ -16,7 +16,7 @@ import { type OddsColumn, gunDamage } from '@engine/crt.js';
 import { add, sideGravityHex } from '@engine/hex.js';
 import { logisticsData } from '@engine/logistics.js';
 import { baseTorpedoAimOptions, canLaunchBaseTorpedo } from '@engine/ordnance.js';
-import { controllerOf } from '@engine/movement.js';
+
 import { SHIP_CLASSES } from '@engine/ships.js';
 import type { Counterattack } from '@engine/commands.js';
 import {
@@ -26,6 +26,7 @@ import {
   activePlayer,
   areAllied,
   liveShips,
+  controllerOf,
 } from '@engine/types.js';
 import { type Child, button, el, fill } from '../components/dom.js';
 import { empty, note, section, statRow } from '../components/meters.js';

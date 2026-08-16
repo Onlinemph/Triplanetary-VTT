@@ -67,6 +67,7 @@ import {
   type ShipId,
   activePlayer,
   areAllied,
+  controllerOf,
 } from './types.js';
 import { log, updateShip, withBase } from './state.js';
 
@@ -194,8 +195,24 @@ export const isDisabled = (ship: Ship, advancedCombat = false): boolean => {
  */
 export const immuneToGunfire = (ship: Ship): boolean => ship.location.kind === 'landed';
 
+/**
+ * Whose side is this ship on, for the purpose of shooting at it?
+ *
+ * `controllerOf`, not `owner`. A prize flies for its captor until it is redeemed
+ * at his base, and every other module already agrees on that — movement, supply,
+ * detection, looting. Deciding it by `owner` here would put a captured hull on
+ * the books of the fleet that just lost it: for the length of the transit its
+ * captor could not shoot at his own escort's attackers without the prize
+ * counting as a friend, and the side that lost it could not shoot at it at all.
+ *
+ * p. 8 says a captured ship "may not fire, or return fire if fired upon", which
+ * only makes sense if somebody is firing on it — and the somebody is the fleet
+ * trying to get it back. That prohibition is enforced separately (`canFire`
+ * refuses any ship with `capturedBy` set), so a prize remains a legal *target*
+ * and an illegal *shooter*, which is precisely the printed rule.
+ */
 const enemyOf = (state: GameState, side: PlayerId, ship: Ship): boolean =>
-  !areAllied(state, side, ship.owner);
+  !areAllied(state, side, controllerOf(ship));
 
 const listNames = (ships: readonly Ship[]): string => {
   const names = ships.map(shipLabel);
@@ -284,10 +301,10 @@ export function previewAttack(
     tgt.push(ship);
   }
 
-  const side = atk[0]!.owner;
+  const side = controllerOf(atk[0]!);
 
   for (const a of atk) {
-    if (!areAllied(state, side, a.owner)) {
+    if (!areAllied(state, side, controllerOf(a))) {
       return illegal('attacking ships must belong to the same side');
     }
     if (a.destroyed) return illegal(`${shipLabel(a)} has been destroyed`);
@@ -295,6 +312,11 @@ export function previewAttack(
       // "Commercial ships have a suffix D in their combat strengths and may not
       // attack or counterattack."
       return illegal(`${shipLabel(a)} has a defensive-only strength and may not attack`);
+    }
+    if (mode === 'attack' && SHIP_CLASSES[a.shipClass].counterattackOnly === true) {
+      // Robot guards are rated "only for defense and counterattacks": they hold
+      // a claim against whoever comes, but they never start it.
+      return illegal(`${shipLabel(a)} may only return fire, never open it`);
     }
     if (a.capturedBy !== undefined) {
       return illegal(`${shipLabel(a)} is a prize crew and may not fire`);
@@ -815,7 +837,7 @@ const counterattackCandidates = (state: GameState, victims: readonly ShipId[]): 
       if (other.id !== id) {
         // Matched course: same position *and* same velocity.
         if (!eq(other.pos, victim.pos) || !eq(other.velocity, victim.velocity)) continue;
-        if (!areAllied(state, other.owner, victim.owner)) continue;
+        if (!areAllied(state, controllerOf(other), controllerOf(victim))) continue;
       }
       if (!canFire(other, advanced)) continue;
       if (other.firedThisPhase) continue;
@@ -903,7 +925,7 @@ export function resolveAttack(
   for (const id of cmd.attackers) {
     const ship = state.ships[id];
     if (!ship) return reject(state, `unknown ship ${id}`);
-    if (!areAllied(state, cmd.by, ship.owner)) {
+    if (!areAllied(state, cmd.by, controllerOf(ship))) {
       return reject(state, `${shipLabel(ship)} does not belong to you`);
     }
   }
@@ -975,7 +997,7 @@ export function resolveCounterattack(
   for (const id of cmd.attackers) {
     const ship = state.ships[id];
     if (!ship) return reject(state, `unknown ship ${id}`);
-    if (!areAllied(state, cmd.by, ship.owner)) {
+    if (!areAllied(state, cmd.by, controllerOf(ship))) {
       return reject(state, `${shipLabel(ship)} does not belong to you`);
     }
     if (!pending.eligible.includes(id)) {
@@ -1174,7 +1196,7 @@ export function suppressHexside(
   }
   const ship = state.ships[cmd.ship];
   if (!ship) return reject(state, `unknown ship ${cmd.ship}`);
-  if (!areAllied(state, cmd.by, ship.owner)) return reject(state, 'that ship is not yours');
+  if (!areAllied(state, cmd.by, controllerOf(ship))) return reject(state, 'that ship is not yours');
   if (cmd.by !== activePlayer(state)) return reject(state, 'it is not your combat phase');
   if (!canFire(ship, state.options.advancedCombat)) {
     return reject(state, `${shipLabel(ship)} may not fire`);
@@ -1226,41 +1248,90 @@ export function suppressHexside(
 // Damage control
 // ---------------------------------------------------------------------------
 
+export type RepairTrack = 'weapon' | 'drive' | 'structure';
+
+/**
+ * Can this track actually be worked on out here?
+ *
+ * "A ship whose weapons reach D6 or below can no longer repair them; it must get
+ * back to a base", and the same for a drive at D6. Structure has no such ceiling
+ * — a ship at D6 structure is already destroyed.
+ */
+export const repairable = (ship: Ship, track: RepairTrack): boolean => {
+  const level = ship.advancedDamage[track];
+  if (level <= 0) return false;
+  return track === 'structure' || level < ADVANCED_TRACK_LIMIT;
+};
+
+/** The tracks this ship could be ordered to work on right now. */
+export const repairableTracks = (ship: Ship): RepairTrack[] =>
+  (['drive', 'weapon', 'structure'] as const).filter((t) => repairable(ship, t));
+
+/**
+ * Which track a ship's damage-control party works on this turn.
+ *
+ * "The owner chooses what kind of damage to recover from" — so an explicit
+ * standing order wins whenever that track is still worth working on. Absent one,
+ * the fallback is drive, then weapons, then structure: mobility first, because a
+ * ship that cannot run cannot choose its next fight.
+ */
+export const repairTarget = (ship: Ship): RepairTrack | null => {
+  const wanted = ship.repairPreference;
+  if (wanted !== undefined && repairable(ship, wanted)) return wanted;
+  return repairableTracks(ship)[0] ?? null;
+};
+
+/**
+ * Record the owner's standing repair order.
+ *
+ * Deliberately permissive about *when*: this sets a preference, it does not
+ * perform a repair, so ordering the yard about before the damage lands costs
+ * nothing and stopping the game to ask would cost a lot.
+ */
+export function chooseRepair(
+  state: GameState,
+  cmd: { readonly by: PlayerId; readonly ship: ShipId; readonly track: RepairTrack },
+): { state: GameState; result: CommandResult } {
+  if (!state.options.advancedCombat) {
+    return reject(state, 'damage tracks only exist under the advanced combat system');
+  }
+  const ship = state.ships[cmd.ship];
+  if (!ship || ship.destroyed) return reject(state, `unknown ship ${cmd.ship}`);
+  if (!areAllied(state, cmd.by, controllerOf(ship))) {
+    return reject(state, 'that ship is not yours');
+  }
+  const next = log(
+    updateShip(state, ship.id, { repairPreference: cmd.track }),
+    `${shipLabel(ship)} sets damage control to work on the ${cmd.track}.`,
+    { focus: [ship.pos] },
+  );
+  return { state: next, result: { ok: true } };
+}
+
 /**
  * "A damaged ship will repair itself at the rate of one 'D' per turn. It recovers
  * at the end of the Resupply phase."
  *
- * In the advanced system "the owner chooses what kind of damage to recover
- * from"; with no UI for that choice we repair the drive first (mobility keeps a
- * ship alive), then the weapons, then the structure. Tracks that have reached D6
- * are skipped: weapons at D6 "can no longer [be repaired]... it must get back to
- * a base", and a drive at D6 "may not be repaired".
+ * Tracks that have reached D6 are skipped: weapons at D6 "can no longer [be
+ * repaired]... it must get back to a base", and a drive at D6 "may not be
+ * repaired". Which track gets the turn's work is `repairTarget`'s decision.
+ *
+ * Keyed on `controllerOf`, not `owner`: the prize crew aboard a captured hull is
+ * the one holding the welding torch.
  */
 export function recoverDamage(state: GameState, player: PlayerId): GameState {
   let next = state;
   const advanced = state.options.advancedCombat;
 
   for (const ship of Object.values(state.ships)) {
-    if (ship.owner !== player || ship.destroyed) continue;
+    if (controllerOf(ship) !== player || ship.destroyed) continue;
 
     if (advanced) {
-      const { weapon, drive, structure } = ship.advancedDamage;
-      if (drive > 0 && drive < ADVANCED_TRACK_LIMIT) {
-        next = updateShip(next, ship.id, {
-          advancedDamage: { weapon, drive: drive - 1, structure },
-        });
-        continue;
-      }
-      if (weapon > 0 && weapon < ADVANCED_TRACK_LIMIT) {
-        next = updateShip(next, ship.id, {
-          advancedDamage: { weapon: weapon - 1, drive, structure },
-        });
-        continue;
-      }
-      if (structure > 0) {
-        next = updateShip(next, ship.id, {
-          advancedDamage: { weapon, drive, structure: structure - 1 },
-        });
+      const track = repairTarget(ship);
+      if (track !== null) {
+        const { weapon, drive, structure } = ship.advancedDamage;
+        const patched = { weapon, drive, structure, [track]: ship.advancedDamage[track] - 1 };
+        next = updateShip(next, ship.id, { advancedDamage: patched });
         continue;
       }
     }

@@ -1,10 +1,11 @@
 /**
  * Counter glyphs and toolbar icons.
  *
- * Ten ship classes, ten silhouettes, all drawn in the same 24x24 box with a
- * single stroke weight so a fleet list reads as one instrument rather than a
- * sticker sheet. Commercial hulls are blunt and horizontal; warships are wedges
- * pointing along their course; the orbital base is the only ring.
+ * Ten hulls and one emplacement, all drawn in the same 24x24 box with a single
+ * stroke weight so a fleet list reads as one instrument rather than a sticker
+ * sheet. Commercial hulls are blunt and horizontal; warships are wedges pointing
+ * along their course; the orbital base is the only ring; the robot guards are
+ * the only thing sitting on the ground.
  */
 
 import type { ShipClass } from '@engine/ships.js';
@@ -45,6 +46,12 @@ const GLYPHS: Readonly<Record<ShipClass, GlyphDef>> = {
   orbitalBase: {
     body: 'M12 4.5 A7.5 7.5 0 1 0 12 19.5 A7.5 7.5 0 1 0 12 4.5 Z M12 9 A3 3 0 1 1 12 15 A3 3 0 1 1 12 9 Z',
     detail: 'M2 12 H5 M19 12 H22',
+  },
+  // Not a hull: an emplacement. A squat bunker, deliberately unlike every
+  // silhouette above, because it never moves and can never open fire.
+  robotGuards: {
+    body: 'M5 17 V12 A7 7 0 0 1 19 12 V17 Z',
+    detail: 'M5 19.5 H19 M9.5 12.5 H14.5',
   },
 };
 

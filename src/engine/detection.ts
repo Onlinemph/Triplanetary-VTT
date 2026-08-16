@@ -20,9 +20,16 @@
 
 import { type Hex, distance, eq, key, withinRadius } from './hex.js';
 import { type GameMap, DETECTION_RANGE_PLANETARY_BASE, DETECTION_RANGE_SHIP } from './map.js';
-import { controllerOf, shipLabel } from './movement.js';
+import { shipLabel } from './movement.js';
 import { log, withShip } from './state.js';
-import { type BaseState, type GameState, type PlayerId, type Ship, areAllied } from './types.js';
+import {
+  type BaseState,
+  type GameState,
+  type PlayerId,
+  type Ship,
+  areAllied,
+  controllerOf,
+} from './types.js';
 
 /** Where a detector sits and how far it reaches. */
 export interface DetectionSource {

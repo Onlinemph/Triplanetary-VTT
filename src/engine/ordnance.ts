@@ -55,7 +55,12 @@
  * or the DOM.
  */
 
-import type { CommandResult, LaunchBaseTorpedo, LaunchOrdnance } from './commands.js';
+import type {
+  ChooseDevastatedSide,
+  CommandResult,
+  LaunchBaseTorpedo,
+  LaunchOrdnance,
+} from './commands.js';
 import {
   type DamageResult,
   type OtherAttackKind,
@@ -110,11 +115,11 @@ import {
   type ShipId,
   activePlayer,
   areAllied,
+  controllerOf,
 } from './types.js';
 import { applyAdvancedHits, applyDamage, canFire, shipLabel } from './combat.js';
 import { ordnanceDeniedReason } from './logistics.js';
 import {
-  controllerOf,
   effectiveGravity,
   isLandingThisTurn,
   isTakingOffThisTurn,
@@ -362,10 +367,27 @@ export function canLaunch(
 
   // Advanced system: "A ship with any weapon damage cannot fire guns or drop
   // ordnance." The dreadnaught exception is worded "can still *fire*", i.e. guns
-  // only; and "Weapon hits on civilian ships have no effect except to prevent
-  // their launching mines" — so any weapon damage stops ordnance, universally.
+  // only, so a damaged dreadnaught keeps its guns and loses its racks.
+  //
+  // Civilians get their own, narrower sentence: "Weapon hits on civilian ships
+  // have no effect except to prevent their launching mines." We read that
+  // strictly — mines, not ordnance in general — because this rulebook enumerates
+  // the three kinds separately everywhere else it means all of them ("one mine,
+  // one torpedo, or one nuke"), and the clause's whole purpose is to say that
+  // weapon damage to an unarmed hull is nearly harmless. Civilians may not
+  // launch torpedoes at any damage level, so the only case this decides is a
+  // weapon-damaged freighter with a nuke in the hold: it may still drop it.
+  //
+  // `combat.ts` → `weaponsOperational` is the other half of the same sentence
+  // and must agree; the two sites move together or the rule is read two ways.
   if (state.options.advancedCombat && ship.advancedDamage.weapon > 0) {
-    return no(`${shipLabel(ship)} has weapon damage and may not launch ordnance`);
+    if (!SHIP_CLASSES[ship.shipClass].warship) {
+      if (kind === 'mine') {
+        return no(`${shipLabel(ship)} has weapon damage and may not launch mines`);
+      }
+    } else {
+      return no(`${shipLabel(ship)} has weapon damage and may not launch ordnance`);
+    }
   }
 
   // "A disabled ship cannot maneuver, launch ordnance, or attack." One exception:
@@ -918,25 +940,229 @@ export function detonate(
  * the arrow would give.
  */
 export function nukeDevastationSide(body: AstralBody, from: Hex): HexSide {
+  return nukeDevastationCandidates(body, from)[0]!;
+}
+
+/**
+ * Every hexside the warhead could plausibly have come in over.
+ *
+ * One entry when the approach is unambiguous — the nuke's last hex before the
+ * world is a neighbour, and that neighbour names one side. More than one when it
+ * is not, and that is the case the rulebook hands to the victim: "If it is not
+ * clear which hex side has been affected, the suffering player makes the
+ * choice." Roughly one approach in thirteen ties two directions exactly, so this
+ * is a live branch rather than a theoretical one.
+ *
+ * Ordered so that the first entry is the answer a player eyeballing the arrow
+ * would give, which keeps it usable as a default.
+ */
+export function nukeDevastationCandidates(body: AstralBody, from: Hex): HexSide[] {
   const trace = traceSegment(from, body.hex).entered;
   const idx = trace.findIndex((h) => eq(h, body.hex));
   const previous = idx > 0 ? trace[idx - 1]! : from;
 
   const direct = directionTo(body.hex, previous);
-  if (direct >= 0) return hexSide(body.hex, direct);
+  if (direct >= 0) return [hexSide(body.hex, direct)];
 
   const approach = toPlane(sub(previous, body.hex));
-  let best = 0;
+  const dots: number[] = [];
   let bestDot = -Infinity;
   for (let dir = 0; dir < 6; dir++) {
     const unit = toPlane(DIRECTIONS[dir]!);
     const dot = unit.x * approach.x + unit.y * approach.y;
-    if (dot > bestDot) {
-      bestDot = dot;
-      best = dir;
+    dots.push(dot);
+    if (dot > bestDot) bestDot = dot;
+  }
+  const tied: HexSide[] = [];
+  for (let dir = 0; dir < 6; dir++) {
+    if (Math.abs(dots[dir]! - bestDot) < 1e-9) tied.push(hexSide(body.hex, dir));
+  }
+  return tied;
+}
+
+/**
+ * Who suffers, and therefore who chooses.
+ *
+ * The side that owns what is about to be destroyed: the base on one of the
+ * candidate hexsides, or a ship landed through one. When two players would both
+ * lose something the choice goes to the one with more at stake, and ties break
+ * on player order so a replay is reproducible. `null` when nothing is at risk on
+ * any candidate side — then the choice decides nothing and the default stands.
+ */
+export const devastationSufferer = (
+  state: GameState,
+  at: Hex,
+  candidates: readonly HexSide[],
+): PlayerId | null => {
+  const stake = new Map<PlayerId, number>();
+  const add = (who: PlayerId | null | undefined, n: number): void => {
+    if (!who) return;
+    stake.set(who, (stake.get(who) ?? 0) + n);
+  };
+  for (const side of candidates) {
+    const k = sideKey(side);
+    add(baseOnSide(state, side)?.owner, 2);
+    for (const ship of shipsInHex(state, at)) {
+      if (ship.location.kind === 'landed' && sideKey(ship.location.side) === k) {
+        add(controllerOf(ship), 1);
+      }
     }
   }
-  return hexSide(body.hex, best);
+  let best: PlayerId | null = null;
+  let bestN = 0;
+  for (const id of state.playerOrder) {
+    const n = stake.get(id) ?? 0;
+    if (n > bestN) {
+      bestN = n;
+      best = id;
+    }
+  }
+  return best;
+};
+
+/**
+ * The candidate a rational sufferer would name: the one that costs them least.
+ *
+ * Used as the default when nobody answers, so an unanswered prompt can never
+ * leave the victim worse off than the rule allows.
+ */
+export const cheapestDevastation = (
+  state: GameState,
+  at: Hex,
+  candidates: readonly HexSide[],
+  sufferer: PlayerId | null,
+): HexSide => {
+  if (sufferer === null) return candidates[0]!;
+  let best = candidates[0]!;
+  let bestCost = Infinity;
+  for (const side of candidates) {
+    const k = sideKey(side);
+    let cost = 0;
+    const base = baseOnSide(state, side);
+    if (base && base.owner !== null && areAllied(state, base.owner, sufferer)) cost += 2;
+    for (const ship of shipsInHex(state, at)) {
+      if (ship.location.kind !== 'landed' || sideKey(ship.location.side) !== k) continue;
+      if (areAllied(state, controllerOf(ship), sufferer)) cost += 1;
+    }
+    if (cost < bestCost) {
+      bestCost = cost;
+      best = side;
+    }
+  }
+  return best;
+};
+
+/**
+ * A devastation whose hexside the victim has not yet named.
+ *
+ * Parked in `scenarioData` exactly the way combat parks an unanswered
+ * counterattack, and flushed by the same kind of safety net — a game must never
+ * be able to wedge on a prompt nobody answers.
+ */
+export const PENDING_DEVASTATION_KEY = '_pendingDevastation';
+
+export interface PendingDevastation {
+  readonly at: Hex;
+  readonly bodyName: string;
+  readonly cause: string;
+  readonly candidates: readonly HexSide[];
+  readonly sufferer: PlayerId;
+}
+
+export const pendingDevastation = (state: GameState): PendingDevastation | null => {
+  const raw = state.scenarioData[PENDING_DEVASTATION_KEY];
+  return raw ? (raw as PendingDevastation) : null;
+};
+
+const clearDevastation = (state: GameState): GameState => {
+  if (!(PENDING_DEVASTATION_KEY in state.scenarioData)) return state;
+  const next = { ...state.scenarioData };
+  delete next[PENDING_DEVASTATION_KEY];
+  return { ...state, scenarioData: next };
+};
+
+/** Burn one hexside off a world, and everything that lived on it. */
+const applyDevastation = (
+  state: GameState,
+  at: Hex,
+  bodyName: string,
+  side: HexSide,
+  cause: string,
+  nukeName: string,
+): GameState => {
+  const k = sideKey(side);
+  let s = log(state, `${nukeName} strikes ${bodyName} and devastates hexside ${side.dir}.`, {
+    severity: 'bad',
+    focus: [at],
+  });
+  if (!s.devastatedSides.includes(k)) {
+    s = { ...s, devastatedSides: [...s.devastatedSides, k] };
+  }
+  // "Any ships on the planet which landed through that hex side, and any base on
+  // that side, are destroyed."
+  const base = baseOnSide(s, side);
+  if (base) {
+    s = withBase(s, { ...base, destroyed: true });
+    s = log(s, `The base at ${base.id} is obliterated.`, { severity: 'bad', focus: [at] });
+  }
+  for (const ship of shipsInHex(s, at).sort(byId)) {
+    const landedElsewhere = ship.location.kind === 'landed' && sideKey(ship.location.side) !== k;
+    if (landedElsewhere) continue;
+    s = destroyShip(s, ship.id, cause);
+  }
+  for (const other of ordnanceInHex(s, at).sort(byId)) {
+    s = discard(s, other.id, `is destroyed by ${nukeName}`);
+  }
+  return s;
+};
+
+/**
+ * Answer "which hexside?" for a strike whose approach was ambiguous.
+ *
+ * Only the suffering player may answer, and only with one of the sides the
+ * warhead could actually have come in over — the rule hands the victim a choice
+ * between the genuinely unclear options, not a free pick of any hexside.
+ */
+export function chooseDevastatedSide(
+  state: GameState,
+  cmd: ChooseDevastatedSide,
+  _map: GameMap,
+): { state: GameState; result: CommandResult } {
+  const pending = pendingDevastation(state);
+  if (!pending) return reject(state, 'no strike is waiting on a hexside');
+  if (cmd.by !== pending.sufferer) return reject(state, 'that choice is not yours to make');
+  const chosen = pending.candidates.find((c) => sideKey(c) === sideKey(cmd.side));
+  if (!chosen) return reject(state, 'the warhead cannot have come in over that hexside');
+
+  const s = applyDevastation(
+    clearDevastation(state),
+    pending.at,
+    pending.bodyName,
+    chosen,
+    pending.cause,
+    pending.cause,
+  );
+  return { state: s, result: { ok: true } };
+}
+
+/**
+ * Close out a devastation nobody answered, choosing as the sufferer would have.
+ *
+ * The counterpart of `resolvePendingDamage`: the window belongs to the victim,
+ * but it cannot be left open forever.
+ */
+export function resolvePendingDevastation(state: GameState): GameState {
+  const pending = pendingDevastation(state);
+  if (!pending) return state;
+  const side = cheapestDevastation(state, pending.at, pending.candidates, pending.sufferer);
+  return applyDevastation(
+    clearDevastation(state),
+    pending.at,
+    pending.bodyName,
+    side,
+    pending.cause,
+    pending.cause,
+  );
 }
 
 const detonateNuke = (
@@ -954,30 +1180,35 @@ const detonateNuke = (
   if (body && body.landing === 'hexside') {
     // A moon or a planet: the specific devastation rule replaces the general
     // "destroys everything in the hex".
-    const side = nukeDevastationSide(body, opts.from ?? sub(at, nuke.velocity));
-    const k = sideKey(side);
-    s = log(s, `${ordnanceLabel(nuke)} strikes ${body.name} and devastates hexside ${side.dir}.`, {
-      severity: 'bad',
-      focus: [at],
-    });
-    if (!s.devastatedSides.includes(k)) {
-      s = { ...s, devastatedSides: [...s.devastatedSides, k] };
+    const candidates = nukeDevastationCandidates(body, opts.from ?? sub(at, nuke.velocity));
+    const sufferer = devastationSufferer(s, at, candidates);
+
+    // "If it is not clear which hex side has been affected, the suffering player
+    // makes the choice." Clear approaches are settled here and now; an ambiguous
+    // one waits for its victim, unless nobody stands to lose anything by it — a
+    // choice between two empty hexsides is not worth stopping the game for.
+    if (candidates.length > 1 && sufferer !== null) {
+      const record: PendingDevastation = {
+        at,
+        bodyName: body.name,
+        cause: ordnanceLabel(nuke),
+        candidates,
+        sufferer,
+      };
+      s = log(
+        s,
+        `${ordnanceLabel(nuke)} strikes ${body.name} on an unclear bearing — ${
+          s.players[sufferer]?.name ?? sufferer
+        } must say which hexside took it.`,
+        { severity: 'bad', focus: [at] },
+      );
+      return {
+        state: { ...s, scenarioData: { ...s.scenarioData, [PENDING_DEVASTATION_KEY]: record } },
+        consumed: true,
+      };
     }
-    // "Any ships on the planet which landed through that hex side, and any base on
-    // that side, are destroyed."
-    const base = baseOnSide(s, side);
-    if (base) {
-      s = withBase(s, { ...base, destroyed: true });
-      s = log(s, `The base at ${base.id} is obliterated.`, { severity: 'bad', focus: [at] });
-    }
-    for (const ship of shipsInHex(s, at).sort(byId)) {
-      const landedElsewhere = ship.location.kind === 'landed' && sideKey(ship.location.side) !== k;
-      if (landedElsewhere) continue;
-      s = destroyShip(s, ship.id, cause);
-    }
-    for (const other of ordnanceInHex(s, at).sort(byId)) {
-      s = discard(s, other.id, `is destroyed by ${ordnanceLabel(nuke)}`);
-    }
+
+    s = applyDevastation(s, at, body.name, candidates[0]!, cause, ordnanceLabel(nuke));
     return { state: s, consumed: true };
   }
 

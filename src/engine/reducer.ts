@@ -32,6 +32,7 @@
 
 import type { Command, CommandResult, CommandType } from './commands.js';
 import { isZero, sub } from './hex.js';
+import { isCommercial } from './ships.js';
 import { DEFAULT_MAP, type GameMap } from './map.js';
 import { log, updateShip } from './state.js';
 import {
@@ -44,14 +45,15 @@ import {
   type VictoryState,
   PHASE_LABELS,
   areAllied,
+  controllerOf,
 } from './types.js';
 
 import {
   canManeuver,
-  controllerOf,
   declareRam,
   executeMovementPhase,
   land,
+  resolveAstrogationHazards,
   plotCourse,
   setOptionalGravity,
   shipLabel,
@@ -59,7 +61,9 @@ import {
 } from './movement.js';
 import {
   canFire,
+  chooseRepair,
   declineCounterattack,
+  repairableTracks,
   firePlanetaryDefence,
   pendingCounterattack,
   resolveAttack,
@@ -71,6 +75,9 @@ import {
   attackNuke,
   canLaunch,
   checkOrdnanceAgainstCourse,
+  chooseDevastatedSide,
+  pendingDevastation,
+  resolvePendingDevastation,
   firePlanetaryDefenceAtNuke,
   canLaunchBaseTorpedo,
   launchBaseTorpedo,
@@ -83,12 +90,16 @@ import {
   capture,
   demandSurrender,
   emplaceEquipment,
+  loadCargo,
   logisticsData,
   loot,
   matchedShips,
   mineOre,
+  equipmentCatalogue,
   prospectingEnabled,
+  purchaseEquipment,
   purchaseShip,
+  sellCargo,
   respondToSurrender,
   resupply,
   runResupplyPhase,
@@ -188,6 +199,36 @@ export function registerTurnHook(a: string | TurnHook | null, b?: TurnHook | nul
 export const turnHookFor = (scenarioId: string): TurnHook | null =>
   scenarioHooks.get(scenarioId) ?? defaultHook;
 
+/**
+ * Orders that exist only inside one scenario.
+ *
+ * Three of the printed scenarios ask a player to do something no general rule
+ * describes: announcing a cargo's destination on take-off and delivering it
+ * (Piracy), and mustering the Freedom Fleet (Retribution). The engine cannot
+ * import the scenario table — the dependency runs the other way — so these
+ * arrive through the same registry the victory checkers and upkeep hooks use.
+ *
+ * A handler returns `null` for a command it does not own, and the reducer then
+ * refuses it: an order with no scenario behind it is a client bug, not a rule.
+ */
+export type ScenarioCommandHook = (state: GameState, cmd: Command, map: GameMap) => Outcome | null;
+
+const scenarioCommandHooks = new Map<string, ScenarioCommandHook>();
+
+export function registerCommandHook(scenarioId: string, hook: ScenarioCommandHook | null): void {
+  if (hook) scenarioCommandHooks.set(scenarioId, hook);
+  else scenarioCommandHooks.delete(scenarioId);
+}
+
+export const commandHookFor = (scenarioId: string): ScenarioCommandHook | null =>
+  scenarioCommandHooks.get(scenarioId) ?? null;
+
+/** Route a scenario-only order, or explain that this scenario has no such order. */
+const scenarioCommand = (state: GameState, cmd: Command, map: GameMap): Outcome => {
+  const handled = commandHookFor(state.scenarioId)?.(state, cmd, map);
+  return handled ?? reject(state, `${cmd.type} is not an order in this scenario`);
+};
+
 const describeWinners = (state: GameState, v: VictoryState): string => {
   if (v.winners.length === 0) return 'The game ends in a draw';
   const names = v.winners.map((id) => state.players[id]?.name ?? id).join(' and ');
@@ -259,12 +300,29 @@ const COMMAND_PHASES: Readonly<Record<CommandType, readonly Phase[] | typeof ANY
   suppressHexside: ['combat'],
   demandSurrender: ['combat'],
   respondToSurrender: ['combat'],
-  // 5. Resupply.
+  // 5. Resupply. "Spaceships may refuel, resupply, load and unload cargo, loot
+  // captured ships, or rescue, as appropriate" — the shop and the market are
+  // both things a ship does while stopped at a base, so they belong here with
+  // the rest of the stopover.
   resupply: ['resupply'],
   transferCargo: ['resupply'],
   loot: ['resupply'],
   capture: ['resupply'],
   purchaseShip: ['resupply'],
+  purchaseEquipment: ['resupply'],
+  sellCargo: ['resupply'],
+  loadCargo: ['resupply'],
+  deliverCargo: ['resupply'],
+  // Piracy: "Merchant ships must announce their destination when they take off"
+  // — the same phase the take-off itself is ordered in.
+  announceDestination: ['astrogation'],
+  // A standing order, not an action: legal whenever its owner has the floor.
+  chooseRepair: ANY,
+  // Answered the moment the question is asked, which is inside the movement
+  // phase where the warhead arrives.
+  chooseDevastatedSide: ANY,
+  // Retribution's Freedom Fleet musters between days.
+  convertFleet: ['resupply'],
   // Flow.
   endPhase: ANY,
   concede: ANY,
@@ -282,16 +340,19 @@ const legalInPhase = (type: CommandType, phase: Phase): boolean => {
 };
 
 /**
- * The three orders that belong to a player who is *not* phasing.
+ * The orders that belong to a player who is *not* phasing.
  *
  * "Ships which are attacked may return fire against any or all of their
  * attackers during the combat phase" — the defender acts inside the attacker's
- * player-turn, and a surrender is answered by the ship being asked.
+ * player-turn, and a surrender is answered by the ship being asked. Naming the
+ * hexside a nuke devastated is the same shape of thing: "the suffering player
+ * makes the choice", and the sufferer is by definition not the one who fired.
  */
 const RESPONDER_COMMANDS: ReadonlySet<CommandType> = new Set<CommandType>([
   'counterattack',
   'declineCounterattack',
   'respondToSurrender',
+  'chooseDevastatedSide',
 ]);
 
 // ---------------------------------------------------------------------------
@@ -375,7 +436,14 @@ const enterMovement = (state: GameState, map: GameMap): GameState => {
  * has fired has given its position away.
  */
 const enterCombat = (state: GameState): GameState => {
-  let s = announce({ ...state, phase: 'combat' });
+  // A nuke that struck a world on an unclear bearing has been waiting on its
+  // victim since the movement phase. The choice belongs to them, but it cannot
+  // outlive the phase the warhead landed in — the same safety net `enterResupply`
+  // is for an unanswered counterattack.
+  let s = announce({ ...resolvePendingDevastation(state), phase: 'combat' });
+  // "If astrogation hazards were encountered during the movement phase, their
+  // effects are rolled for during this phase."
+  s = resolveAstrogationHazards(s);
   for (const ship of Object.values(state.ships)) {
     if (!ship.firedThisPhase && !ship.attackedThisPhase) continue;
     s = updateShip(s, ship.id, { firedThisPhase: false, attackedThisPhase: false });
@@ -678,6 +746,24 @@ const dispatch = (state: GameState, cmd: Command, map: GameMap): Outcome => {
       return capture(state, cmd, map);
     case 'purchaseShip':
       return purchaseShip(state, cmd, map);
+    case 'purchaseEquipment':
+      return purchaseEquipment(state, cmd.ship, cmd.kind, cmd.quantity, map);
+    case 'sellCargo':
+      return sellCargo(state, cmd.ship, [cmd.kind], map, cmd.quantity);
+    case 'loadCargo':
+      return loadCargo(state, cmd.ship, cmd.kind, cmd.quantity, map);
+
+    // --- Damage control ---
+    case 'chooseRepair':
+      return chooseRepair(state, cmd);
+    case 'chooseDevastatedSide':
+      return chooseDevastatedSide(state, cmd, map);
+
+    // --- Scenario-only orders ---
+    case 'announceDestination':
+    case 'deliverCargo':
+    case 'convertFleet':
+      return scenarioCommand(state, cmd, map);
 
     // --- Flow ---
     case 'endPhase':
@@ -743,6 +829,22 @@ export function applyCommand(state: GameState, cmd: Command, map: GameMap = DEFA
   if (seat === undefined) return reject(state, 'the table has no active player');
   const responder = RESPONDER_COMMANDS.has(cmd.type);
   if (!responder && cmd.by !== seat) return reject(state, 'it is not your player-turn');
+
+  // --- An unnamed hexside blocks everything else ---
+  // The victim of an ambiguous nuke strike is owed an answer before anything
+  // else happens, for the same reason return fire is: what is destroyed decides
+  // what can act next. Only `endPhase` may push past it, and only by way of the
+  // sweep in `enterCombat`, which chooses as the victim would have.
+  const strike = pendingDevastation(state);
+  if (strike && cmd.type !== 'chooseDevastatedSide') {
+    const sufferer = state.players[strike.sufferer];
+    const stillThere = sufferer !== undefined && !sufferer.eliminated;
+    if (stillThere && cmd.type !== 'endPhase' && cmd.type !== 'concede') {
+      return reject(state, 'a hexside must be named for the nuke strike first');
+    }
+  } else if (!strike && cmd.type === 'chooseDevastatedSide') {
+    return reject(state, 'no strike is waiting on a hexside');
+  }
 
   // --- An unanswered counterattack blocks everything else ---
   // "Ships which are attacked may return fire against any or all of their
@@ -913,6 +1015,43 @@ const feasible = (state: GameState, type: CommandType, player: PlayerId, map: Ga
       return mine.some((s) => matchedShips(state, s).length > 0);
     case 'purchaseShip':
       return (state.players[player]?.megacredits ?? 0) > 0;
+    case 'purchaseEquipment':
+      return (
+        equipmentCatalogue(state).length > 0 &&
+        (state.players[player]?.megacredits ?? 0) > 0 &&
+        mine.some((s) => canResupplyAt(state, s, map).ok)
+      );
+    case 'sellCargo':
+      // Only worth offering where there is both a market and something to sell.
+      return mine.some(
+        (s) =>
+          s.cargo.some((c) => c.quantity > 0 && (c.kind === 'ore' || c.kind === 'ctShard')) &&
+          canResupplyAt(state, s, map).ok,
+      );
+    case 'loadCargo':
+      // Money moves only in commercial hulls, and only at a base.
+      return mine.some(
+        (s) =>
+          isCommercial(s.shipClass) &&
+          canResupplyAt(state, s, map).ok &&
+          ((state.players[player]?.megacredits ?? 0) > 0 ||
+            s.cargo.some((c) => c.kind === 'megacredits' && c.quantity > 0)),
+      );
+
+    case 'chooseRepair':
+      // Only meaningful with more than one track damaged: with one, there is no
+      // choice to make, and with none there is nothing to work on.
+      return state.options.advancedCombat && mine.some((s) => repairableTracks(s).length > 1);
+    case 'chooseDevastatedSide':
+      return pendingDevastation(state)?.sufferer === player;
+
+    // Scenario-only orders. The engine cannot know whether this scenario has a
+    // cargo run or a Freedom Fleet, so it asks the scenario the same way it asks
+    // about victory — and a scenario with no handler simply never offers them.
+    case 'announceDestination':
+    case 'deliverCargo':
+    case 'convertFleet':
+      return commandHookFor(state.scenarioId) !== null && mine.length > 0;
   }
 };
 

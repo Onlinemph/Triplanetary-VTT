@@ -51,6 +51,25 @@ export const SECRET_KEY = 'secret';
  */
 export const ALWAYS_VISIBLE_KEY = 'alwaysVisible';
 
+/**
+ * `scenarioData` key naming other keys that are published verbatim.
+ *
+ * The filters below fail closed, which is right for a secret and wrong for an
+ * announcement. Piracy's delivery board is the case: "The Merchant must announce
+ * the destination when a ship takes off", and the player who most needs to hear
+ * it is the pirate, who owns none of the ships it names — so every ownership
+ * rule here would withhold exactly the wrong thing. A scenario that publishes
+ * something says so, by name, once.
+ */
+export const PUBLIC_KEYS_KEY = 'publicKeys';
+
+const publicKeys = (state: GameState): ReadonlySet<string> => {
+  const raw = state.scenarioData[PUBLIC_KEYS_KEY];
+  return Array.isArray(raw)
+    ? new Set(raw.filter((x): x is string => typeof x === 'string'))
+    : new Set();
+};
+
 /** Every string appearing anywhere inside a value, however deeply nested. */
 const collectStrings = (value: unknown, out: Set<string>, depth = 0): void => {
   if (depth > 8 || value == null) return;
@@ -216,8 +235,15 @@ export const redactState = (state: GameState, viewer: PlayerId | null, map: Game
     if (viewer !== null && ordnanceVisible(state, o, viewer, map)) ordnance[id] = o;
   }
 
+  const published = publicKeys(state);
+
   const scenarioData: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(state.scenarioData)) {
+    // Declared public: sent whole, to everybody, spectators included.
+    if (key === PUBLIC_KEYS_KEY || published.has(key)) {
+      scenarioData[key] = value;
+      continue;
+    }
     // Each player receives only their own always-visible list.
     if (key === ALWAYS_VISIBLE_KEY) {
       if (viewer !== null && always.size > 0) scenarioData[key] = { [viewer]: [...always] };

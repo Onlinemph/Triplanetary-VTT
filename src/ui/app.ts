@@ -14,7 +14,6 @@
 import { type Hex, type HexSide, distance, eq, length as hexLength, sub } from '@engine/hex.js';
 import { isDetected, visibleShips } from '@engine/detection.js';
 import {
-  controllerOf,
   hasScanners,
   movementData,
   predictedEndpoint,
@@ -32,6 +31,7 @@ import {
   activePlayer,
   areAllied,
   liveShips,
+  controllerOf,
 } from '@engine/types.js';
 import type { PlotOption, PlotPreview } from '@engine/movement.js';
 import { button, el, fill } from './components/dom.js';

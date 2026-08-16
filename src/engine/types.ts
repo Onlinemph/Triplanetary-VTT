@@ -115,6 +115,17 @@ export interface Ship {
   readonly disabled: number;
   readonly advancedDamage: AdvancedDamage;
 
+  /**
+   * Advanced system: which damage track the owner wants worked on first.
+   *
+   * "A ship recovers from 1 D a turn ... The owner chooses what kind of damage
+   * to recover from." A standing order rather than a prompt: the whole fleet
+   * repairs at once at the end of the resupply phase, and the choice only ever
+   * matters for a hull damaged on more than one track. Unset falls back to the
+   * drive, which is the track that decides whether the ship can run away.
+   */
+  readonly repairPreference?: 'weapon' | 'drive' | 'structure';
+
   /** "Warships may perform one overload maneuver between maintenance stopovers." */
   readonly overloadAvailable: boolean;
   /** "A ship may not become heroic more than once." */
@@ -348,6 +359,19 @@ export const shipsOf = (state: GameState, player: PlayerId): Ship[] =>
 
 export const liveShips = (state: GameState): Ship[] =>
   Object.values(state.ships).filter((s) => !s.destroyed);
+
+/**
+ * Who flies this ship. "A captured ship must be returned to a base friendly to
+ * the captor before it may be used for any other mission" — so until then the
+ * captor, not the original owner, gives it orders.
+ *
+ * This lives here, beside `areAllied`, rather than in `movement.ts` where it was
+ * first needed: it is a property of a ship, every rules module has to agree on
+ * it, and combat cannot import movement without a cycle. Allegiance decided two
+ * different ways in two different modules is exactly the bug this placement
+ * prevents.
+ */
+export const controllerOf = (ship: Ship): PlayerId => ship.capturedBy ?? ship.owner;
 
 /** Two players are hostile unless they are the same player or declared allies. */
 export const areAllied = (state: GameState, a: PlayerId, b: PlayerId): boolean => {

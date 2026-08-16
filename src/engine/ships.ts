@@ -28,7 +28,15 @@ export type ShipClass =
   | 'frigate'
   | 'dreadnaught'
   | 'torch'
-  | 'orbitalBase';
+  | 'orbitalBase'
+  /**
+   * Not a ship at all: an emplacement. "Robot guards may be emplaced to protect
+   * a mine and its ore. If attacked, they have a combat value of 2, but only for
+   * defense and counterattacks." Modelled as a counter because that is the only
+   * way something can be shot at — a hex→owner map cannot be fought, and a claim
+   * that cannot be fought for cannot be jumped.
+   */
+  | 'robotGuards';
 
 export const UNLIMITED = Infinity;
 
@@ -39,6 +47,15 @@ export interface ShipClassDef {
   readonly combatStrength: number;
   /** The "D" suffix: strength counts for defence only. */
   readonly defensiveOnly: boolean;
+  /**
+   * May return fire but may never open it. Distinct from `defensiveOnly`, which
+   * is the printed "D" and forbids counterattacking too: robot guards are rated
+   * "only for defense and counterattacks", so they need the second of those and
+   * not the first. No printed *ship* is in this category.
+   */
+  readonly counterattackOnly?: boolean;
+  /** An emplacement rather than a hull: never moves, never bought as a ship. */
+  readonly emplacement?: boolean;
   readonly fuelCapacity: number;
   readonly cargoCapacity: number;
   readonly cost: number;
@@ -165,6 +182,21 @@ export const SHIP_CLASSES: Readonly<Record<ShipClass, ShipClassDef>> = {
     warship: true,
     blurb: 'A large structure, armed and armored, which also resupplies friendly ships.',
   }),
+  robotGuards: def({
+    id: 'robotGuards',
+    name: 'Robot Guards',
+    combatStrength: 2,
+    // Not the printed "D": guards may return fire, which a D-suffix hull may not.
+    defensiveOnly: false,
+    counterattackOnly: true,
+    emplacement: true,
+    fuelCapacity: 0,
+    cargoCapacity: 0,
+    // Bought from the equipment catalogue at MCr 50, not from the shipyard.
+    cost: 50,
+    warship: false,
+    blurb: 'An emplacement guarding a claim: combat value 2, for defence and return fire only.',
+  }),
 };
 
 export const shipClass = (id: ShipClass): ShipClassDef => SHIP_CLASSES[id];
@@ -178,6 +210,13 @@ export const canLaunchTorpedoes = (id: ShipClass): boolean => SHIP_CLASSES[id].w
 
 /** Ships with a "D" strength may neither attack nor counterattack. */
 export const canAttack = (id: ShipClass): boolean => !SHIP_CLASSES[id].defensiveOnly;
+
+/** May open fire — as opposed to merely returning it. */
+export const mayInitiateAttack = (id: ShipClass): boolean =>
+  canAttack(id) && SHIP_CLASSES[id].counterattackOnly !== true;
+
+/** An emplacement: it never moves, and it is never bought from a shipyard. */
+export const isEmplacement = (id: ShipClass): boolean => SHIP_CLASSES[id].emplacement === true;
 
 /** Non-warships are restricted to carrying a single nuke at a time. */
 export const nukeLimit = (id: ShipClass): number => (SHIP_CLASSES[id].warship ? Infinity : 1);

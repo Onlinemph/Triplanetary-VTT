@@ -69,7 +69,7 @@ import {
 import type { GameMap } from './map.js';
 import type { AstralBody } from './mapdata.js';
 import { rollDie } from './rng.js';
-import { SHIP_CLASSES, isCommercial } from './ships.js';
+import { SHIP_CLASSES, isCommercial, isEmplacement } from './ships.js';
 import { ZERO, cargoCount, log, withShip } from './state.js';
 import {
   type CourseLeg,
@@ -80,6 +80,7 @@ import {
   type ShipLocation,
   activePlayer,
   areAllied,
+  controllerOf,
 } from './types.js';
 
 // ---------------------------------------------------------------------------
@@ -136,6 +137,15 @@ export interface MovementData {
   readonly standingStill: Readonly<Record<ShipId, number>>;
   /** Turn on which each ship last mined ore by hand: ".1 ton per turn." */
   readonly mined: Readonly<Record<ShipId, number>>;
+  /**
+   * Asteroid hexes each ship flew through this player-turn, awaiting their roll.
+   *
+   * "If astrogation hazards were encountered during the movement phase, their
+   * effects are rolled for during this phase" — the combat phase. Encountering
+   * and suffering are two different moments, and the rulebook puts them in two
+   * different phases, so the hexes are recorded here and rolled there.
+   */
+  readonly hazards: Readonly<Record<ShipId, readonly Hex[]>>;
 }
 
 const MOVEMENT_KEY = 'movement';
@@ -147,6 +157,7 @@ const EMPTY_MOVEMENT: MovementData = {
   paths: {},
   standingStill: {},
   mined: {},
+  hazards: {},
 };
 
 export const movementData = (state: GameState): MovementData => {
@@ -195,13 +206,6 @@ const reject = (state: GameState, reason: string): { state: GameState; result: C
 // Small predicates
 // ---------------------------------------------------------------------------
 
-/**
- * Who flies this ship. "A captured ship must be returned to a base friendly to
- * the captor before it may be used for any other mission" — so until then the
- * captor, not the original owner, gives it orders.
- */
-export const controllerOf = (ship: Ship): PlayerId => ship.capturedBy ?? ship.owner;
-
 export const shipLabel = (ship: Ship): string =>
   ship.name ?? `${SHIP_CLASSES[ship.shipClass].name} ${ship.number}`;
 
@@ -220,8 +224,13 @@ const driveWorks = (state: GameState, ship: Ship): boolean => {
  * An orbital base is a fixture, not a vessel: "The base remains in that gravity
  * hex; it does not literally orbit... Once placed, a base cannot be picked up
  * again or moved." Its counter therefore neither plots nor drifts nor falls.
+ *
+ * Robot guards are the same kind of thing sitting on a rock — "Once placed, they
+ * remain" — so the test is the class's own `emplacement` flag rather than a
+ * growing list of names.
  */
-export const isFixedInstallation = (ship: Ship): boolean => ship.shipClass === 'orbitalBase';
+export const isFixedInstallation = (ship: Ship): boolean =>
+  ship.shipClass === 'orbitalBase' || isEmplacement(ship.shipClass);
 
 /** Can this ship change its course this turn? Landed ships must blast off first. */
 export const canManeuver = (state: GameState, ship: Ship): boolean => {
@@ -1114,17 +1123,20 @@ const resolveLanding = (state: GameState, id: ShipId, side: HexSide, map: GameMa
 };
 
 /**
- * "A die is rolled for each asteroid hex entered and the asteroid column of the
- * damage table is consulted."
+ * Note which asteroid hexes a ship flew through, for the combat phase to roll.
  *
- * The rulebook books the *effects* of astrogation hazards into the combat phase
- * ("If astrogation hazards were encountered during the movement phase, their
- * effects are rolled for during this phase"), but nothing between the two phases
- * observes the difference, and resolving them here keeps a ship's fate settled
- * before rams are worked out. `map.asteroidHazards` already enforces "at a speed
- * greater than one hex per turn" and the shared-hexside case.
+ * "A die is rolled for each asteroid hex entered and the asteroid column of the
+ * damage table is consulted" — but *when* is stated separately, in the sequence
+ * of play: "4. Combat Phase... If astrogation hazards were encountered during
+ * the movement phase, their effects are rolled for during this phase."
+ *
+ * The difference is visible, not cosmetic: rams "take place during the movement
+ * phase" and so are settled first, and a ship the asteroids are about to maul is
+ * still at full strength when it is rammed. `map.asteroidHazards` already
+ * enforces "at a speed greater than one hex per turn" and the shared-hexside
+ * case.
  */
-const rollAsteroidHazards = (
+const recordAsteroidHazards = (
   state: GameState,
   id: ShipId,
   from: Hex,
@@ -1133,15 +1145,33 @@ const rollAsteroidHazards = (
 ): GameState => {
   const cleared = new Set(state.clearedAsteroids);
   const hazards = map.asteroidHazards(from, to, cleared);
+  if (hazards.length === 0) return state;
+  const data = movementData(state);
+  return withMovementData(state, { hazards: { ...data.hazards, [id]: hazards } });
+};
+
+/**
+ * Roll the astrogation hazards the movement phase recorded.
+ *
+ * Runs as the combat phase opens, which is where the sequence of play puts it.
+ * A stable ship order keeps the dice reproducible across replays.
+ */
+export const resolveAstrogationHazards = (state: GameState): GameState => {
+  const recorded = movementData(state).hazards;
+  const ids = Object.keys(recorded).sort();
+  if (ids.length === 0) return state;
+
   let s = state;
-  for (const h of hazards) {
-    const cur = s.ships[id];
-    if (!cur || cur.destroyed) break;
-    const roll = rollDie(s.rng);
-    s = { ...s, rng: roll.state };
-    s = resolveOther(s, 'asteroid', roll.value, [id], `the asteroids at ${h.q},${h.r}`, [h]);
+  for (const id of ids) {
+    for (const h of recorded[id] ?? []) {
+      const cur = s.ships[id];
+      if (!cur || cur.destroyed) break;
+      const roll = rollDie(s.rng);
+      s = { ...s, rng: roll.state };
+      s = resolveOther(s, 'asteroid', roll.value, [id], `the asteroids at ${h.q},${h.r}`, [h]);
+    }
   }
-  return s;
+  return withMovementData(s, { hazards: {} });
 };
 
 const moveShip = (state: GameState, id: ShipId, map: GameMap): GameState => {
@@ -1254,8 +1284,9 @@ const moveShip = (state: GameState, id: ShipId, map: GameMap): GameState => {
     });
   }
 
-  // 4. Astrogation hazards.
-  s = rollAsteroidHazards(s, id, from, to, map);
+  // 4. Astrogation hazards are *encountered* here and *rolled* in the combat
+  //    phase; see `recordAsteroidHazards`.
+  s = recordAsteroidHazards(s, id, from, to, map);
   return s;
 };
 

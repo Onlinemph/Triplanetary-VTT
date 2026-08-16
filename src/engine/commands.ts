@@ -191,6 +191,94 @@ export interface PurchaseShip extends CommandBase {
   readonly side?: HexSide;
 }
 
+/**
+ * Buy from the p. 9 equipment catalogue at a base the buyer controls.
+ *
+ * Separate from `purchaseShip` because the catalogue is priced per *item* and
+ * loads into a hold — an automated mine is 20 MCr and 100 tons of cargo, not a
+ * new counter on the map.
+ */
+export interface PurchaseEquipment extends CommandBase {
+  readonly type: 'purchaseEquipment';
+  readonly ship: ShipId;
+  readonly kind: CargoKind;
+  readonly quantity: number;
+}
+
+/**
+ * Sell cargo at a base. "Ore may be sold at Terra, Luna, Mars, or Venus"; the CT
+ * shard has its own price list. The counterpart to `purchaseEquipment`, and the
+ * reason a Prospecting miner can now realise a profit.
+ */
+export interface SellCargo extends CommandBase {
+  readonly type: 'sellCargo';
+  readonly ship: ShipId;
+  readonly kind: CargoKind;
+  readonly quantity: number;
+}
+
+/**
+ * Draw MegaCredits from the treasury into a hold, or bank them back.
+ *
+ * Interplanetary War: "The Terran player must physically transport all MCr to
+ * Terra before they may be used" — so the money has to be able to *be* cargo,
+ * at the printed one ton per MCr, and to move only in commercial hulls.
+ */
+export interface LoadCargo extends CommandBase {
+  readonly type: 'loadCargo';
+  readonly ship: ShipId;
+  readonly kind: CargoKind;
+  /** Positive loads from the base; negative unloads to it. */
+  readonly quantity: number;
+}
+
+/**
+ * Piracy: "Merchant ships must announce their destination when they take off."
+ */
+export interface AnnounceDestination extends CommandBase {
+  readonly type: 'announceDestination';
+  readonly ship: ShipId;
+  readonly destination: string;
+}
+
+/** Piracy: land a cargo at the announced world and score the delivery. */
+export interface DeliverCargo extends CommandBase {
+  readonly type: 'deliverCargo';
+  readonly ship: ShipId;
+}
+
+/**
+ * Advanced system: "The owner chooses what kind of damage to recover from."
+ *
+ * A standing preference per ship rather than a prompt each turn — repairs happen
+ * to a whole fleet at once at the end of the resupply phase, and stopping the
+ * game once per damaged hull to ask the same question would be worse play for an
+ * identical result.
+ */
+export interface ChooseRepair extends CommandBase {
+  readonly type: 'chooseRepair';
+  readonly ship: ShipId;
+  readonly track: 'weapon' | 'drive' | 'structure';
+}
+
+/**
+ * "If it is not clear which hex side has been affected, the suffering player
+ * makes the choice." Only ever owed when the approach really is ambiguous; see
+ * `ordnance.ts` → `nukeDevastationCandidates`.
+ */
+export interface ChooseDevastatedSide extends CommandBase {
+  readonly type: 'chooseDevastatedSide';
+  readonly side: HexSide;
+}
+
+/**
+ * Retribution: "corvettes which have stopped at Clandestine are converted into
+ * the Freedom Fleet", at doubled combat strength.
+ */
+export interface ConvertFleet extends CommandBase {
+  readonly type: 'convertFleet';
+}
+
 // --- Flow ------------------------------------------------------------------
 
 /** Advance to the next phase, or to the next player-turn after resupply. */
@@ -224,6 +312,14 @@ export type Command =
   | Loot
   | Capture
   | PurchaseShip
+  | PurchaseEquipment
+  | SellCargo
+  | LoadCargo
+  | AnnounceDestination
+  | DeliverCargo
+  | ChooseRepair
+  | ChooseDevastatedSide
+  | ConvertFleet
   | EndPhase
   | ConcedeGame;
 

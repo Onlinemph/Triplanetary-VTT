@@ -75,7 +75,6 @@ export {
   type PlotPreview,
   canManeuver,
   canOverload,
-  controllerOf,
   courseThroughCentre,
   denseAsteroidsOnCourse,
   effectiveGravity,

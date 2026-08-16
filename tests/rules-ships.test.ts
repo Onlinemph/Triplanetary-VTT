@@ -113,6 +113,15 @@ const hull = (
 
 const ALL_CLASSES = Object.keys(SHIP_CLASSES) as ShipClass[];
 
+/**
+ * The printed ship-type table covers hulls. `robotGuards` is an emplacement from
+ * the p. 9 equipment list — "Robot guards ... If attacked, they have a combat
+ * value of 2, but only for defense and counterattacks" — and is a `ShipClass`
+ * only because being shootable is what makes that sentence mean anything. It is
+ * excluded here so the table test stays a test of the table.
+ */
+const HULL_CLASSES = ALL_CLASSES.filter((c) => !shipClass(c).emplacement);
+
 // ---------------------------------------------------------------------------
 // The ship table (pp. 1 and 17)
 // ---------------------------------------------------------------------------
@@ -138,7 +147,10 @@ describe('the ship table', () => {
    *  friendly ships."
    */
   const PRINTED: Readonly<
-    Record<ShipClass, { strength: string; fuel: number; cargo: number; cost: number }>
+    Record<
+      Exclude<ShipClass, 'robotGuards'>,
+      { strength: string; fuel: number; cargo: number; cost: number }
+    >
   > = {
     transport: { strength: '1D', fuel: 10, cargo: 50, cost: 10 },
     packet: { strength: '2', fuel: 10, cargo: 50, cost: 20 },
@@ -153,9 +165,9 @@ describe('the ship table', () => {
   };
 
   it('carries every printed cell', () => {
-    for (const cls of ALL_CLASSES) {
+    for (const cls of HULL_CLASSES) {
       const d = shipClass(cls);
-      const printed = PRINTED[cls];
+      const printed = PRINTED[cls as Exclude<ShipClass, 'robotGuards'>];
       expect({
         cls,
         strength: `${d.combatStrength}${d.defensiveOnly ? 'D' : ''}`,
@@ -174,15 +186,15 @@ describe('the ship table', () => {
 
   it('lists nine ship types plus orbital bases, and no more', () => {
     // "Triplanetary depicts nine different types of ship, plus orbital bases."
-    expect(ALL_CLASSES.filter((c) => c !== 'orbitalBase')).toHaveLength(9);
-    expect(ALL_CLASSES).toContain('orbitalBase');
+    expect(HULL_CLASSES.filter((c) => c !== 'orbitalBase')).toHaveLength(9);
+    expect(HULL_CLASSES).toContain('orbitalBase');
   });
 
   it('gives the D suffix to exactly the transport, tanker and liner', () => {
     // "Ships with a D after their combat strength may not attack or
     //  counterattack; their strength is defensive only. Warships and packets
     //  have a combat strength without the D suffix; they may attack normally."
-    const suffixed = ALL_CLASSES.filter((c) => shipClass(c).defensiveOnly).sort();
+    const suffixed = HULL_CLASSES.filter((c) => shipClass(c).defensiveOnly).sort();
     expect(suffixed).toEqual(['liner', 'tanker', 'transport']);
   });
 
@@ -286,7 +298,7 @@ describe('warships and commercial ships', () => {
     //  Overload allows expenditure of two fuel points in one turn... Commercial
     //  ships (transports, packets, tankers, liners) may not perform the overload
     //  maneuver."
-    for (const cls of ALL_CLASSES) {
+    for (const cls of HULL_CLASSES) {
       const ship = makeShip({ id: 's', owner: A, shipClass: cls, pos: CLEAR, fuel: 10 });
       const s = rig({ ships: [ship] });
       const commercial = isCommercial(cls);
@@ -349,7 +361,7 @@ describe('warships and commercial ships', () => {
   it('lets only warships launch torpedoes', () => {
     // "A torpedo masses 20 tons; a carrying ship must have hold capacity to
     //  carry it. Only warships may launch torpedoes."
-    for (const cls of ALL_CLASSES) {
+    for (const cls of HULL_CLASSES) {
       expect({ cls, launch: canLaunchTorpedoes(cls) }).toEqual({
         cls,
         launch: !isCommercial(cls),
@@ -793,7 +805,7 @@ describe('the MegaCredit system', () => {
   it('charges the printed cost for a ship and deducts it', () => {
     // "Ships, equipment, ordnance, and other items are purchased for MegaCredits
     //  (abbreviated MCr) which are given or earned in the scenario."
-    for (const cls of ALL_CLASSES) {
+    for (const cls of HULL_CLASSES) {
       if (cls === 'orbitalBase') continue; // bought as cargo, see below
       const cost = shipClass(cls).cost;
       let s = toPhase(yard(cost), 'resupply');

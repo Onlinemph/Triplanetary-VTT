@@ -11,7 +11,8 @@
  */
 
 import { DEFAULT_MAP, type GameMap } from '@engine/map.js';
-import { registerTurnHook } from '@engine/reducer.js';
+import { registerCommandHook, registerTurnHook } from '@engine/reducer.js';
+import type { Command, CommandResult } from '@engine/commands.js';
 import type { GameState } from '@engine/types.js';
 
 import { biPlanetary } from './biPlanetary.js';
@@ -95,10 +96,25 @@ export const applyScenarioTurn = (state: GameState, map: GameMap = DEFAULT_MAP):
   return scenario?.endPlayerTurn?.(state, map) ?? state;
 };
 
-// The engine cannot import this table — the scenarios import *it* — so the one
-// callback it needs is handed over as this module loads. Anything that can build
-// a scenario has therefore already registered its upkeep.
+/**
+ * Route a scenario-only order to the scenario that defines it.
+ *
+ * `null` means "not an order this scenario has", and the engine refuses it.
+ */
+export const applyScenarioCommand = (
+  state: GameState,
+  cmd: Command,
+  map: GameMap = DEFAULT_MAP,
+): { state: GameState; result: CommandResult } | null =>
+  scenarioById(state.scenarioId)?.handleCommand?.(state, cmd, map) ?? null;
+
+// The engine cannot import this table — the scenarios import *it* — so the
+// callbacks it needs are handed over as this module loads. Anything that can
+// build a scenario has therefore already registered its upkeep and its orders.
 registerTurnHook(applyScenarioTurn);
+for (const s of SCENARIOS) {
+  if (s.handleCommand) registerCommandHook(s.id, applyScenarioCommand);
+}
 
 /**
  * A view of the table suitable for a scenario picker.

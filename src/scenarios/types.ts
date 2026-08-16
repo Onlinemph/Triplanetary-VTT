@@ -14,6 +14,7 @@
  * and let the players call it.
  */
 
+import type { Command, CommandResult } from '@engine/commands.js';
 import type { GameMap } from '@engine/map.js';
 import type { GameOptions, GameState, VictoryState } from '@engine/types.js';
 
@@ -57,6 +58,19 @@ export interface ScenarioDef {
    * reinforcements, points scored. Pure, and any die must come from `state.rng`.
    */
   endPlayerTurn?(state: GameState, map: GameMap): GameState;
+  /**
+   * Orders that exist only in this scenario.
+   *
+   * Three of the printed scenarios ask for something no general rule covers —
+   * announcing a cargo's destination and delivering it (Piracy), mustering the
+   * Freedom Fleet (Retribution). Return `null` for any command this scenario
+   * does not own, and the engine will refuse it.
+   */
+  handleCommand?(
+    state: GameState,
+    cmd: Command,
+    map: GameMap,
+  ): { state: GameState; result: CommandResult } | null;
   /** Rules that apply only to this scenario, quoted for the help panel. */
   readonly specialRules?: readonly string[];
 }

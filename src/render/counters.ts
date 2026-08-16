@@ -192,6 +192,22 @@ export const drawClassGlyph = (
       ctx.fill();
       break;
     }
+    case 'robotGuards': {
+      // A bunker on a rock: flat-bottomed and domed, so it never reads as a hull
+      // pointing anywhere. Robot guards do not move and cannot open fire.
+      ctx.moveTo(cx - s * 0.8, cy + s * 0.55);
+      ctx.lineTo(cx - s * 0.8, cy + s * 0.05);
+      ctx.arc(cx, cy + s * 0.05, s * 0.8, Math.PI, 0);
+      ctx.lineTo(cx + s * 0.8, cy + s * 0.55);
+      ctx.closePath();
+      ctx.fill();
+      ctx.beginPath();
+      ctx.strokeStyle = rgba('#000000', 0.45);
+      ctx.moveTo(cx - s * 0.35, cy + s * 0.1);
+      ctx.lineTo(cx + s * 0.35, cy + s * 0.1);
+      ctx.stroke();
+      break;
+    }
   }
 };
 

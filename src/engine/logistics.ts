@@ -40,9 +40,16 @@ import type {
 import { otherDamage, otherToHit } from './crt.js';
 import { type Hex, type HexSide, distance, eq, isZero, key, sideKey } from './hex.js';
 import type { GameMap } from './map.js';
-import { commitToStandingStill, controllerOf, minedThisTurn, shipPath } from './movement.js';
+import { commitToStandingStill, minedThisTurn, shipPath } from './movement.js';
 import { rollDice } from './rng.js';
-import { type CargoKind, type ShipClass, CARGO, SHIP_CLASSES } from './ships.js';
+import {
+  type CargoKind,
+  type ShipClass,
+  CARGO,
+  SHIP_CLASSES,
+  isCommercial,
+  isEmplacement,
+} from './ships.js';
 import {
   ZERO,
   addCargo,
@@ -63,6 +70,7 @@ import {
   type ShipId,
   activePlayer,
   areAllied,
+  controllerOf,
 } from './types.js';
 
 // ---------------------------------------------------------------------------
@@ -330,6 +338,20 @@ const supplyDeniedReason = (
   const fuelBases = stringsAt(state, 'fuelBases');
   if (fuelBases && !fuelBases.includes(baseBodyId(base, map))) {
     return `no fuel is available at ${base.id} in this scenario`;
+  }
+
+  // "A disabled ship cannot maneuver, launch ordnance, or attack", with one named
+  // exception: "An orbital base may launch torpedoes, fire guns, and resupply
+  // friendly ships while the base itself is slightly (D1) damaged."
+  //
+  // Resupply is inside that exception, alongside the two capabilities that
+  // demonstrably stop at D2 (`canFire` refuses an orbital base above D1). An
+  // exception that lists three permissions at D1 is not a licence for one of them
+  // at D5, so the pumps stop when the guns do. A *planetary* base has no damage
+  // track at all and is unaffected by any of this.
+  const counter = base.kind === 'orbital' ? orbitalBaseCounter(state, base) : undefined;
+  if (counter && counter.disabled > 1) {
+    return `the orbital base at ${base.id} is too badly damaged to run resupply`;
   }
   return null;
 };
@@ -1067,6 +1089,11 @@ export function purchaseShip(
       'an orbital base is bought as cargo and emplaced by a transport or packet',
     );
   }
+  if (isEmplacement(cmd.shipClass)) {
+    // Robot guards come off the p. 9 equipment list at MCr 50 and go down where
+    // a miner sets them, not out of a shipyard as a hull.
+    return reject(state, 'robot guards are bought as equipment and emplaced on a claim');
+  }
   const allowed = purchasableClasses(state);
   if (allowed && !allowed.includes(cmd.shipClass)) {
     return reject(state, `${SHIP_CLASSES[cmd.shipClass].name}s are not for sale in this scenario`);
@@ -1131,10 +1158,23 @@ export function purchaseShip(
 }
 
 /**
- * Buy equipment into a ship's hold at a friendly base. There is no command for
- * this in the protocol — scenarios that use the MegaCredit table drive it — but
- * the price list and the hold check belong here with everything else.
+ * The p. 9 catalogue, as a shop.
+ *
+ * Everything with a printed price is stock; `scenarioData.equipmentAvailable`
+ * narrows it where a scenario says so, exactly as `ordnanceAvailable` narrows
+ * what a base will hand out for free. Nukes are the one item gated by an
+ * *option* rather than a price, because "nukes are available only if the
+ * scenario specifies" — and a shop is a way of obtaining one, so the check has
+ * to live here too and not only in the launch tube.
  */
+export const equipmentCatalogue = (state: GameState): readonly CargoKind[] => {
+  const allowed = stringsAt(state, 'equipmentAvailable');
+  const priced = (Object.keys(CARGO) as CargoKind[]).filter((k) => CARGO[k].cost !== null);
+  const stocked = allowed === null ? priced : priced.filter((k) => allowed.includes(k));
+  return state.options.nukesAllowed ? stocked : stocked.filter((k) => k !== 'nuke');
+};
+
+/** Buy equipment into a ship's hold at a base the buyer may draw supply from. */
 export function purchaseEquipment(
   state: GameState,
   shipId: ShipId,
@@ -1149,6 +1189,14 @@ export function purchaseEquipment(
   const price = CARGO[kind].cost;
   if (price === null) return reject(state, `${CARGO[kind].name} has no list price`);
   if (!Number.isInteger(quantity) || quantity <= 0) return reject(state, 'quantity must be whole');
+  if (!equipmentCatalogue(state).includes(kind)) {
+    return reject(
+      state,
+      kind === 'nuke'
+        ? 'nukes are not available in this scenario'
+        : `${CARGO[kind].name} is not sold in this scenario`,
+    );
+  }
 
   const check = canResupplyAt(state, ship, map);
   if (!check.ok) return reject(state, check.reason ?? 'not at a base');
@@ -1166,15 +1214,33 @@ export function purchaseEquipment(
   return { state: s, result: okResult };
 }
 
+/** What one unit of `kind` fetches at this base, or `null` if it is not traded. */
+export const salePrice = (
+  state: GameState,
+  base: BaseState,
+  kind: CargoKind,
+  map: GameMap,
+): number | null => {
+  const market = MARKETS[baseBodyId(base, map)];
+  if (!market) return null;
+  if (kind === 'ore') return market.ore;
+  if (kind === 'ctShard') return market.ctShard;
+  return null;
+};
+
 /**
  * Sell ore and contraterrene shards at a market base. Prices are per the
  * Prospecting scenario; Clandestine "buys ore at Ceres prices".
+ *
+ * `quantity` is optional so the caller can say "sell the lot" without first
+ * reading the hold; ore is divisible, everything else is not.
  */
 export function sellCargo(
   state: GameState,
   shipId: ShipId,
   kinds: readonly CargoKind[],
   map: GameMap,
+  quantity?: number,
 ): { state: GameState; result: CommandResult } {
   const ship = state.ships[shipId];
   if (!ship || ship.destroyed) return reject(state, 'no such ship');
@@ -1185,18 +1251,24 @@ export function sellCargo(
   if (!check.ok || check.baseId === undefined)
     return reject(state, check.reason ?? 'not at a base');
   const base = state.bases[check.baseId]!;
-  const market = MARKETS[baseBodyId(base, map)];
-  if (!market) return reject(state, `${nameOfBase(state, base.id, map)} does not buy ore`);
+  if (!MARKETS[baseBodyId(base, map)]) {
+    return reject(state, `${nameOfBase(state, base.id, map)} does not buy ore`);
+  }
 
   let sold: Ship = ship;
   let earned = 0;
   for (const kind of kinds) {
     const held = cargoCount(sold, kind);
     if (held <= 0) continue;
-    const unit = kind === 'ore' ? market.ore : kind === 'ctShard' ? market.ctShard : null;
+    const unit = salePrice(state, base, kind, map);
     if (unit === null) return reject(state, `${CARGO[kind].name} is not traded here`);
-    earned += held * unit;
-    sold = setCargo(sold, kind, 0);
+    const amount = quantity === undefined ? held : Math.min(quantity, held);
+    if (amount <= 0) continue;
+    if (kind !== 'ore' && !Number.isInteger(amount)) {
+      return reject(state, `${CARGO[kind].name} cannot be split`);
+    }
+    earned += amount * unit;
+    sold = setCargo(sold, kind, roundTons(held - amount));
   }
   if (earned <= 0) return reject(state, 'there is nothing to sell');
 
@@ -1208,6 +1280,87 @@ export function sellCargo(
     { severity: 'good', focus: [ship.pos] },
   );
   return { state: s, result: okResult };
+}
+
+// ---------------------------------------------------------------------------
+// MegaCredits as freight
+// ---------------------------------------------------------------------------
+
+/**
+ * Interplanetary War: "The Terran player must physically transport all MCr to
+ * Terra before they may be used, and the MCr may be transported only in
+ * commercial ships."
+ *
+ * The treasury and the hold are two different places for the same money. Drawing
+ * it out at a base turns MCr into cargo at the printed one ton per credit;
+ * banking it at a base turns it back. `scenarioData.megacreditsBankedAt` names
+ * the world where the money counts — Terra, for the scenario that needs it — and
+ * where it is absent the money banks anywhere, which is what every other
+ * scenario assumes today.
+ */
+export const megacreditsBankableAt = (state: GameState): readonly string[] | null =>
+  stringsAt(state, 'megacreditsBankedAt');
+
+export function loadCargo(
+  state: GameState,
+  shipId: ShipId,
+  kind: CargoKind,
+  quantity: number,
+  map: GameMap,
+): { state: GameState; result: CommandResult } {
+  const ship = state.ships[shipId];
+  if (!ship || ship.destroyed) return reject(state, 'no such ship');
+  const player = state.players[controllerOf(ship)];
+  if (!player) return reject(state, 'no such player');
+  if (kind !== 'megacredits') return reject(state, 'only MegaCredits may be drawn from a treasury');
+  if (!Number.isInteger(quantity) || quantity === 0) {
+    return reject(state, 'quantity must be a whole number of credits');
+  }
+
+  const check = canResupplyAt(state, ship, map);
+  if (!check.ok || check.baseId === undefined) {
+    return reject(state, check.reason ?? 'not at a base');
+  }
+  const base = state.bases[check.baseId]!;
+
+  // "The MCr may be transported only in commercial ships."
+  if (!isCommercial(ship.shipClass)) {
+    return reject(state, `${shipLabel(ship)} is a warship and may not carry the payroll`);
+  }
+
+  const banks = megacreditsBankableAt(state);
+  const here = baseBodyId(base, map);
+  if (banks !== null && !banks.includes(here)) {
+    const where = banks.join(', ');
+    return reject(state, `MegaCredits may only be drawn or banked at ${where}`);
+  }
+
+  if (quantity > 0) {
+    if (player.megacredits < quantity) return reject(state, `${player.name} has no such sum`);
+    const objection = canCarry(ship, 'megacredits', quantity);
+    if (objection) return reject(state, objection);
+    let s = withShip(state, addCargo(ship, 'megacredits', quantity));
+    s = withPlayer(s, { ...player, megacredits: roundTons(player.megacredits - quantity) });
+    return {
+      state: log(s, `${shipLabel(ship)} loads MCr ${quantity} at ${nameOfBase(s, base.id, map)}.`, {
+        focus: [ship.pos],
+      }),
+      result: okResult,
+    };
+  }
+
+  const unloading = Math.min(-quantity, cargoCount(ship, 'megacredits'));
+  if (unloading <= 0) return reject(state, `${shipLabel(ship)} carries no MegaCredits`);
+  let s = withShip(state, addCargo(ship, 'megacredits', -unloading));
+  s = withPlayer(s, { ...player, megacredits: roundTons(player.megacredits + unloading) });
+  return {
+    state: log(
+      s,
+      `${shipLabel(ship)} banks MCr ${unloading} at ${nameOfBase(s, base.id, map)}; the treasury may now spend it.`,
+      { severity: 'good', focus: [ship.pos] },
+    ),
+    result: okResult,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -1307,9 +1460,28 @@ const handleShard = (state: GameState, id: ShipId, map: GameMap): GameState => {
   return applyDamage(s, id, otherDamage('asteroid', value), 'a contraterrene shard');
 };
 
-/** Whose robot guards, if anyone's, are standing over this hex. */
-export const guardsAt = (state: GameState, h: Hex): PlayerId | undefined =>
-  logisticsData(state).guards[key(h)];
+/**
+ * Whose robot guards, if anyone's, are standing over this hex.
+ *
+ * Derived from the counter on the map rather than from a table, so that shooting
+ * the guards actually lifts the cordon: "Robot guards... prevent anyone other
+ * than the owner from removing stockpiled ore" for exactly as long as they are
+ * still there. `logistics.guards` remains the fallback for a scenario that
+ * declares a guarded hex in its setup without placing a counter.
+ */
+export const guardsAt = (state: GameState, h: Hex): PlayerId | undefined => {
+  const standing = Object.values(state.ships).find(
+    (s) => s.shipClass === 'robotGuards' && !s.destroyed && eq(s.pos, h),
+  );
+  if (standing) return controllerOf(standing);
+  return logisticsData(state).guards[key(h)];
+};
+
+/** The guard counter holding this hex, if one is standing. */
+export const guardCounterAt = (state: GameState, h: Hex): Ship | undefined =>
+  Object.values(state.ships).find(
+    (s) => s.shipClass === 'robotGuards' && !s.destroyed && eq(s.pos, h),
+  );
 
 export const mineAt = (state: GameState, h: Hex): MineSite | undefined =>
   logisticsData(state).mines[key(h)];
@@ -1453,7 +1625,24 @@ export function emplaceEquipment(
     });
   } else {
     if (guards !== undefined) return reject(state, 'this claim is already guarded');
-    s = withLogistics(s, { guards: { ...data.guards, [k]: player } });
+    // The guards go down as a counter, not as a note in a table. "If attacked,
+    // they have a combat value of 2" — so they have to be something an attack
+    // can name, something gunfire can disable, and something whose destruction
+    // reopens the claim.
+    const number = s.nextShipNumber;
+    s = { ...s, nextShipNumber: number + 1 };
+    s = withShip(
+      s,
+      makeShip({
+        id: `guards-${k}`,
+        owner: player,
+        shipClass: 'robotGuards',
+        number,
+        pos: ship.pos,
+        name: `Robot Guards ${number}`,
+        location: { kind: 'asteroidBase', hex: ship.pos },
+      }),
+    );
     s = log(s, `${shipLabel(ship)} sets robot guards at ${k}.`, {
       severity: 'good',
       focus: [ship.pos],
