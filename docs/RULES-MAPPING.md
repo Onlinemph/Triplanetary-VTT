@@ -287,6 +287,20 @@ ship which passes between a gravity hex and the planetary outline is affected by
 the gravity hex". Here that holds by construction: the gravity ring completely
 encloses the body, so no course reaches the body's hex without entering it.
 
+**Leaving an asteroid base.** "Ships may land at Ceres and Clandestine, or at
+any unnamed asteroid in the Belt, by simply stopping in the hex" has to work in
+both directions, and the takeoff rule says so outright -- an asteroid base is
+left "by accelerating out of the hex". The crash check exempted the arrival and
+not the departure, so a ship stopped at Ceres was inside the printed outline by
+definition and _every_ course it could plot counted as intersecting it: it could
+land there and then never leave. Fixed in `engine/movement.ts` → `crashBody`,
+which now walks every body a course touches (`map.ts` → `bodiesHit`) and forgives
+only the rock being departed or landed on -- a course excused for leaving Ceres
+may still be flying into something else. Held down by two tests in
+`tests/movement.test.ts`. This mattered in play, not just in principle:
+Prospecting begins with all three freighters at Ceres, and the pirates in Piracy
+and Lateral 7 are based at Clandestine.
+
 ## Known gaps
 
 Four. The first two are cases where the rulebook itself stops short of a

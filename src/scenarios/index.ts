@@ -146,6 +146,14 @@ export interface ScenarioSummary {
   readonly blurb: string;
   readonly length: string;
   readonly description: string;
+  /**
+   * The seats at the table, in the order the scenario builds them.
+   *
+   * The picker needs them to ask which are played by the computer, and it cannot
+   * import this table. Order is the contract: seat *n* here is
+   * `state.playerOrder[n]` in the game the scenario builds.
+   */
+  readonly seats: readonly { readonly faction: string; readonly name: string }[];
   /** Flattened `pointBuy`, ready for a buy screen that cannot import this table. */
   readonly pointBuy?: {
     readonly sides: readonly {
@@ -191,6 +199,7 @@ export const SCENARIO_SUMMARIES: readonly ScenarioSummary[] = SCENARIOS.map((s) 
     blurb: s.blurb,
     length: s.length,
     description: s.description,
+    seats: s.playerTemplates.map((t) => ({ faction: t.faction, name: t.name })),
     ...(buy ? { pointBuy: buy } : {}),
   };
 });

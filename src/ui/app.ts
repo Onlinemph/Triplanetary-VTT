@@ -40,7 +40,8 @@ import { phaseIsIdle } from '@engine/reducer.js';
 import { button, el, fill } from './components/dom.js';
 import { icon } from './components/glyphs.js';
 import { type Overlay, openModal } from './components/modal.js';
-import type { AppDeps, RenderView, RendererPort, SessionPort } from './ports.js';
+import { aiCommand } from '../ai/driver.js';
+import type { AppDeps, ComputerSeats, RenderView, RendererPort, SessionPort } from './ports.js';
 import { createCombatPanel } from './panels/combat.js';
 import { createFleetPanel } from './panels/fleet.js';
 import { createInspector } from './panels/inspector.js';
@@ -140,6 +141,10 @@ export const createApp = (deps: AppDeps): App => {
   let unsubscribe: (() => void) | null = null;
   /** Re-entry guard for `autoAdvance`: dispatching renders, which would recurse. */
   let busySkipping = false;
+  /** The same guard for the computer's own loop. */
+  let busyAi = false;
+  /** Seats the computer plays, by player id. Empty for an all-human game. */
+  let computerSeats: Set<PlayerId> = new Set();
   let ui: UiState = { ...INITIAL_UI };
   let scenarioId = deps.scenarios[0]?.id ?? '';
   let gameOptions: GameOptions = { ...DEFAULT_OPTIONS };
@@ -432,7 +437,13 @@ export const createApp = (deps: AppDeps): App => {
         { id: scenarioId, options: gameOptions, seed },
         (result) => {
           pickerOverlay = null;
-          startScenario(result.id, result.opts.seed, result.opts.options);
+          startScenario(
+            result.id,
+            result.opts.seed,
+            result.opts.options,
+            result.opts.fleets,
+            result.computerSeats,
+          );
         },
         session !== null,
         () => {
@@ -863,6 +874,53 @@ export const createApp = (deps: AppDeps): App => {
     }, NOTICE_MS);
   };
 
+  /**
+   * Let the computer play its seats.
+   *
+   * It dispatches through the same session a person's click does, so every order
+   * is logged, judged and undoable exactly as theirs would be — the computer has
+   * no private channel into the engine. The loop runs to completion before the
+   * frame is drawn, which is why the interface never shows a half-finished
+   * computer turn, and why there is no timer to leak: it is the same shape as
+   * `autoAdvance` below, and shares its re-entry discipline.
+   *
+   * The step budget is a backstop against a policy bug, not a rule. A whole game
+   * turn for every seat is far more orders than any honest position needs.
+   */
+  const runComputerSeats = (): void => {
+    if (!session || busyAi || computerSeats.size === 0) return;
+    busyAi = true;
+    try {
+      const limit = 60 * Math.max(1, session.state.playerOrder.length);
+      let gave = 0;
+      for (let i = 0; i < limit; i += 1) {
+        const before = session.state;
+        if (before.victory) break;
+        const order = aiCommand(before, computerSeats, session.map);
+        if (order === null) break;
+        if (!session.dispatch(order.command).ok) {
+          // An order the engine refuses is a bug in the policy, not something to
+          // retry: stop and let the player see where it got stuck.
+          raiseNotice(
+            `The computer gave an order the rules refused (${order.command.type}).`,
+            'bad',
+          );
+          break;
+        }
+        if (session.state === before) break;
+        if (order.command.type !== 'endPhase') gave += 1;
+      }
+      if (gave > 0) {
+        const who = [...computerSeats]
+          .map((p) => session?.state.players[p]?.faction ?? p)
+          .join(' and ');
+        raiseNotice(`${who} played — see the log.`, 'info');
+      }
+    } finally {
+      busyAi = false;
+    }
+  };
+
   const autoAdvance = (): void => {
     if (!session || busySkipping || !ui.flags.autoSkip) return;
     busySkipping = true;
@@ -895,6 +953,7 @@ export const createApp = (deps: AppDeps): App => {
 
   const render = (): void => {
     if (!session) return;
+    runComputerSeats();
     autoAdvance();
     const state = session.state;
 
@@ -988,11 +1047,27 @@ export const createApp = (deps: AppDeps): App => {
 
   // --- Lifecycle -----------------------------------------------------------
 
-  const startScenario = (id: string, newSeed: number, options: Partial<GameOptions>): void => {
+  const startScenario = (
+    id: string,
+    newSeed: number,
+    options: Partial<GameOptions>,
+    fleets?: Readonly<Record<string, readonly string[]>>,
+    seats: ComputerSeats = [],
+  ): void => {
     scenarioId = id;
     seed = newSeed;
     gameOptions = { ...DEFAULT_OPTIONS, ...options };
-    const state = deps.buildScenario(id, { seed, options: gameOptions });
+    const state = deps.buildScenario(id, {
+      seed,
+      options: gameOptions,
+      ...(fleets ? { fleets } : {}),
+    });
+
+    // Seat *n* on the picker is `playerOrder[n]` in the built game — the one
+    // place the index the player clicked becomes a player id.
+    computerSeats = new Set(
+      seats.map((i) => state.playerOrder[i]).filter((p): p is PlayerId => p !== undefined),
+    );
 
     unsubscribe?.();
     session = deps.createSession(state);

@@ -124,6 +124,60 @@ won. Randomised setup (Nova's colony rolls, for instance) is threaded through
 are judgement calls in the rulebook return `null` and are quoted in the briefing
 for the players to settle.
 
+### `src/ai` — the computer opponent
+
+Triplanetary has no solitaire rules of its own, so this is a convenience rather
+than a rules module: a seat whose orders come from a function instead of a
+person. That framing is the whole design.
+
+```ts
+const order = aiCommand(state, computerSeats, map); // decide
+if (order) session.dispatch(order.command); // ...through the ordinary front door
+```
+
+`nextCommand(state, me, map)` returns one `Command` — the same shape a click
+produces — or `null` when the seat has nothing left to do. Everything follows
+from that:
+
+- **It cannot cheat.** Every order goes through `applyCommand` and is refused on
+  exactly the same terms as a player's. There is no private channel into the
+  engine, and no rule it can reach around.
+- **It cannot break replay.** Its orders land in the command log like any
+  others, so a solo game replays from its seed and log into the identical
+  position — and undo works on the computer's turns too.
+- **It cannot see through walls.** With fog of war on, the driver hands the
+  policy a `redactState` view: the same one the seat would get over the wire,
+  with undetected ships and scenario secrets removed.
+- **It is deterministic.** No `Math.random`, no `Date`; ties break on ship and
+  hex order. The same position always produces the same order.
+
+| File            | Owns                                                                                                                     |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `navigate.ts`   | Astrogation: which courses are survivable, and which one closes on a goal while leaving room — and fuel — to stop.       |
+| `objectives.ts` | The briefing book. Reads each scenario's own published `scenarioData` and turns it into an errand for a particular ship. |
+| `index.ts`      | The policy: owed answers first, then astrogation, combat and resupply.                                                   |
+| `driver.ts`     | `aiCommand` / `stepAi` / `driveAi` — deciding one order, applying one order, and playing a whole run of them.            |
+
+Three ideas do most of the work in `navigate.ts`, and all three come straight
+off the page. Braking sheds one hex of speed per turn, so stopping from speed
+_v_ needs `v(v+1)/2` hexes of room _and_ _v_ points of fuel. And a course is
+played one turn further before it is accepted, because "unless fuel is spent on
+the next turn, the ship would fall back to the planet and crash" — stopping one
+hex above Terra looks like arriving and is in fact falling.
+
+`objectives.ts` is deliberately one-way: it reads `scenarioData`, and nothing in
+`src/scenarios` knows a computer might be playing. Bi-Planetary publishes
+`targets`, the Grand Tour publishes `requiredBodies` and `combatForbidden`,
+Prospecting publishes `prospecting` — the AI reads the same keys the victory
+checks do. A scenario that publishes nothing falls through to the general
+policy, which is the right answer for the fighting scenarios, where hunting the
+enemy _is_ the objective.
+
+What it does not do: search. It plans one turn at a time and will not out-fly a
+thoughtful human over a long approach. What it does reliably is fly without
+crashing, close on something it can actually catch, take fights worth taking,
+decline fights that are not, and go home to refuel before it runs dry.
+
 ### `src/net` — session and transport
 
 `GameSession` is the only object the shell holds. It owns the current state, the

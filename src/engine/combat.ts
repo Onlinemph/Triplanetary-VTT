@@ -221,6 +221,62 @@ const listNames = (ships: readonly Ship[]): string => {
 };
 
 // ---------------------------------------------------------------------------
+// What a shot will do
+// ---------------------------------------------------------------------------
+
+/**
+ * The outcome of a gun attack, counted rather than estimated.
+ *
+ * One die decides a gun attack, so this is a census of the six faces and exact.
+ * The odds column and the modifiers are how the rulebook *computes* it; they are
+ * not the answer to "what happens if I fire".
+ *
+ * Whether a damage result kills depends on what the target has already taken:
+ * "damage is cumulative; if a ship ever reaches a condition of D6 or greater, it
+ * is destroyed." A face that would finish somebody counts as a kill.
+ *
+ * Lives here rather than in the interface because it is rules arithmetic, and
+ * because both the panel that shows a player their odds and the computer
+ * opponent that weighs its own have to agree on it exactly.
+ */
+export interface Forecast {
+  readonly destroy: number;
+  readonly damage: number;
+  readonly nothing: number;
+  /** True when a plain damage result would finish a target outright. */
+  readonly finishes: boolean;
+}
+
+export const forecastOf = (
+  column: OddsColumn | null,
+  modifier: number,
+  targets: readonly Ship[],
+): Forecast => {
+  let destroy = 0;
+  let damage = 0;
+  let nothing = 0;
+  let finishes = false;
+  if (column === null) return { destroy: 0, damage: 0, nothing: 6, finishes: false };
+
+  for (let face = 1; face <= 6; face += 1) {
+    const result = gunDamage(column, face + modifier);
+    if (result === null) {
+      nothing += 1;
+    } else if (result === 'E') {
+      destroy += 1;
+    } else if (targets.some((s) => s.disabled + result >= DESTRUCTION_THRESHOLD)) {
+      // "If a ship which will be disabled for 3 more turns receives a D3 result,
+      // it is destroyed."
+      destroy += 1;
+      finishes = true;
+    } else {
+      damage += 1;
+    }
+  }
+  return { destroy, damage, nothing, finishes };
+};
+
+// ---------------------------------------------------------------------------
 // Preview
 // ---------------------------------------------------------------------------
 

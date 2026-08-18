@@ -77,6 +77,14 @@ export interface ScenarioDescriptor {
   readonly length: string | number;
   readonly description: string;
   /**
+   * The seats at the table, in the order the scenario builds them.
+   *
+   * Seat *n* is `state.playerOrder[n]` in the built game — which is how the
+   * picker can offer "human or computer" per seat without knowing the player ids
+   * a scenario will mint.
+   */
+  readonly seats: readonly { readonly faction: string; readonly name: string }[];
+  /**
    * The opening fleets this scenario prices in combat strength points, if any.
    *
    * Nova is the one that does: "Both the EastBloc and the WestBloc players select
@@ -105,6 +113,9 @@ export interface ScenarioBuildOptions {
   /** Fleets bought on the point-buy screen, by player id. */
   readonly fleets?: Readonly<Record<string, readonly string[]>>;
 }
+
+/** Seat indices the computer plays, into `ScenarioDescriptor.seats`. */
+export type ComputerSeats = readonly number[];
 
 // ---------------------------------------------------------------------------
 // Wiring

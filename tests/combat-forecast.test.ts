@@ -21,7 +21,7 @@ import {
 import { makeShip } from '../src/engine/state.js';
 import type { Ship } from '../src/engine/types.js';
 import { hex } from '../src/engine/hex.js';
-import { forecastOf } from '../src/ui/panels/combat.js';
+import { forecastOf } from '../src/engine/combat.js';
 
 // The printed columns, taken from the engine rather than retyped — a column
 // this file invented would test nothing.

@@ -11,8 +11,15 @@
  * damage is implemented."
  */
 
-import { canFire, combatStrength, pendingCounterattack, previewAttack } from '@engine/combat.js';
-import { type OddsColumn, DESTRUCTION_THRESHOLD, gunDamage } from '@engine/crt.js';
+import {
+  type Forecast,
+  canFire,
+  combatStrength,
+  forecastOf,
+  pendingCounterattack,
+  previewAttack,
+} from '@engine/combat.js';
+import { type OddsColumn, gunDamage } from '@engine/crt.js';
 import { add, sideGravityHex, sideKey } from '@engine/hex.js';
 import { logisticsData } from '@engine/logistics.js';
 import {
@@ -443,61 +450,6 @@ const selChip = (ship: Ship, onRemove: () => void, color?: string): HTMLElement 
     }),
     el('span', { class: 'sel-chip-x', text: '×' }),
   );
-
-// ---------------------------------------------------------------------------
-// What will happen if I fire?
-// ---------------------------------------------------------------------------
-
-/**
- * The outcome of a shot, in the only terms a player is actually asking about.
- *
- * One die decides a gun attack, so the forecast is not a simulation or an
- * estimate — it is a count of the six faces, exact. The odds column and the
- * modifiers are how the rulebook *computes* that; they are not the answer to
- * "what happens if I fire", and leading with them made a simple question look
- * like homework.
- *
- * Whether a damage result kills depends on what the target has already taken:
- * "damage is cumulative; if a ship ever reaches a condition of D6 or greater,
- * it is destroyed." A face that would finish somebody is counted as a kill,
- * which is the distinction a player cares about most.
- */
-export interface Forecast {
-  readonly destroy: number;
-  readonly damage: number;
-  readonly nothing: number;
-  /** True when a plain damage result would finish a target outright. */
-  readonly finishes: boolean;
-}
-
-export const forecastOf = (
-  column: OddsColumn | null,
-  modifier: number,
-  targets: readonly Ship[],
-): Forecast => {
-  let destroy = 0;
-  let damage = 0;
-  let nothing = 0;
-  let finishes = false;
-  if (column === null) return { destroy: 0, damage: 0, nothing: 6, finishes: false };
-
-  for (let face = 1; face <= 6; face += 1) {
-    const result = gunDamage(column, face + modifier);
-    if (result === null) {
-      nothing += 1;
-    } else if (result === 'E') {
-      destroy += 1;
-    } else if (targets.some((s) => s.disabled + result >= DESTRUCTION_THRESHOLD)) {
-      // "If a ship which will be disabled for 3 more turns receives a D3
-      // result, it is destroyed."
-      destroy += 1;
-      finishes = true;
-    } else {
-      damage += 1;
-    }
-  }
-  return { destroy, damage, nothing, finishes };
-};
 
 /** The forecast as a row of chips: the first thing in the panel, and the answer. */
 const forecastBlock = (f: Forecast, finishesNote: boolean): HTMLElement =>

@@ -107,6 +107,22 @@ The in-game **Help** panel carries the phase reference and the scenario briefing
 `docs/RULES-MAPPING.md` says where each printed rule is implemented if you want
 to check the fine print.
 
+### Playing on your own
+
+On the scenario screen, every seat can be set to **You** or **Computer** —
+_Play solo_ takes the first seat and hands the rest to the machine. The computer
+plays through the ordinary command layer, so its orders are logged, judged and
+undone exactly like yours; it is refused on the same terms, and with fog of war
+on it never sees more of the map than that seat would. It is not a strong
+player — it plans one turn at a time — but it flies without crashing, closes on
+things it can actually catch, takes the fights worth taking and goes home to
+refuel before it runs dry. And it plays each scenario on that scenario's terms:
+it races you to Venus in Bi-Planetary rather than shooting at you, and it does
+not open fire at all in the Grand Tour, where "combat is not allowed".
+
+**Flight School** is the other solo option, and the one to start with: one ship,
+nobody shooting, and six exercises in vector movement graded against par.
+
 ### Playing with other people
 
 Hot seat works out of the box: pass the keyboard. Two further modes are wired
@@ -156,6 +172,7 @@ src/
     movement.ts combat.ts ordnance.ts       the phase rules
     detection.ts logistics.ts reducer.ts
   scenarios/   the rulebook's scenarios, as pure builders + victory checks
+  ai/          the computer opponent: a state in, one command out
   net/         GameSession (command log, undo, save) and the transports
   render/      canvas chart: bodies, counters, courses. Generated, not drawn.
   ui/          panels, input, and the one-way command loop
@@ -183,6 +200,14 @@ and reproducible — a failing test can be replayed exactly.
 
 The wire layer has its own tests (`src/net/transport.test.ts`) driving fake
 sockets and channels, so reconnection and queueing are covered without a browser.
+
+The computer opponent is tested the way you would audit a player rather than a
+function (`tests/ai.test.ts`): it plays every printed scenario on two seeds and
+fails on the first order the engine refuses, on the first position it gets stuck
+in, and on the first course it plots that crashes or leaves the chart. The rest
+check that it is deterministic — the same position always yields the same order,
+and a whole game replays identically from its seed — and that with fog of war on
+it never names a ship it has not detected.
 
 ---
 

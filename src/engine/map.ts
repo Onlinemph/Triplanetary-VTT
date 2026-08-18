@@ -300,6 +300,17 @@ export class GameMap {
   }
 
   /**
+   * Every body a course's outline touches, not just the first.
+   *
+   * The rules layer needs the whole list because some of the hits are exempt —
+   * a ship landing, a ship stopping at Ceres, a ship departing it — and a course
+   * that is forgiven one body may still be flying into another.
+   */
+  bodiesHit(from: Hex, to: Hex): AstralBody[] {
+    return this.bodies.filter((body) => courseHitsDisc(from, to, body.hex, body.discRadius));
+  }
+
+  /**
    * The body blocking a sight line, if any. Asteroids never block; moons,
    * planets and Sol always do.
    */

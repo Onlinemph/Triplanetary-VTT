@@ -582,6 +582,55 @@ describe('landing', () => {
     expect(speed(ship.velocity)).toBe(0);
     expect(ship.location.kind).toBe('asteroidBase');
   });
+
+  it('lets a ship leave an asteroid base again', () => {
+    // The sentence above has to work in both directions. A ship stopped at
+    // Ceres is inside the printed outline by definition, so *every* course it
+    // could plot starts there; if that counted as intersecting the outline, no
+    // ship could ever leave — and the takeoff rule sends it out exactly this
+    // way: an asteroid base is left "by accelerating out of the hex".
+    const ceres = map.body('ceres')!;
+    let s = game([corvette(ceres.hex, hex(0, 0))]);
+    const out = neighbor(ceres.hex, 0);
+
+    // The option is offered as a clean course, not as a crash...
+    const option = reachableEndpoints(s, shipOf(s), map).find((o) => key(o.endpoint) === key(out));
+    expect(option?.crashesInto).toBeUndefined();
+
+    // ...and flying it leaves the rock behind with the ship intact.
+    s = turn(ok(s, { type: 'plotCourse', by: A, ship: 's', endpoint: out }));
+    expect({ destroyed: shipOf(s).destroyed, at: key(shipOf(s).pos) }).toEqual({
+      destroyed: false,
+      at: key(out),
+    });
+  });
+
+  it('lets a ship leave Clandestine too', () => {
+    // The other body the rulebook lets a ship stop at, and the one it matters
+    // most for: the pirates in Lateral 7 and Piracy are based there.
+    // With scanners aboard: "only ships possessing scanners may enter those
+    // hexes. Other ships are destroyed" — the dense cordon is a separate rule,
+    // and the point here is the rock itself, not the belt around it.
+    const clandestine = map.body('clandestine')!;
+    let s = game([
+      { ...corvette(clandestine.hex, hex(0, 0)), cargo: [{ kind: 'scanners', quantity: 1 }] },
+    ]);
+    const out = neighbor(clandestine.hex, 0);
+    s = turn(ok(s, { type: 'plotCourse', by: A, ship: 's', endpoint: out }));
+    expect(shipOf(s).destroyed).toBe(false);
+  });
+
+  it('names every body a course touches, not merely the first', () => {
+    // The exemption for a departed rock is per body, so the crash check has to
+    // see the whole list: a course forgiven for leaving Ceres may still be
+    // flying into something else.
+    const terra = map.body('terra')!;
+    const luna = map.body('luna')!;
+    const through = add(terra.hex, sub(terra.hex, luna.hex));
+    const hit = map.bodiesHit(luna.hex, through).map((b) => b.id);
+    expect(hit).toContain('terra');
+    expect(hit).toContain('luna');
+  });
 });
 
 describe('ramming', () => {

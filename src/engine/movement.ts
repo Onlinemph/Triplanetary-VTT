@@ -326,11 +326,21 @@ export const predictedCourse = (
  * The body a course crashes into, if any.
  *
  * "If a ship's course vector intersects the printed outline of an astral body,
- * it has crashed." Two exemptions, both from p. 4: a ship "specifically landing"
- * is not crashing, and "Ships may land at Ceres and Clandestine, or at any
- * unnamed asteroid in the Belt, by simply stopping in the hex" — an arrowhead
- * that comes to rest in a major asteroid's hex is a landing approach, not a
- * collision, otherwise no ship could ever reach those bases at all.
+ * it has crashed." Three exemptions, all from p. 4:
+ *
+ *  - A ship "specifically landing" is not crashing.
+ *  - "Ships may land at Ceres and Clandestine, or at any unnamed asteroid in the
+ *    Belt, by simply stopping in the hex" — an arrowhead that comes to rest in a
+ *    major asteroid's hex is a landing approach, not a collision, otherwise no
+ *    ship could ever reach those bases at all.
+ *  - And the same course run backwards is a *departure*. A ship at Ceres is
+ *    inside the printed outline by definition, so every course it could plot
+ *    starts there; without this it could never leave, which contradicts both the
+ *    sentence above and the take-off rule that sends it out this way — "they take
+ *    off by accelerating out of the hex".
+ *
+ * The exemptions are per body, which is why the whole list is walked: a course
+ * forgiven for leaving Ceres may still be flying into something else.
  */
 const crashBody = (
   map: GameMap,
@@ -338,11 +348,12 @@ const crashBody = (
   to: Hex,
   landingBodyId?: string,
 ): AstralBody | undefined => {
-  const body = map.crashedInto(from, to);
-  if (!body) return undefined;
-  if (landingBodyId !== undefined && body.id === landingBodyId) return undefined;
-  if (body.landing === 'stop' && eq(to, body.hex)) return undefined;
-  return body;
+  for (const body of map.bodiesHit(from, to)) {
+    if (landingBodyId !== undefined && body.id === landingBodyId) continue;
+    if (body.landing === 'stop' && (eq(to, body.hex) || eq(from, body.hex))) continue;
+    return body;
+  }
+  return undefined;
 };
 
 /** Dense Clandestine asteroids a course would enter. Fatal without scanners. */
@@ -841,6 +852,11 @@ export const takeOff = (
   }
   if (ship.location.kind !== 'landed') {
     return reject(state, `${shipLabel(ship)} is not landed`);
+  }
+  if (movementData(state).takeoff.includes(ship.id)) {
+    // The boosters are already readied. A ship lifts off once; repeating the
+    // order would pile the same ship into the launch list again.
+    return reject(state, `${shipLabel(ship)} is already lifting off this turn`);
   }
   if (!driveWorks(state, ship)) {
     return reject(state, `${shipLabel(ship)} is disabled and cannot take off`);

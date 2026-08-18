@@ -10,11 +10,13 @@ import { DEFAULT_OPTIONS, type GameOptions } from '@engine/types.js';
 import { button, el, fill, toggle } from '../components/dom.js';
 import { type Overlay, openModal } from '../components/modal.js';
 import { pluralise } from '../format.js';
-import type { ScenarioBuildOptions, ScenarioDescriptor } from '../ports.js';
+import type { ComputerSeats, ScenarioBuildOptions, ScenarioDescriptor } from '../ports.js';
 
 export interface PickerResult {
   readonly id: string;
   readonly opts: ScenarioBuildOptions;
+  /** Seats the computer plays, as indices into the scenario's seat list. */
+  readonly computerSeats: ComputerSeats;
 }
 
 export const openScenarioPicker = (
@@ -34,6 +36,8 @@ export const openScenarioPicker = (
   let seed = defaults.seed;
   /** Hulls bought on the point-buy screen, by player id. Empty means "printed". */
   let fleets: Record<string, string[]> = {};
+  /** Seats the computer plays. Solo play is the default: every seat but the first. */
+  let computer = new Set<number>();
 
   const list = el('div', {
     class: 'scenario-list',
@@ -64,6 +68,7 @@ export const openScenarioPicker = (
               options,
               ...(Object.values(fleets).some((f) => f.length > 0) ? { fleets } : {}),
             },
+            computerSeats: [...computer].sort((a, b) => a - b) as ComputerSeats,
           }),
       },
     ],
@@ -81,7 +86,10 @@ export const openScenarioPicker = (
             role: 'option',
             'aria-selected': String(s.id === selected),
             onclick: () => {
-              if (s.id !== selected) fleets = {};
+              if (s.id !== selected) {
+                fleets = {};
+                computer = new Set();
+              }
               selected = s.id;
               draw();
             },
@@ -112,6 +120,7 @@ export const openScenarioPicker = (
             el('p', { class: 'scenario-desc', text: chosen.description }),
           )
         : el('p', { class: 'empty', text: 'No scenarios are available.' }),
+      ...(chosen && chosen.seats.length > 0 ? [seatPane(chosen)] : []),
       ...(chosen?.pointBuy ? [pointBuyPane(chosen.pointBuy)] : []),
       el(
         'div',
@@ -169,6 +178,74 @@ export const openScenarioPicker = (
       ),
     );
   };
+
+  /**
+   * Who is playing which side.
+   *
+   * Triplanetary is a two-player game with no solitaire rules of its own, so the
+   * computer here is a convenience rather than a rule: it gives the orders for a
+   * seat, through the same commands a person would, and the engine judges them on
+   * exactly the same terms. Nothing about the game changes — it is still the
+   * printed scenario, and a seat can be handed back and forth between games.
+   */
+  const seatPane = (scenario: ScenarioDescriptor): HTMLElement =>
+    el(
+      'div',
+      { class: 'scenario-options' },
+      el('h3', { class: 'sect-title', text: 'Seats' }),
+      el('p', {
+        class: 'hint',
+        text: 'A computer seat gives its own orders. It plays by the rules — the same commands, refused on the same terms — and never sees more of the map than that seat would.',
+      }),
+      ...scenario.seats.map((seat, i) => {
+        const isComputer = computer.has(i);
+        return el(
+          'div',
+          { class: 'row-inline' },
+          el('span', { class: 'sel-label', text: seat.faction }),
+          el('span', { class: 'sel-hint', text: seat.name }),
+          button({
+            label: 'You',
+            variant: isComputer ? 'quiet' : 'primary',
+            onClick: () => {
+              computer.delete(i);
+              draw();
+            },
+          }),
+          button({
+            label: 'Computer',
+            variant: isComputer ? 'primary' : 'quiet',
+            onClick: () => {
+              computer.add(i);
+              draw();
+            },
+          }),
+        );
+      }),
+      scenario.seats.length > 1
+        ? el(
+            'div',
+            { class: 'row-inline' },
+            button({
+              label: 'Play solo',
+              variant: 'ghost',
+              title: 'Take the first seat and let the computer play the rest',
+              onClick: () => {
+                computer = new Set(scenario.seats.map((_, i) => i).slice(1));
+                draw();
+              },
+            }),
+            button({
+              label: 'All human',
+              variant: 'ghost',
+              onClick: () => {
+                computer = new Set();
+                draw();
+              },
+            }),
+          )
+        : null,
+    );
 
   /**
    * The combat strength point system, as a setup screen (p. 9).

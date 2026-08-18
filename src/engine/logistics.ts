@@ -357,6 +357,29 @@ const supplyDeniedReason = (
 };
 
 /**
+ * Would this base supply this player at all, if a ship of theirs matched courses
+ * with it?
+ *
+ * Ownership and stock, with the ship left out of it — the question a navigator
+ * asks about a base on the far side of the map, where `canResupplyAt` can only
+ * answer about the hex the ship is in now. Grand Tour's "fuel is available only
+ * at bases on Terra, Venus, Mars, and Callisto" is exactly the case that makes
+ * the two different: every base on the map is friendly, and only four of them
+ * are worth flying to.
+ */
+export const baseWillSupply = (
+  state: GameState,
+  baseId: string,
+  player: PlayerId,
+  map: GameMap,
+): boolean => {
+  const base = state.bases[baseId];
+  if (!base || base.destroyed) return false;
+  if (!baseIsFriendly(state, base, player)) return false;
+  return supplyDeniedReason(state, base, player, map) === null;
+};
+
+/**
  * Why this base will not issue this player mines and torpedoes, or `null`.
  *
  * Escape: "Mines and torpedoes are not available to either player."
