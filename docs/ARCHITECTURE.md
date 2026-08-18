@@ -153,17 +153,65 @@ from that:
 
 | File            | Owns                                                                                                                     |
 | --------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| `navigate.ts`   | Astrogation: which courses are survivable, and which one closes on a goal while leaving room — and fuel — to stop.       |
+| `route.ts`      | The fastest way there: an A\* search over (position, velocity), returning the first leg of an optimal course.            |
+| `navigate.ts`   | Steering by eye — the greedy fallback for a goal beyond the search's horizon.                                            |
 | `objectives.ts` | The briefing book. Reads each scenario's own published `scenarioData` and turns it into an errand for a particular ship. |
 | `index.ts`      | The policy: owed answers first, then astrogation, combat and resupply.                                                   |
 | `driver.ts`     | `aiCommand` / `stepAi` / `driveAi` — deciding one order, applying one order, and playing a whole run of them.            |
 
-Three ideas do most of the work in `navigate.ts`, and all three come straight
-off the page. Braking sheds one hex of speed per turn, so stopping from speed
-_v_ needs `v(v+1)/2` hexes of room _and_ _v_ points of fuel. And a course is
-played one turn further before it is accepted, because "unless fuel is spent on
-the next turn, the ship would fall back to the planet and crash" — stopping one
-hex above Terra looks like arriving and is in fact falling.
+#### Routing is a search, not a rule of thumb
+
+"A ship which is not accelerated by thrust or gravity will move as it did in the
+previous turn." That sentence is why a greedy pilot is wrong: a burn made now is
+felt for the rest of the game, so the course that closes the most ground _this_
+turn is routinely not on the fastest route. The quick way to Venus is to spend
+three turns building speed you will spend three more turns shedding, and one
+turn of lookahead cannot see it.
+
+The state space is small enough to search exactly, because a ship's future
+depends on only two things, both printed on its counter:
+
+    state = (position, velocity)
+
+Gravity needs no third field — the pull a ship carries was picked up on the leg
+it just flew, and that leg is `position - velocity` to `position`. Fuel only
+counts down, so it rides along as a cost. Seven successors per node (coast, or
+burn one point in one of six directions), one turn per edge, and the fastest
+route is an ordinary shortest-path problem.
+
+The heuristic is what makes it cheap enough to run for every ship every turn. A
+ship at speed _s_ that must arrive at speed _e_ can fly no further in _t_ turns
+than `Σ min(s+i, e+t-i)` — accelerate, coast over the peak, brake. That bound is
+admissible, so the first route A\* finds is provably the fastest one; and it is
+_tight_, because it prices the braking. A naive "accelerate forever" estimate
+sends the search hunting through thousands of positions it will never use.
+
+Which is why the **arrival mode** is half of every routing question rather than
+a detail:
+
+| Mode     | Means                                            | Wanted by                               |
+| -------- | ------------------------------------------------ | --------------------------------------- |
+| `reach`  | within _n_ hexes, down to a fighting speed       | closing on an enemy                     |
+| `stop`   | in the hex, stopped                              | "landing at Ceres by simply stopping"   |
+| `orbit`  | in orbit around a body — optionally one ring hex | landing; refuelling at a base           |
+| `cruise` | in the hex at one hex per turn                   | "prospect by passing at a speed of 1"   |
+| `match`  | same hex _and_ same vector                       | looting, capture, rescue, transfer      |
+| `flyby`  | the leg entered the body's gravity               | "pass through at least one gravity hex" |
+
+`match` also takes the target's own velocity: a disabled ship "cannot maneuver",
+so where it will be is arithmetic, and the search intercepts it rather than
+chasing its wake.
+
+Two rules bound every node the search will enter, and both come off the page.
+Braking sheds one hex of speed per turn and costs a point each time, so a state
+carrying more speed than fuel can never stop — that is the rim, a few turns
+later. And every state is played one turn further before it is accepted, because
+"unless fuel is spent on the next turn, the ship would fall back to the planet
+and crash": stopping one hex above Terra looks like arriving and is in fact
+falling.
+
+When a goal lies beyond the horizon the search says so rather than guessing, and
+`navigate.ts` steers by eye instead.
 
 `objectives.ts` is deliberately one-way: it reads `scenarioData`, and nothing in
 `src/scenarios` knows a computer might be playing. Bi-Planetary publishes
@@ -173,10 +221,13 @@ checks do. A scenario that publishes nothing falls through to the general
 policy, which is the right answer for the fighting scenarios, where hunting the
 enemy _is_ the objective.
 
-What it does not do: search. It plans one turn at a time and will not out-fly a
-thoughtful human over a long approach. What it does reliably is fly without
-crashing, close on something it can actually catch, take fights worth taking,
-decline fights that are not, and go home to refuel before it runs dry.
+What it does not do: model you. It searches its own route exactly, but it plans
+against the board as it stands and re-plans every turn, so it chases a
+manoeuvring enemy rather than anticipating one, and it will not out-think a
+thoughtful human over a long approach. What it does reliably is fly the fastest
+route to wherever it is going, close on something it can actually catch, take
+the fights worth taking, decline the ones that are not, and go home to refuel
+before it runs dry.
 
 ### `src/net` — session and transport
 
