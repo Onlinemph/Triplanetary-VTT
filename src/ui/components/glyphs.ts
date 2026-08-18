@@ -120,7 +120,8 @@ export type IconName =
   | 'plus'
   | 'minus'
   | 'warning'
-  | 'target';
+  | 'target'
+  | 'skip';
 
 const ICONS: Readonly<Record<IconName, string>> = {
   help: 'M12 3.5 A8.5 8.5 0 1 0 12 20.5 A8.5 8.5 0 1 0 12 3.5 Z M9.4 9.6 A2.7 2.7 0 1 1 12 13 V14.4 M12 17.2 V17.3',
@@ -137,6 +138,8 @@ const ICONS: Readonly<Record<IconName, string>> = {
   minus: 'M5 12 H19',
   warning: 'M12 4 L21 19 H3 Z M12 10 V14 M12 16.6 V16.7',
   target: 'M12 4 V8 M12 16 V20 M4 12 H8 M16 12 H20 M12 8 A4 4 0 1 0 12 16 A4 4 0 1 0 12 8 Z',
+  // Fast-forward: two chevrons and a stop, the universal "skip ahead".
+  skip: 'M5 6 L11 12 L5 18 M12 6 L18 12 L12 18 M20 6 V18',
 };
 
 export const icon = (name: IconName, size = 16): SVGElement =>

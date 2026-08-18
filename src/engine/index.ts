@@ -50,6 +50,7 @@ export {
   advancePhase,
   applyCommand,
   legalCommands,
+  phaseIsIdle,
   registerCommandHook,
   registerTurnHook,
   registerVictoryCheck,

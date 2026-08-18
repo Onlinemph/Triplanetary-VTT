@@ -16,6 +16,13 @@ export interface ViewFlags {
   readonly gravity: boolean;
   readonly detection: boolean;
   readonly history: boolean;
+  /**
+   * Advance automatically through phases in which nobody can do anything.
+   *
+   * A convenience, never a rule: the phase still happens and everything the
+   * sequence of play does inside it still runs. What is dropped is the prompt.
+   */
+  readonly autoSkip: boolean;
 }
 
 /** Which bottom sheet is showing on a narrow screen. */
@@ -64,7 +71,9 @@ export const INITIAL_UI: UiState = {
   hoverEndpoint: null,
   hoverHex: null,
   flash: [],
-  flags: { gravity: true, detection: false, history: true },
+  // Auto-skip on by default: a phase with nothing in it is a click that
+  // changes nothing, and the toggle is there for anyone who wants the beat.
+  flags: { gravity: true, detection: false, history: true, autoSkip: true },
   leftOpen: true,
   rightOpen: true,
   sheet: 'fleet',

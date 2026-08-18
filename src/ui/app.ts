@@ -24,16 +24,19 @@ import { torpedoAimEndpoints, torpedoAimOptions } from '@engine/ordnance.js';
 import { SHIP_CLASSES } from '@engine/ships.js';
 import {
   type GameOptions,
+  type Phase,
   type PlayerId,
   type Ship,
   type ShipId,
   DEFAULT_OPTIONS,
+  PHASE_LABELS,
   activePlayer,
   areAllied,
   liveShips,
   controllerOf,
 } from '@engine/types.js';
 import type { PlotOption, PlotPreview } from '@engine/movement.js';
+import { phaseIsIdle } from '@engine/reducer.js';
 import { button, el, fill } from './components/dom.js';
 import { icon } from './components/glyphs.js';
 import { type Overlay, openModal } from './components/modal.js';
@@ -135,6 +138,8 @@ export const createApp = (deps: AppDeps): App => {
   let session: SessionPort | null = null;
   let renderer: RendererPort | null = null;
   let unsubscribe: (() => void) | null = null;
+  /** Re-entry guard for `autoAdvance`: dispatching renders, which would recurse. */
+  let busySkipping = false;
   let ui: UiState = { ...INITIAL_UI };
   let scenarioId = deps.scenarios[0]?.id ?? '';
   let gameOptions: GameOptions = { ...DEFAULT_OPTIONS };
@@ -397,12 +402,7 @@ export const createApp = (deps: AppDeps): App => {
         render();
         return;
       }
-      const notice: Notice = { text, tone, id: ++noticeSeq };
-      ui = { ...ui, notice };
-      window.clearTimeout(noticeTimer);
-      noticeTimer = window.setTimeout(() => {
-        if (ui.notice?.id === notice.id) setUi({ notice: null });
-      }, NOTICE_MS);
+      raiseNotice(text, tone);
       render();
     },
 
@@ -697,6 +697,10 @@ export const createApp = (deps: AppDeps): App => {
       case 'H':
         act.toggleFlag('history');
         return;
+      case 'k':
+      case 'K':
+        act.toggleFlag('autoSkip');
+        return;
       case 'f':
       case 'F':
         act.fit();
@@ -826,8 +830,72 @@ export const createApp = (deps: AppDeps): App => {
     });
   };
 
+  /**
+   * Advance through phases in which nobody has an order to give.
+   *
+   * The rules are untouched: every phase still happens and everything the
+   * sequence of play does automatically inside it still runs — ships move,
+   * ordnance flies, detectors sweep, damage recovers. What is dropped is the
+   * prompt, because a phase whose only legal orders are "end phase" and
+   * "concede" is a click that changes nothing.
+   *
+   * Three guards make this safe to run on every render:
+   *
+   *  - `phaseIsIdle` asks *every* player, so a phase in which somebody else owes
+   *    return fire or an answer to a surrender demand is never skipped.
+   *  - `busy` stops re-entry: `dispatch` notifies subscribers, which renders,
+   *    which would come straight back in here.
+   *  - The loop stops the moment a phase fails to advance, so a rejected or
+   *    inert `endPhase` can never spin.
+   */
+  /**
+   * Show a transient notice and arm its dismissal, without rendering.
+   *
+   * Separated from `act.notify` so `autoAdvance` can raise one from inside its
+   * loop: notifying would render, and rendering is what called it.
+   */
+  const raiseNotice = (text: string, tone: Notice['tone']): void => {
+    const notice: Notice = { text, tone, id: ++noticeSeq };
+    ui = { ...ui, notice };
+    window.clearTimeout(noticeTimer);
+    noticeTimer = window.setTimeout(() => {
+      if (ui.notice?.id === notice.id) setUi({ notice: null });
+    }, NOTICE_MS);
+  };
+
+  const autoAdvance = (): void => {
+    if (!session || busySkipping || !ui.flags.autoSkip) return;
+    busySkipping = true;
+    try {
+      const skipped: Phase[] = [];
+      // A whole turn for every seat, and no more: enough to walk out of a dead
+      // patch, bounded so a bug cannot hang the interface.
+      const limit = 5 * Math.max(1, session.state.playerOrder.length) + 1;
+      for (let i = 0; i < limit; i += 1) {
+        const before = session.state;
+        if (!phaseIsIdle(before, session.map)) break;
+        const seat = activePlayer(before);
+        if (!session.dispatch({ type: 'endPhase', by: seat }).ok) break;
+        const after = session.state;
+        if (after.phase === before.phase && after.activePlayerIndex === before.activePlayerIndex) {
+          break;
+        }
+        skipped.push(before.phase);
+      }
+      if (skipped.length > 0) {
+        // Say what was skipped. A phase that vanishes without a word reads as
+        // the interface losing your click.
+        const names = [...new Set(skipped)].map((p) => PHASE_LABELS[p].toLowerCase());
+        raiseNotice(`Skipped ${names.join(', ')} — nothing to do.`, 'info');
+      }
+    } finally {
+      busySkipping = false;
+    }
+  };
+
   const render = (): void => {
     if (!session) return;
+    autoAdvance();
     const state = session.state;
 
     // A new player-turn or phase invalidates half-built orders.

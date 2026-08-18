@@ -101,6 +101,14 @@ export const createTopBar = (getScenarioName: () => string): Panel => {
           pressed: ui.flags.history,
           title: 'Course history (H)',
         }),
+        button({
+          label: icon('skip'),
+          onClick: () => act.toggleFlag('autoSkip'),
+          variant: 'quiet',
+          class: 'icon-btn',
+          pressed: ui.flags.autoSkip,
+          title: 'Skip phases with nothing to do (K)',
+        }),
         el('i', { class: 'toolbar-rule' }),
         button({
           label: icon('fit'),

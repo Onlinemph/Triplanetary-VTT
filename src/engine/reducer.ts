@@ -935,6 +935,69 @@ export function legalCommands(
   return out;
 }
 
+/**
+ * Orders that are always on offer and are never a reason to stop in a phase.
+ *
+ * `endPhase` and `concede` are available in every phase to every seated player,
+ * so a phase in which they are the *only* legal orders is a phase in which
+ * nothing can actually be done.
+ */
+const FLOW_COMMANDS: ReadonlySet<CommandType> = new Set<CommandType>(['endPhase', 'concede']);
+
+/**
+ * Orders the ordnance phase inherits from astrogation, and which are not by
+ * themselves a reason to stop in it.
+ *
+ * `plotCourse`, `setOptionalGravity` and `declareRam` are legal in the ordnance
+ * phase for one printed reason: "When a mine is launched, it assumes the vector
+ * of its launching ship. That ship must execute an immediate course change to
+ * insure that it does not remain in the same hex as the mine." They exist to
+ * clean up after a launch. A ship with nothing to launch has already had its
+ * astrogation phase, so offering the same three orders again is not work — it is
+ * the same click twice.
+ *
+ * This changes nothing about legality: a player who turns auto-skip off, or who
+ * stops in the phase for any other reason, may still re-plot there.
+ */
+const ORDNANCE_CARRY_OVERS: ReadonlySet<CommandType> = new Set<CommandType>([
+  'plotCourse',
+  'setOptionalGravity',
+  'declareRam',
+]);
+
+/**
+ * Is there nothing for anybody to do in this phase?
+ *
+ * Used to skip phases that would otherwise cost a click and change nothing: an
+ * ordnance phase with no ordnance aboard, a combat phase with nothing in range,
+ * a resupply phase far from any base. The rules are untouched — the phase still
+ * happens, with everything the sequence of play does automatically inside it —
+ * only the prompt is dropped.
+ *
+ * Deliberately asks about *every* player, not just the phasing one. Two of the
+ * rulebook's decisions belong to somebody else's turn: "ships which are attacked
+ * may return fire ... during the combat phase", and a demand for surrender is
+ * answered by the ship being asked. Skipping a phase in which a defender still
+ * owes an answer would take that answer away from them, so this returns false
+ * whenever anybody at the table holds a live decision.
+ */
+export function phaseIsIdle(state: GameState, map: GameMap = DEFAULT_MAP): boolean {
+  // A finished game is not idle, it is over; and an outstanding return fire or
+  // an unnamed nuke hexside is precisely a decision that must not be skipped.
+  if (state.victory) return false;
+  if (pendingCounterattack(state) !== null) return false;
+  if (pendingDevastation(state) !== null) return false;
+
+  for (const player of state.playerOrder) {
+    for (const type of legalCommands(state, player, map)) {
+      if (FLOW_COMMANDS.has(type)) continue;
+      if (state.phase === 'ordnance' && ORDNANCE_CARRY_OVERS.has(type)) continue;
+      return false;
+    }
+  }
+  return true;
+}
+
 const hasSurrenderDemand = (state: GameState, player: PlayerId): boolean => {
   const demands = logisticsData(state).demands;
   return Object.keys(demands).some((shipId) => {
@@ -990,8 +1053,24 @@ const feasible = (state: GameState, type: CommandType, player: PlayerId, map: Ga
       return Object.values(state.bases).some((b) => canLaunchBaseTorpedo(state, b, player, map).ok);
 
     case 'attack':
+      // Being able to shoot is not the same as having something to shoot at.
+      // `declareRam` and `demandSurrender` already ask both questions; this used
+      // to ask only the first, and offered an attack to a ship alone in deep
+      // space.
+      return (
+        mine.some((s) => canFire(s, state.options.advancedCombat)) && hasEnemyShip(state, player)
+      );
     case 'suppressHexside':
-      return mine.some((s) => canFire(s, state.options.advancedCombat));
+      // "...by gunfire from a ship orbiting overhead", into the hexside directly
+      // below. No orbit, no shot — and there is no point offering it to a fleet
+      // that is nowhere near a world.
+      return mine.some(
+        (s) =>
+          canFire(s, state.options.advancedCombat) &&
+          !s.firedThisPhase &&
+          map.planetaryBaseBelow(s.pos) !== undefined &&
+          map.orbitOf(s.pos, s.velocity) !== undefined,
+      );
     case 'counterattack':
     case 'declineCounterattack':
       return false; // handled above, only while an attack is pending

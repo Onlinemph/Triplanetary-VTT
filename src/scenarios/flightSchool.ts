@@ -183,6 +183,12 @@ const build = (opts: BuildOptions): GameState => {
       // There is no time limit and nothing to shoot at.
       noTimeLimit: true,
       combatForbidden: true,
+      // Nor anything to shoot *with*. The cadet holds every base on the chart so
+      // that a wrong turn is never a dead end, and Ceres and Clandestine "are
+      // capable of launching one torpedo per turn" — which would put an ordnance
+      // phase, and a magazine, in front of a student who is here to learn to
+      // fly. Shutting the armoury is what makes the phase skippable.
+      ordnanceAvailable: [],
     },
   });
 };
