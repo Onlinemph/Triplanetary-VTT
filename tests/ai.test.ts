@@ -393,10 +393,21 @@ describe('scenario terms', () => {
     expect(run.commands.filter((c) => c.type === 'attack')).toEqual([]);
   });
 
-  /** Bi-Planetary: "each player must navigate to the other world and land." */
-  it('flies the race scenario as a race and lands', () => {
+  /**
+   * Bi-Planetary: "each player must navigate to the other world and land. The
+   * winner is the one who does it in the fewest turns."
+   *
+   * The day count is the point. Steering one turn at a time got a corvette down
+   * on day 19; searching the whole profile gets both of them down on day 12 —
+   * so the scenario now ends in the draw a race between two identical ships
+   * flying the same problem ought to.
+   */
+  it('flies the race scenario as a race, and lands inside a fortnight', () => {
     const run = play('bi-planetary', 1, 40);
-    expect(run.state.victory?.reason).toMatch(/Landed on/);
+    expect(run.state.victory?.reason).toMatch(/[Ll]anded/);
+    expect(run.state.turn).toBeLessThanOrEqual(14);
+    const landed = Object.values(run.state.ships).filter((s) => s.location.kind === 'landed');
+    expect(landed.length).toBeGreaterThan(0);
   });
 
   it('reads the errand off the scenario rather than hunting', () => {

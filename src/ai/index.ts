@@ -41,6 +41,7 @@ import {
   type Command,
   type GameMap,
   type GameState,
+  type BaseState,
   type Hex,
   type Ship,
   type PlayerId,
@@ -49,11 +50,13 @@ import {
   areAllied,
   baseWillSupply,
   canFire,
+  canManeuver,
   canResupplyAt,
   cargoCount,
   cargoSpace,
   combatStrength,
   controllerOf,
+  crashBody,
   distance,
   forecastOf,
   hasUnlimitedFuel,
@@ -67,6 +70,7 @@ import {
   pendingCounterattack,
   pendingDevastation,
   previewAttack,
+  predictedEndpoint,
   fuelCapacity,
   isFixedInstallation,
   isLandingThisTurn,
@@ -76,12 +80,15 @@ import {
   mineAt,
   minedThisTurn,
   prospectingEnabled,
+  sideGravityHex,
+  standingStillThisTurn,
   canTradeAt,
   legalCommands,
   cheapestDevastation,
 } from '../engine/index.js';
-import { brakingCourse, courseToward, isRunaway, orbitalCourse, safeCourses } from './navigate.js';
+import { brakingCourse, courseToward, isRunaway, safeCourses } from './navigate.js';
 import { combatForbidden, errandFor, landingSideAt } from './objectives.js';
+import { type Arrival, routeTo } from './route.js';
 
 // ---------------------------------------------------------------------------
 // Small readings of the position
@@ -102,24 +109,6 @@ const shootable = (state: GameState, me: PlayerId): Ship[] =>
   enemies(state, me).filter((s) => !immuneToGunfire(s) && !s.attackedThisPhase);
 
 /**
- * How badly a ship needs a base.
- *
- * "Whenever a ship is refueled from a base, it automatically undergoes
- * maintenance. This repairs all remaining damage" — so a stop fixes fuel and
- * damage together, and a ship that is hurt *or* low is a ship that should be
- * heading home. A torch never needs fuel and only ever goes home for repairs.
- */
-const needsBase = (ship: Ship): boolean => {
-  if (ship.disabled > 0) return true;
-  if (hasUnlimitedFuel(ship)) return false;
-  // Enough left to turn onto a course home and then brake to a stop at the far
-  // end, plus a little for corrections. A ship that waits until it is nearly
-  // empty is a ship that arrives unable to stop — or does not arrive.
-  const reserve = 3 + length(ship.velocity);
-  return ship.fuel <= Math.max(reserve, Math.ceil(fuelCapacity(ship) * 0.25));
-};
-
-/**
  * The nearest base this ship could actually draw supply from.
  *
  * Not merely the nearest friendly one: a base that will sell this player nothing
@@ -127,34 +116,122 @@ const needsBase = (ship: Ship): boolean => {
  * available only at bases on Terra, Venus, Mars, and Callisto", on a map where
  * every base is friendly to everybody.
  */
-const nearestFriendlyBase = (state: GameState, ship: Ship, map: GameMap): Hex | null => {
+interface SupplyStop {
+  /** The hex a ship must actually reach to draw supply. */
+  readonly hex: Hex;
+  /** Set when that hex is a gravity hex and arriving means going into orbit. */
+  readonly bodyId?: string;
+}
+
+/**
+ * Where a ship has to *be* to draw supply from this base.
+ *
+ * Not the base's own hex, which for a planetary base is the middle of the
+ * planet. "The ship must either land on the world in the same hex side as the
+ * base, or pass through the gravity hex directly above the base's hex side
+ * while in orbit" — one particular hex of the ring, not any of them. Steering at
+ * the planet and settling into whichever orbit turned up is how a ship ends up
+ * circling a fuel depot forever with dry tanks.
+ */
+const supplyStopFor = (base: BaseState, map: GameMap): SupplyStop => {
+  if (base.side !== undefined) {
+    const hex = sideGravityHex(base.side);
+    const body = map.bodyAt(base.side.hex);
+    return body ? { hex, bodyId: body.id } : { hex };
+  }
+  // "For asteroid bases, matching courses requires that the ship stop in the
+  // base hex", and an orbital base is matched by being in orbit in the same hex.
+  const body = map.bodyAt(base.hex);
+  return body && body.landing !== 'stop' ? { hex: base.hex, bodyId: body.id } : { hex: base.hex };
+};
+
+const nearestFriendlyBase = (state: GameState, ship: Ship, map: GameMap): SupplyStop | null => {
   const me = controllerOf(ship);
-  let best: Hex | null = null;
+  let best: SupplyStop | null = null;
   let bestDistance = Infinity;
   for (const base of Object.values(state.bases)) {
     if (!baseWillSupply(state, base.id, me, map)) continue;
-    const d = distance(ship.pos, base.hex);
-    if (d < bestDistance || (d === bestDistance && best !== null && key(base.hex) < key(best))) {
+    const stop = supplyStopFor(base, map);
+    const d = distance(ship.pos, stop.hex);
+    if (
+      d < bestDistance ||
+      (d === bestDistance && best !== null && key(stop.hex) < key(best.hex))
+    ) {
       bestDistance = d;
-      best = base.hex;
+      best = stop;
     }
   }
   return best;
 };
 
+/** How a ship gets to a supply stop: into orbit over that hex, or stopped on it. */
+const arrivalAtBase = (stop: SupplyStop): Pick<Goal, 'arrival' | 'bodyId'> =>
+  stop.bodyId === undefined
+    ? // "For asteroid bases, matching courses requires that the ship stop in the
+      // base hex."
+      { arrival: 'stop' }
+    : { arrival: 'orbit', bodyId: stop.bodyId };
+
 /**
- * What this ship should be flying toward, and whether it wants to end up in
- * orbit there.
+ * How badly a ship needs a base.
+ *
+ * "Whenever a ship is refueled from a base, it automatically undergoes
+ * maintenance. This repairs all remaining damage" — so a stop fixes fuel and
+ * damage together, and a ship that is hurt *or* low is a ship that should be
+ * heading home. A torch never needs fuel and only ever goes home for repairs.
+ */
+const needsBase = (state: GameState, ship: Ship, map: GameMap): boolean => {
+  if (ship.disabled > 0) return true;
+  if (hasUnlimitedFuel(ship)) return false;
+
+  // A tank still over half full is not a worry, whatever the arithmetic says,
+  // and asking the navigator to price the trip home on every ship every turn is
+  // work worth skipping while it plainly is not needed.
+  const capacity = fuelCapacity(ship);
+  if (capacity > 0 && ship.fuel > capacity * 0.6) return false;
+
+  const home = nearestFriendlyBase(state, ship, map);
+  if (home === null) return false;
+
+  // What the trip home costs, in fuel.
+  //
+  // Stopping somewhere is the accelerate-and-brake triangle: `d` hexes takes
+  // about `2·√d` turns, and every one of them is a burn, because speed only
+  // changes a hex at a time in either direction. A fixed reserve is wrong in
+  // both directions — far too cautious over Terra, where fuel is a hex away,
+  // and hopeless in the Grand Tour, where "fuel is available only at bases on
+  // Terra, Venus, Mars, and Callisto" and the next pump may be half the system
+  // away. Estimated rather than searched: this is asked of every ship every
+  // turn, and being a point or two out only moves the moment it turns back.
+  //
+  // The speed it is carrying counts too, and counts first: whichever way the
+  // ship is pointed, every hex per turn of it has to be paid off a point at a
+  // time before the trip home can even begin.
+  const trip = distance(ship.pos, home.hex);
+  return ship.fuel <= 2 + length(ship.velocity) + Math.ceil(2 * Math.sqrt(trip));
+};
+
+/**
+ * What this ship should be flying toward, and what counts as getting there.
+ *
+ * The arrival mode is half the answer, not a detail. Arriving at a world at
+ * speed six is a flyby; arriving next to a prize on a different vector is not a
+ * boarding. The navigator can only fly the fastest route to a place once it has
+ * been told what "being there" means.
  *
  * The order matters and is the whole of the AI's strategy: fix yourself first,
- * then take a prize that is already helpless, then hunt.
+ * then run the scenario's errand, then take a prize that is already helpless,
+ * then hunt.
  */
 interface Goal {
   readonly hex: Hex;
-  /** Body to end up orbiting, when the goal is a world. */
-  readonly orbit?: string;
-  /** Arrive at a walking pace — see {@link Errand.cruise}. */
-  readonly cruise?: boolean;
+  readonly arrival: Arrival;
+  /** Body to end up orbiting, for `'orbit'`. */
+  readonly bodyId?: string;
+  /** How close is close enough, for `'reach'`. */
+  readonly within?: number;
+  /** The goal's own vector, when it is drifting and cannot steer. */
+  readonly goalVelocity?: Hex;
   readonly why: 'repair' | 'errand' | 'prize' | 'hunt' | 'hold';
 }
 
@@ -162,36 +239,38 @@ const goalFor = (state: GameState, ship: Ship, map: GameMap): Goal | null => {
   const me = controllerOf(ship);
 
   // 1. A ship that is hurt or nearly dry is no use to anybody. Go home.
-  if (needsBase(ship)) {
+  if (needsBase(state, ship, map)) {
     const home = nearestFriendlyBase(state, ship, map);
-    if (home)
-      return {
-        hex: home,
-        ...(map.bodyAt(home) ? { orbit: map.bodyAt(home)!.id } : {}),
-        why: 'repair',
-      };
+    if (home) return { hex: home.hex, ...arrivalAtBase(home), why: 'repair' };
   }
 
   // 2. The scenario's own errand, where it sets one. A race is not won by
   //    shooting at the other racer.
   const errand = errandFor(state, ship, map);
   if (errand !== null) {
-    return {
-      hex: errand.hex,
-      ...(errand.land && errand.bodyId !== undefined ? { orbit: errand.bodyId } : {}),
-      ...(errand.cruise === true ? { cruise: true } : {}),
-      why: 'errand',
-    };
+    if (errand.land && errand.bodyId !== undefined) {
+      return { hex: errand.hex, arrival: 'orbit', bodyId: errand.bodyId, why: 'errand' };
+    }
+    if (errand.cruise === true) return { hex: errand.hex, arrival: 'cruise', why: 'errand' };
+    if (errand.bodyId !== undefined) {
+      // A tour leg: "each ship must pass through at least one gravity hex" of
+      // the body. A pass, not a stop — a racer carries the speed straight on to
+      // the next world, and stopping costs turns the race has not got.
+      return { hex: errand.hex, arrival: 'flyby', bodyId: errand.bodyId, why: 'errand' };
+    }
+    return { hex: errand.hex, arrival: 'stop', why: 'errand' };
   }
 
   // 3. A disabled enemy is a prize: "a disabled ship may be looted or captured
-  //    by any enemy ship which matches courses with it." Free, if we can reach.
+  //    by any enemy ship which matches courses with it." Matching courses means
+  //    the same hex *and* the same vector — and a disabled ship "cannot
+  //    maneuver", so where it will be is arithmetic rather than guesswork.
   const prizes = enemies(state, me).filter((s) => isDisabled(s, state.options.advancedCombat));
   const prize = prizes.sort(
     (a, b) => distance(ship.pos, a.pos) - distance(ship.pos, b.pos) || a.id.localeCompare(b.id),
   )[0];
   if (prize && distance(ship.pos, prize.pos) <= 12) {
-    return { hex: prize.pos, why: 'prize' };
+    return { hex: prize.pos, arrival: 'match', goalVelocity: prize.velocity, why: 'prize' };
   }
 
   // 4. Otherwise hunt whatever is nearest and worth hitting. A ship with no guns
@@ -200,12 +279,14 @@ const goalFor = (state: GameState, ship: Ship, map: GameMap): Goal | null => {
     const quarry = enemies(state, me).sort(
       (a, b) => distance(ship.pos, a.pos) - distance(ship.pos, b.pos) || a.id.localeCompare(b.id),
     )[0];
-    if (quarry) return { hex: quarry.pos, why: 'hunt' };
+    // Close, and slowly: "subtract 1 from the die roll for each hex of velocity
+    // difference over 2", so a fast pass is a wasted one.
+    if (quarry) return { hex: quarry.pos, arrival: 'reach', within: 1, why: 'hunt' };
   }
 
   // 5. Nothing to do but stay somewhere sensible.
   const home = nearestFriendlyBase(state, ship, map);
-  return home ? { hex: home, why: 'hold' } : null;
+  return home ? { hex: home.hex, ...arrivalAtBase(home), why: 'hold' } : null;
 };
 
 // ---------------------------------------------------------------------------
@@ -224,7 +305,7 @@ const astrogationOrder = (state: GameState, me: PlayerId, map: GameMap): Command
     // ship is done resting.
     if (ship.location.kind === 'landed') {
       if (isTakingOffThisTurn(state, ship.id)) continue; // boosters already readied
-      if (needsBase(ship)) continue; // still repairing; stay put
+      if (needsBase(state, ship, map)) continue; // still repairing; stay put
       const errand = errandFor(state, ship, map);
       // A ship that has flown its errand and is down where it was sent stays
       // down: taking off again would only undo it.
@@ -237,6 +318,9 @@ const astrogationOrder = (state: GameState, me: PlayerId, map: GameMap): Command
       return { type: 'takeOff', by: me, ship: ship.id };
     }
     if (isLandingThisTurn(state, ship.id)) continue; // already committed to the ground
+    // "A disabled ship cannot maneuver": it may only drift, and the engine will
+    // refuse any course it is offered. Nothing to plan.
+    if (!canManeuver(state, ship)) continue;
 
     // Ore under the keel is worth more than another survey. "Mining takes place
     // on the movement phase, instead of movement" and "only a stationary ship
@@ -245,6 +329,10 @@ const astrogationOrder = (state: GameState, me: PlayerId, map: GameMap): Command
     if (dig) return dig;
 
     if (ship.plottedEndpoint !== undefined) continue; // already ordered this turn
+    // Mining "takes place on the movement phase, instead of movement", and
+    // dropping equipment "requires the miner's ship to stand still for one
+    // turn". Either way the turn is spent and there is no course to plot.
+    if (standingStillThisTurn(state, ship.id)) continue;
 
     // Always keep enough fuel to come to rest. Braking sheds one hex of speed
     // per turn and costs a point each time, so a ship whose fuel has fallen to
@@ -259,34 +347,66 @@ const astrogationOrder = (state: GameState, me: PlayerId, map: GameMap): Command
     }
 
     const goal = goalFor(state, ship, map);
-    if (goal === null) continue;
+    if (goal === null) {
+      // Nowhere to be — but if standing still means falling, stand somewhere else.
+      if (coastIsSafe(state, ship, map)) continue;
+      const escape = brakingCourse(state, ship, map);
+      if (escape) return { type: 'plotCourse', by: me, ship: ship.id, endpoint: escape.endpoint };
+      continue;
+    }
 
     // Down, if the errand ends on the ground and we are in orbit to do it.
     // "A ship may only land by expending one fuel point while in orbit."
-    if (goal.orbit !== undefined) {
-      const landing = landingOrder(state, ship, goal.orbit, map);
+    if (goal.bodyId !== undefined) {
+      const landing = landingOrder(state, ship, goal.bodyId, map);
       if (landing) return landing;
     }
 
-    // Arrived: if the goal is a world and we can drop into orbit, do that — an
-    // orbit holds for free, and landing is only possible from one.
-    if (goal.orbit !== undefined) {
-      const orbit = orbitalCourse(state, ship, goal.orbit, map);
-      if (orbit) {
-        return { type: 'plotCourse', by: me, ship: ship.id, endpoint: orbit.endpoint };
+    // The fastest route there, searched rather than guessed. Every leg of it is
+    // a course the engine would accept, so the first one can be plotted as it
+    // stands; the rest is thrown away and re-planned next turn.
+    const route = routeTo(
+      state,
+      ship,
+      {
+        goal: goal.hex,
+        arrival: goal.arrival,
+        ...(goal.bodyId !== undefined ? { bodyId: goal.bodyId } : {}),
+        ...(goal.within !== undefined ? { within: goal.within } : {}),
+        ...(goal.goalVelocity !== undefined ? { goalVelocity: goal.goalVelocity } : {}),
+      },
+      map,
+    );
+    if (route !== null) {
+      if (
+        route.accel === 0 &&
+        key(route.endpoint) === key(predicted(state, ship, map)) &&
+        coastIsSafe(state, ship, map)
+      ) {
+        continue;
       }
+      return { type: 'plotCourse', by: me, ship: ship.id, endpoint: route.endpoint };
     }
 
-    // Coming in too hot to stop is the commonest way to lose a ship. Brake.
+    // No route inside the search's horizon — too far, or walled off. Steer by
+    // eye instead: close the distance, and brake if coming in too hot to stop,
+    // which is the commonest way to lose a ship.
     const course = isRunaway(ship, goal.hex)
       ? (brakingCourse(state, ship, map) ??
-        courseToward(state, ship, goal.hex, map, goal.cruise === true))
-      : courseToward(state, ship, goal.hex, map, goal.cruise === true);
+        courseToward(state, ship, goal.hex, map, goal.arrival === 'cruise'))
+      : courseToward(state, ship, goal.hex, map, goal.arrival === 'cruise');
     if (course === null) continue;
 
     // A course that changes nothing is not worth an order; leaving it unplotted
-    // lets the ship coast, which is the same thing for free.
-    if (course.accel === 0 && key(course.endpoint) === key(predicted(state, ship, map))) continue;
+    // lets the ship coast, which is the same thing for free — unless coasting is
+    // a fall onto the world underneath.
+    if (
+      course.accel === 0 &&
+      key(course.endpoint) === key(predicted(state, ship, map)) &&
+      coastIsSafe(state, ship, map)
+    ) {
+      continue;
+    }
     return { type: 'plotCourse', by: me, ship: ship.id, endpoint: course.endpoint };
   }
   return null;
@@ -336,6 +456,21 @@ const landingOrder = (
   const side = landingSideAt(state, bodyId, map, controllerOf(ship));
   if (side === null) return null;
   return { type: 'land', by: controllerOf(ship), ship: ship.id, side };
+};
+
+/**
+ * Is doing nothing safe this turn?
+ *
+ * Usually yes, and a course that changes nothing is not worth an order. But a
+ * ship sitting in a gravity hex is not sitting still: "unless fuel is spent on
+ * the next turn, the ship would fall back to the planet and crash." A ship that
+ * has just boosted off a pad, or that has arrived exactly where it was sent, is
+ * in precisely that position — so the one case where declining to give an order
+ * is fatal is also the case where the pilot most wants to.
+ */
+const coastIsSafe = (state: GameState, ship: Ship, map: GameMap): boolean => {
+  const to = predictedEndpoint(state, ship, map);
+  return map.inBounds(to) && crashBody(map, ship.pos, to) === undefined;
 };
 
 /** Where the ship goes if it burns nothing — the endpoint a no-op plot would pick. */
@@ -409,7 +544,7 @@ const combatOrder = (state: GameState, me: PlayerId, map: GameMap): Command | nu
       // which it resupplies." A ship that is sitting at a base needing repair or
       // fuel is about to take the stopover, and the stopover is worth more than
       // one shot — so it holds its fire rather than spending the turn.
-      !(needsBase(s) && canResupplyAt(state, s, map).ok),
+      !(needsBase(state, s, map) && canResupplyAt(state, s, map).ok),
   );
   if (guns.length === 0) return null;
 
@@ -591,7 +726,7 @@ const resupplyOrder = (state: GameState, me: PlayerId, map: GameMap): Command | 
     // The other half of the same sentence, enforced backwards: a ship that has
     // already shot or dropped something this player-turn has spent it.
     if (ship.firedThisPhase || ship.launchedOrdnanceThisTurn) continue;
-    if (!needsBase(ship) && ship.fuel >= fuelCapacity(ship)) continue;
+    if (!needsBase(state, ship, map) && ship.fuel >= fuelCapacity(ship)) continue;
     if (!canResupplyAt(state, ship, map).ok) continue;
     // "Whenever a ship is refueled from a base, it automatically undergoes
     // maintenance." Fuel and repairs in one stop.

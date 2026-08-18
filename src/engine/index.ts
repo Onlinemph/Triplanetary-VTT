@@ -80,6 +80,7 @@ export {
   canManeuver,
   canOverload,
   courseThroughCentre,
+  crashBody,
   denseAsteroidsOnCourse,
   effectiveGravity,
   executeMovementPhase,
@@ -99,6 +100,7 @@ export {
   resolveAstrogationHazards,
   shipLabel,
   shipPath,
+  standingStillThisTurn,
 } from './movement.js';
 
 // ---------------------------------------------------------------------------

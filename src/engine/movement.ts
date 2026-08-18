@@ -342,7 +342,7 @@ export const predictedCourse = (
  * The exemptions are per body, which is why the whole list is walked: a course
  * forgiven for leaving Ceres may still be flying into something else.
  */
-const crashBody = (
+export const crashBody = (
   map: GameMap,
   from: Hex,
   to: Hex,

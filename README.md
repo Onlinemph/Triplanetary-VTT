@@ -114,9 +114,16 @@ _Play solo_ takes the first seat and hands the rest to the machine. The computer
 plays through the ordinary command layer, so its orders are logged, judged and
 undone exactly like yours; it is refused on the same terms, and with fog of war
 on it never sees more of the map than that seat would. It is not a strong
-player — it plans one turn at a time — but it flies without crashing, closes on
-things it can actually catch, takes the fights worth taking and goes home to
-refuel before it runs dry. And it plays each scenario on that scenario's terms:
+player — it does not model your replies — but it flies the fastest route to
+wherever it is going, closes on things it can actually catch, takes the fights
+worth taking and goes home to refuel before it runs dry.
+
+Routing is a search rather than a rule of thumb, because vector movement
+punishes short-term thinking: the quick way to Venus is to spend three turns
+building speed you will spend three more turns shedding. It plans over
+(position, velocity) with gravity and fuel priced in, so it will settle into
+orbit around Mars in six turns where steering one hex at a time never manages it
+at all. And it plays each scenario on that scenario's terms:
 it races you to Venus in Bi-Planetary rather than shooting at you, and it does
 not open fire at all in the Grand Tour, where "combat is not allowed".
 
