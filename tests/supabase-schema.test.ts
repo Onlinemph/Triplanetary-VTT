@@ -900,3 +900,94 @@ describe('constraints the referee relies on', () => {
     expect(out.error).not.toBeNull();
   });
 });
+
+describe('reaping abandoned lobbies', () => {
+  // `reap_stale_lobbies` was written, indexed for, and documented as "called by
+  // the referee" — and then never called, so none of this had ever run. These
+  // cases pin what it must and must not touch, because the failure mode of
+  // getting it wrong is deleting somebody's game out from under them.
+  const STALE = 'a0000000-0000-4000-8000-00000000aaaa';
+  const FRESH = 'b0000000-0000-4000-8000-00000000bbbb';
+  const OLD_PLAYING = 'c0000000-0000-4000-8000-00000000cccc';
+  const OLD_DONE = 'd0000000-0000-4000-8000-00000000dddd';
+
+  beforeEach(async () => {
+    // Backdating has to go around `games_touch_updated_at`, which rewrites
+    // `updated_at` to `now()` on every update — including the update trying to
+    // set it. That is the trigger working: age is a fact about when the table
+    // was last touched, and nothing at the table's own privilege level gets to
+    // lie about it. Only the migration owner can suspend it, which is why this
+    // is in the harness and not reachable from a seat.
+    // Straight through `db.exec`, as the migration owner, because suspending a
+    // trigger is an owner's privilege and `service_role` is deliberately not
+    // one — it got "must be owner of table games" when this went through the
+    // referee, which is itself the right answer.
+    await db.exec(`
+      insert into public.games (id, code, scenario_id, fog, status, turn, host_id) values
+        ('${STALE}',       'AAAAAA', 'flight-school', false, 'lobby',    1, '${ALICE}'),
+        ('${FRESH}',       'BBBBBB', 'flight-school', false, 'lobby',    1, '${ALICE}'),
+        ('${OLD_PLAYING}', 'CCCCCC', 'flight-school', false, 'playing',  9, '${ALICE}'),
+        ('${OLD_DONE}',    'DDDDDD', 'flight-school', false, 'finished', 9, '${ALICE}');
+      alter table public.games disable trigger games_touch_updated_at;
+      update public.games set updated_at = now() - interval '30 days'
+        where id in ('${STALE}', '${OLD_PLAYING}', '${OLD_DONE}');
+      alter table public.games enable trigger games_touch_updated_at;
+    `);
+  });
+
+  const survivors = async (): Promise<string[]> => {
+    const out = await asReferee(
+      `select id from public.games where id in
+         ('${STALE}', '${FRESH}', '${OLD_PLAYING}', '${OLD_DONE}') order by code`,
+    );
+    expect(out.error).toBeNull();
+    return out.rows.map((r) => String(r['id']));
+  };
+
+  it('deletes a lobby nobody came back to', async () => {
+    const swept = await asReferee(`select public.reap_stale_lobbies() as gone`);
+    expect(swept.error).toBeNull();
+    expect(Number(swept.rows[0]?.['gone'])).toBeGreaterThanOrEqual(1);
+    expect(await survivors()).not.toContain(STALE);
+  });
+
+  it('leaves a lobby somebody is still sitting in', async () => {
+    await asReferee(`select public.reap_stale_lobbies()`);
+    expect(await survivors()).toContain(FRESH);
+  });
+
+  it('never touches a game in progress, however old', async () => {
+    // The one that would be unforgivable. A long game — play-by-email pace, a
+    // table left open over a weekend — is not abandoned, and `updated_at` says
+    // nothing about that. Only `status` does.
+    await asReferee(`select public.reap_stale_lobbies()`);
+    expect(await survivors()).toContain(OLD_PLAYING);
+  });
+
+  it('leaves a finished game as a record of itself', async () => {
+    await asReferee(`select public.reap_stale_lobbies()`);
+    expect(await survivors()).toContain(OLD_DONE);
+  });
+
+  it('takes an age, so the referee can sweep harder if it needs to', async () => {
+    // Zero, not one second: the fresh lobby was made milliseconds ago and is
+    // genuinely not a second old yet, so `interval '1 second'` correctly spares
+    // it and would prove nothing about the parameter.
+    const out = await asReferee(`select public.reap_stale_lobbies(interval '0 seconds') as gone`);
+    expect(out.error).toBeNull();
+    const left = await survivors();
+    expect(left).not.toContain(STALE);
+    expect(left).not.toContain(FRESH);
+    // Still not the ones that are not lobbies.
+    expect(left).toContain(OLD_PLAYING);
+    expect(left).toContain(OLD_DONE);
+  });
+
+  it('cannot be run by a client', async () => {
+    for (const role of ['anon', 'authenticated'] as const) {
+      const out = await attempt(role, ALICE, `select public.reap_stale_lobbies()`);
+      expect(out.error, `${role} executed the reaper`).not.toBeNull();
+    }
+    expect(await survivors()).toContain(STALE);
+  });
+});

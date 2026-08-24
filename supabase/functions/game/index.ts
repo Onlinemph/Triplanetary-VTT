@@ -295,6 +295,29 @@ const rollDie = (): number => dieFrom(crypto.getRandomValues(new Uint8Array(4)))
  */
 const CODE_ATTEMPTS = 6;
 
+/**
+ * Sweep away lobbies nobody came back to.
+ *
+ * `0004_throttle.sql` says this is "called by the referee rather than
+ * scheduled, so the migration needs no extension", and `0001_schema.sql` adds
+ * `games_status_updated_idx` for exactly this query — but nothing ever called
+ * it, so the sweep the design assumed was simply never happening.
+ *
+ * Create is the right moment. It is the only action that grows the namespace,
+ * so tying the sweep to it keeps the table smallest where it matters most: an
+ * abandoned lobby that still answers `join` is a live target for code guessing,
+ * and every one removed is one fewer.
+ *
+ * It never fails a create. A player opening a table has no stake in the
+ * housekeeping, and a sweep that errored — a lock, a timeout, a permission
+ * changed underneath us — must not cost them their game. The failure is logged
+ * and swallowed, deliberately, and the next create tries again.
+ */
+const reapLobbies = async (): Promise<void> => {
+  const { error } = await admin.rpc('reap_stale_lobbies');
+  if (error) console.error('reaping stale lobbies failed', error.message);
+};
+
 const createAction = async (req: CreateRequest, userId: string): Promise<Response> => {
   if (scenarioById(req.scenarioId) === undefined) return refuse('no scenario by that name');
 
@@ -357,6 +380,10 @@ const createAction = async (req: CreateRequest, userId: string): Promise<Respons
       seats,
       hostId: userId,
     };
+    // After the table exists, so a slow sweep delays the answer rather than
+    // risking it, and awaited rather than left dangling — an Edge Function's
+    // worker can be torn down the moment it responds.
+    await reapLobbies();
     return answer(seated(game, userId, now));
   }
 
