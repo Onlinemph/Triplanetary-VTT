@@ -548,6 +548,7 @@ export const createApp = (deps: AppDeps): App => {
       );
       pickerOverlay = overlay;
       mountOnlineChoices(overlay, {
+        host: overlays,
         reason: online.available ? null : online.reason,
         ...(online.available ? { modes: online.modes } : {}),
         onHost: (mode, password) => {

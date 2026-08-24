@@ -120,6 +120,14 @@ const copyField = (
 // ---------------------------------------------------------------------------
 
 export interface OnlineChoices {
+  /**
+   * Where a follow-up dialog is mounted.
+   *
+   * The shell keeps every overlay in one container so they stack and style
+   * together; `document.body` would put this one outside it, which looks fine
+   * until something else is already open.
+   */
+  readonly host: HTMLElement;
   /** Why online play is off, or null when it is on. */
   readonly reason: string | null;
   /** The arrangements this build can offer. Empty when online play is off. */
@@ -273,10 +281,7 @@ export const mountOnlineChoices = (overlay: Overlay, o: OnlineChoices): void => 
           o.onHost('refereed', '');
           return;
         }
-        openHostDialog(overlay.el.ownerDocument.body, {
-          modes,
-          onHost: o.onHost,
-        });
+        openHostDialog(o.host, { modes, onHost: o.onHost });
       },
     }),
     button({

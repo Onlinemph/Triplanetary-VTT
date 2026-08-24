@@ -51,21 +51,32 @@ app. **Never use the secret key** (`sb_secret_…`, previously called
 `service_role`). It bypasses every rule in the database and the game has no use
 for it.
 
-## 4. Play
+## 4. Tell the game about the project
 
-Open the game → **Play online** → **Quick table**. Paste the URL and the key.
-Both are remembered in your browser.
+The two values are read at build time, so they go wherever the game is built
+from rather than into a box in the interface.
 
-Then either:
+**Playing on your own copy of the site** (GitHub Pages): add them as repository
+secrets under **Settings → Secrets and variables → Actions**, named
+`VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY`, then re-run the **Deploy to
+GitHub Pages** workflow so the published page is built with them.
 
-- **Host a table** — pick your scenario, fleets and options _first_, because
-  they are frozen the moment you host: whoever joins rebuilds that exact board.
-  You choose a password and get a six-character code.
-- **Join a table** — with a code and password from the host.
-- **Open tables** — lists tables hosted publicly on your project.
+**Running it locally**: `cp .env.example .env.local`, fill in the same two
+names, and `npm run dev`.
 
-Share the code and the password however you like. Anyone with both can sit
-down.
+Either way, a build without them still plays — hot seat, solo, save and load
+all work, and the online buttons say why they are dark.
+
+## 5. Play
+
+Pick your scenario, fleets and options on the scenario screen _first_: they are
+frozen the moment you host, and whoever joins rebuilds that exact board.
+
+Then **Play online** → choose **Quick table**, type a password, and open the
+table. You get a six-character code. Read the code and the password out to
+whoever is playing; they press **Join with a code** and type both.
+
+Share them however you like. Anyone with both can sit down.
 
 ## Housekeeping
 
