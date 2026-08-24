@@ -130,7 +130,41 @@ not open fire at all in the Grand Tour, where "combat is not allowed".
 **Flight School** is the other solo option, and the one to start with: one ship,
 nobody shooting, and six exercises in vector movement graded against par.
 
-### Playing with other people
+### Playing with other people, over the internet
+
+Sit at a table, share a six-character code, and play from anywhere:
+
+```bash
+npx supabase login
+npx supabase link --project-ref <your-project-ref>
+npx supabase db push          # the schema, its policies, and the referee's SQL
+npx supabase config push      # turns on anonymous sign-in — see below
+npm run functions:deploy      # bundles the engine and ships the Edge Function
+cp .env.example .env.local    # then fill in the URL and anon key
+npm run dev
+```
+
+`config push` is the step people miss. Anonymous sign-in is what lets a player
+join without an account, and `supabase/config.toml` only governs the _local_
+stack until you push it; without this the online buttons appear and every join
+fails on authentication.
+
+Then press **Play online** on the scenario screen, or paste a code into **Join a
+table**. A link of the form `?join=ABC234` drops a friend straight into the
+lobby.
+
+With no `.env.local` the online buttons are disabled with a one-line
+explanation, and everything else — hot seat, solo against the computer, save and
+load — works exactly as before. Supabase is an option, not a dependency.
+
+**What the server is for.** The Edge Function is the only participant that may
+write the command log, read the scenario seed, or see the whole board. Every
+order goes through it and through the same `applyCommand` your browser runs, so
+a modified client cannot make an illegal move legal, act for somebody else's
+seat, or read a fogged board. See [docs/MULTIPLAYER.md](docs/MULTIPLAYER.md) for
+the threat model and what each table hides.
+
+### Playing with other people, on one machine
 
 Hot seat works out of the box: pass the keyboard. Two further modes are wired
 into the session layer — several tabs of one browser over `BroadcastChannel`, and
@@ -181,9 +215,11 @@ src/
   scenarios/   the rulebook's scenarios, as pure builders + victory checks
   ai/          the computer opponent: a state in, one command out
   net/         GameSession (command log, undo, save) and the transports
+    supabase/  the online referee's contract, rules loop and browser client
   render/      canvas chart: bodies, counters, courses. Generated, not drawn.
   ui/          panels, input, and the one-way command loop
   main.ts      the only file that wires the concrete pieces together
+supabase/      migrations (schema + row level security) and the Edge Function
 docs/          ARCHITECTURE.md, MULTIPLAYER.md, RULES-MAPPING.md
 tests/         rules tests, run by vitest
 ```
@@ -207,6 +243,14 @@ and reproducible — a failing test can be replayed exactly.
 
 The wire layer has its own tests (`src/net/transport.test.ts`) driving fake
 sockets and channels, so reconnection and queueing are covered without a browser.
+
+The online half is tested without a Supabase project anywhere in sight.
+`tests/supabase-referee.test.ts` drives the rules loop directly — the same trick
+`server/room.ts` uses — and `tests/supabase-schema.test.ts` boots real
+PostgreSQL in WebAssembly, runs the migration files off disk, and then _attacks_
+them: read the seed, read another seat's fogged board, read a fog game's log,
+rewrite history as the referee. Each denial is its own case, named for the
+attack it makes.
 
 The computer opponent is tested the way you would audit a player rather than a
 function (`tests/ai.test.ts`): it plays every printed scenario on two seeds and

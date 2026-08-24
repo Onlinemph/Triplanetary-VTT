@@ -298,7 +298,167 @@ Two details the filter must get right, both from p. 8:
 
 ---
 
-## What is actually implemented
+## Playing over Supabase
+
+The WebSocket relay in `server/` is the trusted-table model: it authenticates
+nobody, it holds the whole game in memory, and it hands every client the
+generator that decides the dice. That is a fine thing to run for four friends on
+a LAN and the wrong thing to open to strangers.
+
+The Supabase path is the one for strangers. Same engine, same redaction, same
+"a game is its starting position plus an ordered list of commands" — but the
+list lives in Postgres, the only participant that may write it is an Edge
+Function holding the service role, and the database itself enforces what each
+seat may read.
+
+```
+supabase/migrations/0001_schema.sql    the tables a game lives in
+supabase/migrations/0002_policies.sql  who may read what, and nobody may write
+supabase/migrations/0003_apply.sql     accepting an order, atomically
+supabase/migrations/0004_throttle.sql  a cost for guessing join codes
+supabase/functions/game/index.ts       the referee on the wire
+src/net/supabase/protocol.ts           the contract between the two
+src/net/supabase/referee.ts            the rules loop, with no I/O in it
+src/net/supabase/client.ts             the browser side
+```
+
+### The shape of it
+
+```mermaid
+sequenceDiagram
+    participant B as Browser (seat "mars")
+    participant F as Edge Function (service role)
+    participant D as Postgres
+    B->>F: POST {action:'command', gameId, cmd}
+    Note over F: seat comes off the JWT,<br/>never off the request body
+    F->>D: read games + game_secrets + seats
+    Note over F: judge(): seat check, then applyCommand,<br/>rolled with a fresh secret die
+    F->>D: apply_command() — state, log row, view rows, one transaction
+    D-->>B: Realtime: the commands row (open) or your views row (fog)
+    F-->>B: {ok:true, index}
+```
+
+Two things are worth saying plainly about that picture.
+
+**The client never writes.** There is not one INSERT, UPDATE or DELETE policy in
+`0002_policies.sql`. A player takes a seat by _calling the function_, not by
+writing the row that records it, which is what makes `cmd.by` mean something: a
+relay takes the field on trust, and here the referee reads the seat off the JWT
+and ignores what the frame claims.
+
+**The database is the second lock.** If the function had a bug that leaked a
+game id, row level security would still refuse the read: `games`, `seats`,
+`commands` and `views` are all gated on holding a seat at that table, and
+`game_secrets` — the seed and the whole board — has no client grant at all.
+
+### The sealed die
+
+`GameState.rng` is a single 32-bit integer, and every roll in the game comes out
+of it. So a client holding the state can roll the next die _before_ deciding
+whether to fire. Fog of war does not help in the slightest: the number is inside
+the fogged state.
+
+Online, therefore, the referee never rolls with the state's own generator.
+
+1. A command arrives.
+2. The referee draws a fresh seed from `crypto.getRandomValues`.
+3. It applies the command with that seed, and records the seed in the log row
+   beside the command.
+4. It seals the stored board's generator back to zero.
+
+Which buys both halves at once. **Unpredictable forward:** the seed for the next
+command does not exist until the command arrives, and comes from the operating
+system rather than from anything a client holds. **Exact backward:** the log
+carries the dice it was rolled with, so replaying it reproduces the game roll for
+roll. A game is still its starting position plus an ordered list of commands;
+the list simply carries its dice with it.
+
+`sealDie` in `src/net/redact.ts` is what strips the generator on the way out, and
+it applies to every game, fogged or not. Note that the relay in `server/` does
+_not_ do this, and cannot: its clients replay commands themselves, so they need
+the generator. That is the trusted-table trade, stated rather than hidden.
+
+### What each seat may read
+
+| table           | who may SELECT                                        |
+| --------------- | ----------------------------------------------------- |
+| `games`         | anyone holding a seat at that table                   |
+| `seats`         | anyone holding a seat at that table                   |
+| `commands`      | seats at that table, **and only if it is not fogged** |
+| `views`         | your own row, and no other seat's                     |
+| `game_secrets`  | nobody — no grant, and an explicit refusal on top     |
+| `join_attempts` | nobody; the referee's own bookkeeping                 |
+
+A fog game does not stream its command log at all, to anybody, because the log
+plus the starting position reconstructs the whole board — undetected ships
+included, which is exactly what the fog is for. Its seats read `views` instead:
+one redacted board per seat, rewritten in place on every command, and readable
+only by the seat it belongs to.
+
+Realtime respects all of this for free, because a row reaches a subscriber only
+if row level security would let that subscriber select it. The policies _are_
+the streaming rules.
+
+### The attacks it is built against
+
+Assume a player with a genuine account, a genuine seat, the client source in
+front of them, and `curl`. In rough order of how much they would gain:
+
+- **Read the seed.** Every fog scenario derives its hidden setup from it —
+  Escape picks the fugitive with `rollDie({seed})`, Lateral 7 places its dummies
+  from the same draw — so the seed _is_ the secret. It lives in `game_secrets`,
+  which has no client grant, and `create` ignores a client-supplied seed for any
+  fogged table so the host cannot choose one they already know.
+- **Read another seat's board.** `views` is keyed by seat and the policy compares
+  against the caller's own. A vacated seat has its row deleted, so an empty chair
+  is not a fogged board waiting to be sat in, and changing seats once the game
+  has started is refused outright.
+- **Read a fog game's log.** Not readable, by policy, by anyone at the table.
+- **Forge `cmd.by`.** Checked against the seat the JWT holds, before the rules
+  see the command.
+- **Write the log directly.** No grant, no policy — and append-only triggers
+  that bind the service role too, because the one participant able to rewrite
+  history is the one holding the service key.
+- **Guess a join code.** Uniform refusals give nothing away, but a hit announces
+  itself, so misses are budgeted per account: twenty in ten minutes, then the
+  answer is the same refusal either way.
+- **Predict the dice.** See the sealed die above.
+
+### What is deliberately _not_ defended
+
+- **Two browsers, one human.** Nothing stops somebody opening a second
+  anonymous account and taking a second seat at their own table. The roster
+  shows it, and that is the whole answer: this is a game between people who
+  chose to sit down together, not a ranked ladder.
+- **Other players' account ids.** A seat row carries the opaque `user_id` of
+  whoever holds it, visible to the two people you sat down with. Hiding it needs
+  a column grant, and a role without SELECT on every column cannot issue
+  `select *`, which is what Realtime's row authorisation appears to do. Breaking
+  the roster stream to hide a uuid from somebody already looking at your ships is
+  the wrong trade.
+- **Denial of service beyond the throttle.** Supabase's own limits do the rest.
+
+### Testing it without a Supabase project
+
+Both halves are testable with nothing running:
+
+- `tests/supabase-referee.test.ts` drives the rules loop directly. It is the
+  `server/room.ts` trick again — keep the decisions in pure functions and the
+  I/O somewhere else — and it proves the sealed die, seat authority, exact
+  replay, per-seat fog, and the computer's seats.
+- `tests/supabase-schema.test.ts` boots **real PostgreSQL** in WebAssembly
+  (PGlite), runs the migration files read off disk, and then attacks them. Every
+  denial in the table above is its own case, named for its attack, and the suite
+  was mutation-tested: ten deliberate holes were opened in the policies and each
+  one was caught.
+
+What neither can prove is what Supabase itself does — Realtime's exact row
+authorisation query, PostgREST's schema exposure, and whether `config.toml`'s
+keys are the ones the platform reads. Those need a project.
+
+---
+
+## What is actually implemented — the WebSocket relay
 
 ```
 server/room.ts        the authoritative rules loop, with no networking in it
@@ -403,12 +563,29 @@ swallow it, and resync with a full catch-up.
 
 ## Checklist for a real deployment
 
-- [ ] Authenticate connections and bind each to a seat; drop frames whose
-      `cmd.by` does not match.
-- [ ] Run `applyCommand` server-side; never trust a client's legality check.
-- [ ] Persist `{ scenarioId, seed, log }` per room — that is the whole game, and
-      it is small.
-- [ ] Rate-limit commands per connection.
-- [ ] Version the protocol on the wire (`v`) and refuse mismatches loudly.
-- [ ] Decide about fog of war before opening to strangers; the honest-players
-      model is a legitimate choice, but say which one you are running.
+This was written before the Supabase path existed, as a list of what a relay
+would still owe you. Every line of it is now done, and where it is done is worth
+recording — a checklist nobody ever ticks is just a list of regrets.
+
+- [x] **Authenticate connections and bind each to a seat; drop frames whose
+      `cmd.by` does not match.** The Edge Function reads the account off the JWT
+      and `judge()` checks it against `cmd.by` before the rules see the command.
+- [x] **Run `applyCommand` server-side; never trust a client's legality check.**
+      `src/net/supabase/referee.ts`, and the client does not even apply
+      optimistically — it waits for the referee's answer, because it cannot know
+      the die.
+- [x] **Persist `{ scenarioId, seed, log }` per room.** `game_secrets` and
+      `commands`. The log carries its dice too, so it replays exactly.
+- [x] **Rate-limit.** `0004_throttle.sql` budgets join-code guesses per account;
+      commands are already gated on holding a seat.
+- [x] **Version the protocol on the wire and refuse mismatches loudly.**
+      `SUPABASE_PROTOCOL_VERSION`, checked in `parsePlayRequest`.
+- [x] **Decide about fog of war before opening to strangers.** Decided: the
+      referee redacts per seat, fog games do not stream their log at all, and
+      the generator is sealed in every game. The relay in `server/` remains the
+      trusted-table model, and says so.
+
+One thing the original list did not think to ask for, and should have:
+
+- [x] **Take the dice away from the clients.** A deterministic generator in a
+      shared state is a client that can see the future. See the sealed die.

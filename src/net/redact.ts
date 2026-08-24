@@ -31,6 +31,7 @@ import {
   distance,
 } from '../engine/index.js';
 import { detectionSources, isDetected } from '../engine/detection.js';
+import { shipLabel } from '../engine/movement.js';
 
 /**
  * The `scenarioData` key scenarios use for hidden setup.
@@ -62,6 +63,24 @@ export const ALWAYS_VISIBLE_KEY = 'alwaysVisible';
  * something says so, by name, once.
  */
 export const PUBLIC_KEYS_KEY = 'publicKeys';
+
+/**
+ * The generator state a sealed view carries: none.
+ *
+ * "Every die roll in the game goes through here. The generator's entire state is
+ * a single 32-bit integer carried inside `GameState`" — which is exactly the
+ * problem once the table is open to strangers. A client holding the real
+ * generator can compute the next roll before deciding whether to fire, and no
+ * amount of fog hides it, because the number is right there in the state the
+ * fog is wrapped around.
+ *
+ * So a state going over the wire has its generator sealed. In an authoritative
+ * game the value is meaningless anyway: the referee draws a fresh, unguessable
+ * seed for every command and records it in the log, so the number sitting in
+ * the stored state between commands is never the number a roll will use. See
+ * {@link sealDie}.
+ */
+export const SEALED_RNG = 0;
 
 const publicKeys = (state: GameState): ReadonlySet<string> => {
   const raw = state.scenarioData[PUBLIC_KEYS_KEY];
@@ -173,6 +192,102 @@ export const filterOwnedEntries = (
   return owned;
 };
 
+/**
+ * Strike every mention of somebody else's ships out of a value, at any depth.
+ *
+ * The three rules above are shape rules: they recognise a secret, an ownership
+ * table, a blob that talks only about the enemy. Between them they missed the
+ * commonest shape in the game, and missed it silently for as long as fog of war
+ * has existed.
+ *
+ * `movement.ts` parks its per-turn bookkeeping under `scenarioData.movement`,
+ * whose keys are `paths`, `landing`, `rams` and `hazards` — not ship ids. So
+ * `filterOwnedEntries` declines to split it, and `mentionsOnlyOtherPlayersShips`
+ * lets it through because the viewer's own ships are in there too. The result
+ * was that every seat in a fog game received `paths`: the hex-by-hex course, in
+ * order, of every enemy ship it had never detected. The fog was drawn over a
+ * board the client already held in full.
+ *
+ * A shape rule could not have caught that, so this is not one. It walks the
+ * whole value and removes anything that names a ship the viewer may not see —
+ * a key, an array element, or a string buried three levels down. Failing that
+ * test drops the smallest enclosing entry, never the whole tree, so
+ * `movement.paths` survives holding exactly the viewer's own courses.
+ *
+ * Ownership rather than detection is the test, deliberately. Lateral 7's dummy
+ * assignments stay secret for a counter you have *detected*: knowing where a
+ * ship is and knowing whether it is real are different facts, and only one of
+ * them is what detection buys you.
+ */
+const REDACTED = Symbol('redacted');
+
+const pruneForeignShips = (
+  state: GameState,
+  value: unknown,
+  // Nullable on purpose. A spectator owns nothing, so `ship.owner !== viewer`
+  // is true of every live ship and the whole tree is struck out — which is
+  // exactly a spectator's entitlement at a fogged table, and the direction the
+  // ships, ordnance and log filters already fail in.
+  viewer: PlayerId | null,
+): unknown => {
+  if (typeof value === 'string') {
+    const ship = state.ships[value];
+    return ship && ship.owner !== viewer && !ship.destroyed ? REDACTED : value;
+  }
+  if (Array.isArray(value)) {
+    return value
+      .map((v) => pruneForeignShips(state, v, viewer))
+      .filter((v) => v !== REDACTED);
+  }
+  if (typeof value === 'object' && value !== null) {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      const ship = state.ships[k];
+      if (ship && ship.owner !== viewer && !ship.destroyed) continue;
+      const pruned = pruneForeignShips(state, v, viewer);
+      if (pruned !== REDACTED) out[k] = pruned;
+    }
+    return out;
+  }
+  return value;
+};
+
+/**
+ * Drop the entries of the running commentary this seat could not have watched.
+ *
+ * The second hole, and the one that made the first one moot. `redactState`
+ * filtered `ships`, `ordnance` and `scenarioData` and passed `state.log`
+ * straight through — so a fog view carried the narration of the entire game:
+ * every takeoff, plot, burn and landing of every enemy ship, by name, with the
+ * hex printed in the sentence. Hiding a counter while narrating its course is
+ * not hiding it.
+ *
+ * Detection is the test here, not ownership, because that is exactly what
+ * detection is for: a ship you have found is a ship whose movements you may
+ * watch. An entry naming nobody — "Day 5 begins", "Combat phase" — is public
+ * and survives.
+ *
+ * Matching is on the ship's printed label rather than on structured metadata,
+ * because `LogEntry` carries none: it is a sentence and a severity. That errs
+ * towards dropping an entry it need not have (one ship's label can be a prefix
+ * of another's) which is the safe direction, and the property test in
+ * `tests/multiplayer.test.ts` is what holds it honest.
+ */
+const redactLog = (
+  state: GameState,
+  viewer: PlayerId | null,
+  always: ReadonlySet<string>,
+): GameState['log'] => {
+  const hidden = Object.values(state.ships).filter(
+    (ship) => !(viewer !== null && shipVisible(state, ship, viewer, always)) && !ship.destroyed,
+  );
+  if (hidden.length === 0) return state.log;
+  const labels = hidden.map((ship) => shipLabel(ship));
+  return state.log.filter(
+    (entry) => !labels.some((label) => entry.text.includes(label)) && !hidden.some((s) => entry.text.includes(s.id)),
+  );
+};
+
 /** Is this enemy ordnance inside the viewer's detector net? */
 const ordnanceVisible = (
   state: GameState,
@@ -207,6 +322,18 @@ const shipVisible = (
   if (always.has(ship.id)) return true;
   return isDetected(state, ship, viewer);
 };
+
+/**
+ * Take the dice off the table before handing the state to a player.
+ *
+ * Unlike {@link redactState} this applies to *every* game, fogged or not. Fog
+ * of war is about what is on the board; this is about what the board is going
+ * to do next, and a player who can read the generator knows every roll before
+ * making a decision. Sealing costs nothing, because the referee never rolls
+ * with the state's own generator: it draws a fresh seed per command.
+ */
+export const sealDie = (state: GameState): GameState =>
+  state.rng.seed === SEALED_RNG ? state : { ...state, rng: { seed: SEALED_RNG } };
 
 /**
  * Produce the view of the game that `viewer` is entitled to.
@@ -271,10 +398,12 @@ export const redactState = (state: GameState, viewer: PlayerId | null, map: Game
     // handing the Enforcer the fugitive by elimination. Any entry that talks
     // only about ships the viewer does not own is withheld.
     if (viewer !== null && mentionsOnlyOtherPlayersShips(state, value, viewer)) continue;
-    scenarioData[key] = value;
+    // And the general case the shape rules miss: strike out any mention of
+    // somebody else's ships wherever it is buried.
+    scenarioData[key] = pruneForeignShips(state, value, viewer);
   }
 
-  return { ...state, ships, ordnance, scenarioData };
+  return { ...state, ships, ordnance, scenarioData, log: redactLog(state, viewer, always) };
 };
 
 /**

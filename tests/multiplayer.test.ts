@@ -19,6 +19,15 @@ import {
 } from '../src/net/redact.js';
 import { DEFAULT_MAP, type GameState } from '../src/engine/index.js';
 import { parseClientMsg, SERVER_PROTOCOL_VERSION } from '../src/net/protocol.js';
+import {
+  type SeatRow,
+  type StoredGame,
+  leaveSeat,
+  playComputerSeats,
+  takeSeat,
+  viewFor,
+  viewsForAll,
+} from '../src/net/supabase/referee.js';
 
 const map = DEFAULT_MAP;
 
@@ -226,6 +235,163 @@ describe('fog of war', () => {
     expect(view.phase).toBe(r.state.phase);
     expect(view.playerOrder).toEqual(r.state.playerOrder);
     expect(redactState(view, r.state.playerOrder[0]!, map).turn).toBe(view.turn);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The same property, over the Supabase transport
+// ---------------------------------------------------------------------------
+
+/**
+ * The tests above run the property on a board nobody has moved on yet, and that
+ * is where they stop being worth much: a freshly built scenario has an empty
+ * `movement.paths`, an empty log and nothing detected, so a redactor that
+ * withholds nothing at all still passes. Every leak found in this code so far
+ * only existed after somebody had taken a turn.
+ *
+ * So these play a fog game out through the referee's own loop first, and then
+ * ask the same question of the payloads the Supabase transport actually sends:
+ * the per-seat snapshot the `views` row carries, and the `snapshot` a `sync`
+ * answers with. Both are `viewFor`, which is what makes it one property and not
+ * three.
+ */
+const played = (scenarioId: string, orders: number, seed = 7): StoredGame => {
+  const state = buildScenario(scenarioId, { seed });
+  const seats: SeatRow[] = state.playerOrder.map((id, ordinal) => ({
+    seat: id,
+    ordinal,
+    faction: id,
+    name: id,
+    kind: 'computer',
+    userId: null,
+    lastSeen: null,
+  }));
+  const game: StoredGame = {
+    id: 'game',
+    code: 'ABCDEF',
+    scenarioId,
+    fog: state.options.fogOfWar,
+    status: 'playing',
+    state,
+    commandCount: 0,
+    seats,
+    hostId: 'host',
+  };
+  return playComputerSeats(game, () => 0x5eed, map, orders).game;
+};
+
+const FOG_SCENARIOS = ['escape', 'lateral-7', 'piracy'] as const;
+
+/** Ships the real board holds that this payload has no business mentioning. */
+const forbidden = (game: StoredGame, view: GameState): string[] => {
+  const shown = new Set(Object.keys(view.ships));
+  const names = allStrings(view);
+  return Object.keys(game.state.ships).filter(
+    (id) => !shown.has(id) && !game.state.ships[id]!.destroyed && names.has(id),
+  );
+};
+
+describe('fog of war over the Supabase transport', () => {
+  it('never names a hidden ship in a seat’s snapshot, on a board that has been played', () => {
+    // What breaks if this fails: `movement.paths` is keyed by ship id and holds
+    // the hex-by-hex course of every ship on the board. It is empty at setup,
+    // so the fresh-board test above cannot see it, and it travels inside
+    // `scenarioData` — which means every seat in a fog game would be handed the
+    // exact track of every enemy ship it has never detected.
+    for (const scenario of FOG_SCENARIOS) {
+      for (const orders of [25, 60, 120]) {
+        const game = played(scenario, orders);
+        expect(game.state.options.fogOfWar).toBe(true);
+        const views = viewsForAll(game, map);
+        for (const seat of game.state.playerOrder) {
+          expect({ scenario, orders, seat, leaked: forbidden(game, views[seat]!) }).toEqual({
+            scenario,
+            orders,
+            seat,
+            leaked: [],
+          });
+        }
+      }
+    }
+  });
+
+  it('never names a hidden ship to a spectator, on a board that has been played', () => {
+    // Separate from the seated case because it is reached by a different branch
+    // and defended by a different one. `sync` serves any caller without a seat
+    // as a spectator — `viewFor(game, null)` — which is a deliberate widening of
+    // the database's "membership, not knowledge, grants a read", and the whole
+    // justification for it is that a spectator's payload contains only what is
+    // public. What breaks if this fails: anyone signed in who holds a game id
+    // reads the position of every ship in a fog game they are not at.
+    for (const scenario of FOG_SCENARIOS) {
+      for (const orders of [25, 60, 120]) {
+        const game = played(scenario, orders);
+        const leaked = forbidden(game, viewFor(game, null, map));
+        expect({ scenario, orders, leaked }).toEqual({ scenario, orders, leaked: [] });
+      }
+    }
+  });
+
+  it('leaves no hidden ship’s hex in the log entries a seat is sent', () => {
+    // `redactLog` matches on the sentence, and `LogEntry.focus` is not a
+    // sentence — it is the list of hexes the client flashes on the map when the
+    // entry is hovered. An entry that survives the text filter while carrying an
+    // undetected ship's hex in `focus` hands over the position in structured
+    // form, which is worse than the prose it was filtered for.
+    for (const scenario of FOG_SCENARIOS) {
+      const game = played(scenario, 120);
+      for (const seat of game.state.playerOrder) {
+        const view = viewFor(game, seat, map);
+        const focused = new Set(
+          view.log.flatMap((e) => (e.focus ?? []).map((h) => `${h.q},${h.r}`)),
+        );
+        const leaked = Object.values(game.state.ships)
+          .filter(
+            (s) => !(s.id in view.ships) && !s.destroyed && focused.has(`${s.pos.q},${s.pos.r}`),
+          )
+          .map((s) => s.id);
+        expect({ scenario, seat, leaked }).toEqual({ scenario, seat, leaked: [] });
+      }
+    }
+  });
+
+  it('seals the generator in every payload a fog game sends', () => {
+    // The sealed die is not a fog rule and applies to the spectator payload too:
+    // "a client holding the state can roll the next die before deciding whether
+    // to fire", and a spectator is somebody who may be about to sit down.
+    const game = played('escape', 40);
+    for (const view of [...Object.values(viewsForAll(game, map)), viewFor(game, null, map)]) {
+      expect(view.rng.seed).toBe(0);
+    }
+  });
+
+  it('does not let a player read a seat it vacated its way into', () => {
+    // The reconnect rule — "a seat with a live holder is not available; one
+    // whose holder left is" — is what makes a dropped player able to resume. It
+    // is also, at a table that is already playing, a way to read the enemy's
+    // board: wait for an opponent to leave, take their empty chair, read the
+    // snapshot the referee keeps refreshed there, and go back to your own. The
+    // roster flickers and nothing else records it.
+    const game = played('piracy', 40);
+    const [mine, , theirs] = game.state.playerOrder as [string, string, string];
+    const seats = game.seats.map((s, i) => ({
+      ...s,
+      kind: 'human' as const,
+      userId: `user-${i}`,
+      lastSeen: 1,
+    }));
+    const table: StoredGame = { ...game, seats };
+
+    const before = new Set(Object.keys(viewFor(table, mine, map).ships));
+    const vacated: StoredGame = { ...table, seats: leaveSeat(table, 'user-2') };
+    const hop = takeSeat(vacated, 'user-0', theirs, undefined, 2);
+
+    const gained = hop.ok
+      ? Object.keys(viewFor({ ...vacated, seats: hop.seats! }, theirs, map).ships).filter(
+          (id) => !before.has(id),
+        )
+      : [];
+    expect({ hopped: hop.ok, gained }).toEqual({ hopped: false, gained: [] });
   });
 });
 

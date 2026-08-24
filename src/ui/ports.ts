@@ -13,10 +13,15 @@
 import type { Command, CommandResult } from '@engine/commands.js';
 import type { Hex, Point } from '@engine/hex.js';
 import type { GameMap } from '@engine/map.js';
-import type { GameOptions, GameState } from '@engine/types.js';
+import type { GameOptions, GameState, PlayerId } from '@engine/types.js';
+import type { SeatInfo, TableInfo } from '@net/supabase/protocol.js';
 import type { RenderView } from '@render/renderer.js';
 
-export type { RenderView };
+// `TableInfo` and `SeatInfo` are re-exported rather than restated. They come
+// from `protocol.ts`, which is the browser <-> referee contract itself and holds
+// no implementation — the same standing as `RenderView`. A parallel pair of
+// interfaces here would be a copy of a contract, and copies of contracts drift.
+export type { RenderView, SeatInfo, TableInfo };
 
 // ---------------------------------------------------------------------------
 // Session
@@ -118,6 +123,86 @@ export interface ScenarioBuildOptions {
 export type ComputerSeats = readonly number[];
 
 // ---------------------------------------------------------------------------
+// Online play
+// ---------------------------------------------------------------------------
+
+/**
+ * What the indicator says about the wire.
+ *
+ * Deliberately not the client's own `'closed' | 'connecting' | 'open'`. Those
+ * are three states of a Realtime subscription; these are three things to tell a
+ * player, and `main.ts` maps between them. A table that is merely reconnecting
+ * is still a table, and saying "offline" about it would be a lie.
+ */
+export type LinkState = 'live' | 'reconnecting' | 'offline';
+
+/** What the shell wants to hear about while it is sitting at a table. */
+export interface TableEvents {
+  /** The seat this client now holds, or `null` for a spectator. */
+  onSeat?(seat: PlayerId | null): void;
+  /** The roster, the status, the turn and the join code, all in one. */
+  onTable?(table: TableInfo): void;
+  onLink?(state: LinkState): void;
+  /** Something the referee refused, in words worth showing a player. */
+  onRefused?(reason: string): void;
+}
+
+/**
+ * A table this client is sitting at.
+ *
+ * The session comes with it, because online the two are one thing: the referee
+ * decides, and the session is the vessel its decisions are poured into. Nothing
+ * the shell does to that session moves the board — every order leaves through
+ * `send` and comes back as a state somebody else computed.
+ */
+export interface TablePort {
+  readonly session: SessionPort;
+  readonly seat: PlayerId | null;
+  readonly table: TableInfo | null;
+  readonly link: LinkState;
+  /** True when this client opened the table, and so may start it. */
+  readonly host: boolean;
+  /** Close the lobby and begin. The referee refuses this from anyone but the host. */
+  start(): Promise<void>;
+  /** Move to another open seat, or stand up to watch with `null`. */
+  sit(seat: PlayerId | null): Promise<void>;
+  /** Give an order. False when the referee refused it. */
+  send(cmd: Command): Promise<boolean>;
+  /** Vacate the seat and stop listening. */
+  leave(): Promise<void>;
+  /** Stop listening without vacating, so the seat is still ours to resume. */
+  close(): void;
+}
+
+export interface HostOptions extends ScenarioBuildOptions {
+  readonly scenarioId: string;
+  readonly computerSeats: ComputerSeats;
+}
+
+/**
+ * Somewhere to play online, or the reason there is nowhere.
+ *
+ * The absent case is a value rather than a missing field because the interface
+ * has something to say about it: a build with no credentials must explain why
+ * the button is dead, not merely hide it and leave a player wondering.
+ */
+export type OnlinePort =
+  | { readonly available: false; readonly reason: string }
+  | {
+      readonly available: true;
+      /** Open a table and take the first seat. */
+      host(opts: HostOptions, events: TableEvents): Promise<TablePort>;
+      /**
+       * Sit down at somebody's table. An omitted seat resumes the one this
+       * account already holds and otherwise takes the lowest open one, which is
+       * what makes following a link a single click and a reconnect a no-op.
+       */
+      join(code: string, seat: PlayerId | null | undefined, events: TableEvents): Promise<TablePort>;
+      /** The link a friend follows to reach a table. */
+      linkFor(code: string): string;
+    };
+
+// ---------------------------------------------------------------------------
 // Wiring
 // ---------------------------------------------------------------------------
 
@@ -130,4 +215,8 @@ export interface AppDeps {
   createRenderer(canvas: HTMLCanvasElement, map: GameMap): RendererPort;
   /** Seed source for new games. Injected so the shell stays deterministic in tests. */
   randomSeed(): number;
+  /** Online play. Omitted is the same as unavailable, with a generic reason. */
+  readonly online?: OnlinePort;
+  /** A join code off the address bar, so a link lands straight in the lobby. */
+  readonly joinCode?: string | null;
 }

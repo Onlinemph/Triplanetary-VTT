@@ -24,6 +24,7 @@ import { torpedoAimEndpoints, torpedoAimOptions } from '@engine/ordnance.js';
 import { SHIP_CLASSES } from '@engine/ships.js';
 import {
   type GameOptions,
+  type GameState,
   type Phase,
   type PlayerId,
   type Ship,
@@ -41,13 +42,31 @@ import { button, el, fill } from './components/dom.js';
 import { icon } from './components/glyphs.js';
 import { type Overlay, openModal } from './components/modal.js';
 import { aiCommand } from '../ai/driver.js';
-import type { AppDeps, ComputerSeats, RenderView, RendererPort, SessionPort } from './ports.js';
+import type {
+  AppDeps,
+  ComputerSeats,
+  OnlinePort,
+  RenderView,
+  RendererPort,
+  SessionPort,
+  TableEvents,
+  TablePort,
+} from './ports.js';
 import { createCombatPanel } from './panels/combat.js';
 import { createFleetPanel } from './panels/fleet.js';
 import { createInspector } from './panels/inspector.js';
+import {
+  type Lobby,
+  type TableActions,
+  type TableView,
+  createTableBadge,
+  mountOnlineChoices,
+  openJoinDialog,
+  openLobby,
+} from './panels/lobby.js';
 import { createLogPanel } from './panels/logpanel.js';
 import { openHelpDrawer } from './panels/help.js';
-import { openScenarioPicker } from './panels/scenarioPicker.js';
+import { type PickerResult, openScenarioPicker } from './panels/scenarioPicker.js';
 import { createTopBar } from './panels/topbar.js';
 import {
   type Actions,
@@ -118,6 +137,17 @@ export const createApp = (deps: AppDeps): App => {
     ),
   );
 
+  // The online affordances all speak to the shell through one small verb list,
+  // for the same reason the panels speak through `Actions`: the lobby and the
+  // badge should not know whether leaving a table also tears down a session.
+  const tableActions: TableActions = {
+    sit: (seat) => void sitAt(seat),
+    start: () => void startTable(),
+    leave: () => leaveTable(true),
+    notify: (text, tone) => act.notify(text, tone),
+  };
+  const badge = createTableBadge(tableActions);
+
   const root = el(
     'div',
     { class: 'app' },
@@ -125,6 +155,7 @@ export const createApp = (deps: AppDeps): App => {
     flashLayer,
     topBar.el,
     noticeHost,
+    badge.el,
     fleet.el,
     rightPanel,
     logPanel.el,
@@ -158,6 +189,31 @@ export const createApp = (deps: AppDeps): App => {
   let frame = 0;
   const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
+  // --- Online state --------------------------------------------------------
+
+  /** The table this client is sitting at, or null for a game played here. */
+  let table: TablePort | null = null;
+  let lobby: Lobby | null = null;
+  let joinOverlay: Overlay | null = null;
+  /**
+   * What the picker's Begin button is going to mean. Set by the online buttons
+   * immediately before they press it — see `mountOnlineChoices`.
+   */
+  let intent: 'here' | 'online' = 'here';
+  /**
+   * The code and seat we last held.
+   *
+   * Standing up vacates the seat, so coming back with an unspecified seat would
+   * take the lowest open one rather than the one that was ours. Remembering it
+   * is what makes leaving and rejoining resume the same side of the same game.
+   */
+  let resume: { code: string; seat: PlayerId | null } | null = null;
+
+  const online: OnlinePort = deps.online ?? {
+    available: false,
+    reason: 'This build has no server to play on.',
+  };
+
   const scenarioName = (): string =>
     deps.scenarios.find((s) => s.id === scenarioId)?.name ?? 'Triplanetary';
 
@@ -178,10 +234,21 @@ export const createApp = (deps: AppDeps): App => {
       .sort((a, b) => a.number - b.number || a.id.localeCompare(b.id));
   };
 
+  /**
+   * Whose eyes the chart is drawn through.
+   *
+   * Hot-seat play renders for whoever is to move, because the person at the
+   * keyboard changes with the turn. At an online table it never does: the board
+   * this client holds was redacted for one seat, and drawing it as somebody
+   * else's would both hide ships this player is entitled to see and light up
+   * ones they are not.
+   */
+  const viewerOf = (state: GameState): PlayerId => table?.seat ?? activePlayer(state);
+
   const visibleAt = (h: Hex): Ship[] => {
     if (!session) return [];
     const state = session.state;
-    const me = activePlayer(state);
+    const me = viewerOf(state);
     const pool = state.options.fogOfWar ? visibleShips(state, me) : liveShips(state);
     return pool.filter((s) => eq(s.pos, h));
   };
@@ -345,6 +412,17 @@ export const createApp = (deps: AppDeps): App => {
 
     dispatch(cmd) {
       if (!session) return false;
+      const t = table;
+      if (t) {
+        // Online the board does not move here. "The referee draws a fresh,
+        // unguessable seed for every command", and this client is not told what
+        // it was until the command has been resolved, so applying anything now
+        // would be a guess at the dice. What the shell may still do is treat the
+        // half-built order as spent, because that is interface state and not the
+        // game; a refusal arrives moments later as a notice.
+        void t.send(cmd).catch((err: unknown) => act.notify(reasonOf(err), 'bad'));
+        return true;
+      }
       const result = session.dispatch(cmd);
       if (!result.ok) {
         act.notify(result.reason ?? 'That order was refused.', 'bad');
@@ -360,6 +438,12 @@ export const createApp = (deps: AppDeps): App => {
 
     undo() {
       if (!session) return;
+      if (table) {
+        // Rewinding this client rewinds nothing at anybody else's. The referee's
+        // log is the only history an online table has.
+        act.notify('There is no undo at an online table — the referee holds the log.', 'warn');
+        return;
+      }
       session.undo();
       render();
     },
@@ -431,12 +515,17 @@ export const createApp = (deps: AppDeps): App => {
 
     newGame() {
       if (pickerOverlay) return;
-      pickerOverlay = openScenarioPicker(
+      intent = 'here';
+      const overlay = openScenarioPicker(
         overlays,
         deps.scenarios,
         { id: scenarioId, options: gameOptions, seed },
         (result) => {
           pickerOverlay = null;
+          if (intent === 'online') {
+            void hostTable(result);
+            return;
+          }
           startScenario(
             result.id,
             result.opts.seed,
@@ -450,7 +539,31 @@ export const createApp = (deps: AppDeps): App => {
           pickerOverlay = null;
         },
       );
+      pickerOverlay = overlay;
+      mountOnlineChoices(overlay, {
+        reason: online.available ? null : online.reason,
+        onHost: () => {
+          intent = 'online';
+          beginFrom(overlay);
+        },
+        onJoin: () => {
+          overlay.close();
+          promptJoin(null);
+        },
+      });
     },
+  };
+
+  /**
+   * Press the picker's own Begin button.
+   *
+   * The scenario, the optional rules, the seed and the fleets live inside the
+   * picker and leave it only through that button. Hosting wants the same
+   * choices as playing here, so it makes the same choice and changes only what
+   * the answer means — see `intent`.
+   */
+  const beginFrom = (overlay: Overlay): void => {
+    overlay.el.querySelector<HTMLButtonElement>('.modal-foot .btn-primary')?.click();
   };
 
   // --- Plot helpers --------------------------------------------------------
@@ -741,7 +854,7 @@ export const createApp = (deps: AppDeps): App => {
   /** Turn the shell's intent into the renderer's overlay contract. */
   const renderView = (s: SessionPort): RenderView => {
     const state = s.state;
-    const me = activePlayer(state);
+    const me = viewerOf(state);
     const ship = selectedShip();
 
     // While aiming a torpedo the candidate hexes take over the "reachable"
@@ -922,7 +1035,11 @@ export const createApp = (deps: AppDeps): App => {
   };
 
   const autoAdvance = (): void => {
-    if (!session || busySkipping || !ui.flags.autoSkip) return;
+    // Never online. This walks the sequence of play by dispatching `endPhase`
+    // straight into the session, which at a table is a view of somebody else's
+    // authority: the phase would advance here and nowhere else. The referee is
+    // the only participant that may decide a phase is empty.
+    if (!session || table !== null || busySkipping || !ui.flags.autoSkip) return;
     busySkipping = true;
     try {
       const skipped: Phase[] = [];
@@ -952,7 +1069,10 @@ export const createApp = (deps: AppDeps): App => {
   };
 
   const render = (): void => {
-    if (!session) return;
+    if (!session) {
+      paintTable();
+      return;
+    }
     runComputerSeats();
     autoAdvance();
     const state = session.state;
@@ -981,7 +1101,7 @@ export const createApp = (deps: AppDeps): App => {
       map: session.map,
       ui,
       act,
-      viewer: activePlayer(state),
+      viewer: viewerOf(state),
     };
 
     root.classList.toggle('is-left-closed', !ui.leftOpen);
@@ -992,6 +1112,7 @@ export const createApp = (deps: AppDeps): App => {
 
     for (const panel of panels) panel.update(ctx);
     drawNotice();
+    paintTable();
 
     renderer?.render(state, renderView(session));
     drawFlash();
@@ -1045,7 +1166,205 @@ export const createApp = (deps: AppDeps): App => {
     });
   };
 
+  // --- Online --------------------------------------------------------------
+
+  const reasonOf = (err: unknown): string =>
+    err instanceof Error && err.message !== '' ? err.message : 'the referee could not be reached';
+
+  const tableEvents = (): TableEvents => ({
+    onSeat: () => refreshTable(),
+    onTable: () => refreshTable(),
+    onLink: () => refreshTable(),
+    // "A refusal from the referee must surface as a notice, not vanish." It is
+    // the only feedback an online order gets when the board does not move.
+    onRefused: (reason) => act.notify(reason, 'bad'),
+  });
+
+  /** Everything the lobby and the badge draw themselves from, or null when off. */
+  const tableView = (): TableView | null => {
+    const t = table;
+    if (t === null) return null;
+    const info = t.table;
+    const state = session?.state ?? null;
+    const who =
+      info !== null && info.status === 'playing' && state !== null ? activePlayer(state) : null;
+    return {
+      table: info,
+      seat: t.seat,
+      link: t.link,
+      host: t.host,
+      scenarioName: scenarioName(),
+      joinLink: online.available && info !== null ? online.linkFor(info.code) : '',
+      turn:
+        who === null || state === null
+          ? null
+          : { name: state.players[who]?.name ?? who, mine: who === t.seat },
+    };
+  };
+
+  /** Repaint the online chrome. Never calls `render`, because `render` calls it. */
+  const paintTable = (): void => {
+    const view = tableView();
+    // The badge lives where a notice would otherwise be thrown; the class moves
+    // the notices down rather than letting a refusal land underneath the thing
+    // that says whose turn it is.
+    root.classList.toggle('is-online', view !== null);
+    badge.update(view);
+    if (view !== null) lobby?.update(view);
+  };
+
+  /**
+   * The table said something. Decide whether we are in the lobby or in a game,
+   * and repaint everything.
+   */
+  const refreshTable = (): void => {
+    const t = table;
+    const info = t?.table ?? null;
+    if (t !== null && info !== null) {
+      scenarioId = info.scenarioId;
+      resume = { code: info.code, seat: t.seat };
+    }
+    const waiting = t !== null && (info === null || info.status === 'lobby');
+    if (waiting && lobby === null) {
+      lobby = openLobby(overlays, tableActions, tableView()!);
+    } else if (!waiting && lobby !== null) {
+      lobby.close();
+      lobby = null;
+      // The lobby was covering the chart, and the game it was waiting for has
+      // begun; frame it rather than leaving the player looking at the last fit.
+      if (session) renderer?.fitAll(session.state);
+      canvas.focus();
+    }
+    paintTable();
+    render();
+  };
+
+  const enterTable = (t: TablePort): void => {
+    closeTable(false);
+    table = t;
+    // The referee plays the computer's seats, through the same judge a person's
+    // orders go through. Nothing on this side should be giving them.
+    computerSeats = new Set();
+    installSession(t.session);
+    refreshTable();
+  };
+
+  const hostTable = async (result: PickerResult): Promise<void> => {
+    if (!online.available) return;
+    scenarioId = result.id;
+    seed = result.opts.seed;
+    gameOptions = { ...DEFAULT_OPTIONS, ...result.opts.options };
+    try {
+      enterTable(
+        await online.host(
+          { scenarioId: result.id, ...result.opts, computerSeats: result.computerSeats },
+          tableEvents(),
+        ),
+      );
+    } catch (err) {
+      act.notify(`Could not open a table: ${reasonOf(err)}`, 'bad');
+      act.newGame();
+    }
+  };
+
+  const joinTable = async (code: string, watchOnly: boolean): Promise<void> => {
+    if (!online.available) return;
+    // An unspecified seat resumes the one this account already holds, which is
+    // what a reconnect wants. Only after an explicit leave — when the seat has
+    // genuinely been vacated — is it worth asking for the old one by name.
+    const wanted = watchOnly ? null : resume?.code === code ? (resume.seat ?? undefined) : undefined;
+    try {
+      enterTable(await online.join(code, wanted, tableEvents()));
+    } catch (err) {
+      act.notify(`Could not join ${code}: ${reasonOf(err)}`, 'bad');
+      if (session) act.newGame();
+      else promptJoin(code);
+    }
+  };
+
+  const promptJoin = (code: string | null): void => {
+    if (!online.available || joinOverlay !== null) return;
+    joinOverlay = openJoinDialog(overlays, {
+      code,
+      onJoin: (typed, watchOnly) => {
+        joinOverlay = null;
+        void joinTable(typed, watchOnly);
+      },
+      onCancel: () => {
+        joinOverlay = null;
+        // A `?join=` link with nothing behind it must still leave a playable
+        // game, so backing out of the first dialog lands on the scenario screen.
+        if (!session && table === null) act.newGame();
+      },
+    });
+  };
+
+  const startTable = async (): Promise<void> => {
+    const t = table;
+    if (t === null) return;
+    try {
+      await t.start();
+    } catch (err) {
+      act.notify(reasonOf(err), 'bad');
+    }
+    refreshTable();
+  };
+
+  const sitAt = async (seat: PlayerId | null): Promise<void> => {
+    const t = table;
+    if (t === null) return;
+    try {
+      await t.sit(seat);
+    } catch (err) {
+      act.notify(reasonOf(err), 'bad');
+    }
+    refreshTable();
+  };
+
+  /**
+   * Stop being at a table.
+   *
+   * `vacate` is the difference between standing up and merely looking away: a
+   * vacated seat is open for somebody else, and one that is only closed is
+   * still ours to come back to.
+   */
+  const closeTable = (vacate: boolean): void => {
+    const t = table;
+    table = null;
+    lobby?.close();
+    lobby = null;
+    badge.update(null);
+    if (t === null) return;
+    if (vacate) void t.leave().catch(() => undefined);
+    else t.close();
+  };
+
+  /**
+   * The board stays on screen after leaving. It is no longer anybody's game,
+   * but it is still the record of one, and clearing it would throw away the
+   * last thing the player was looking at.
+   */
+  const leaveTable = (vacate: boolean): void => {
+    if (table === null) return;
+    closeTable(vacate);
+    render();
+    act.newGame();
+  };
+
   // --- Lifecycle -----------------------------------------------------------
+
+  const installSession = (next: SessionPort): void => {
+    unsubscribe?.();
+    session = next;
+    unsubscribe = session.subscribe(() => render());
+
+    ui = { ...INITIAL_UI, flags: ui.flags };
+    victoryShown = false;
+    turnKey = '';
+    syncViewInset();
+    renderer?.fitAll(session.state);
+    render();
+  };
 
   const startScenario = (
     id: string,
@@ -1054,6 +1373,7 @@ export const createApp = (deps: AppDeps): App => {
     fleets?: Readonly<Record<string, readonly string[]>>,
     seats: ComputerSeats = [],
   ): void => {
+    closeTable(true);
     scenarioId = id;
     seed = newSeed;
     gameOptions = { ...DEFAULT_OPTIONS, ...options };
@@ -1069,16 +1389,7 @@ export const createApp = (deps: AppDeps): App => {
       seats.map((i) => state.playerOrder[i]).filter((p): p is PlayerId => p !== undefined),
     );
 
-    unsubscribe?.();
-    session = deps.createSession(state);
-    unsubscribe = session.subscribe(() => render());
-
-    ui = { ...INITIAL_UI, flags: ui.flags };
-    victoryShown = false;
-    turnKey = '';
-    syncViewInset();
-    renderer?.fitAll(state);
-    render();
+    installSession(deps.createSession(state));
     canvas.focus();
   };
 
@@ -1135,7 +1446,12 @@ export const createApp = (deps: AppDeps): App => {
     window.addEventListener('keydown', onKeyDown);
     resizeObserver.observe(canvas);
 
-    act.newGame();
+    // A `?join=` link is an instruction, not a preference: somebody sent it, and
+    // the first thing to show is the table it names rather than a scenario list
+    // the player is going to dismiss.
+    const invited = deps.joinCode ?? null;
+    if (invited !== null && invited !== '' && online.available) promptJoin(invited);
+    else act.newGame();
   };
 
   const destroy = (): void => {
@@ -1150,6 +1466,9 @@ export const createApp = (deps: AppDeps): App => {
     window.clearTimeout(noticeTimer);
     if (frame) window.cancelAnimationFrame(frame);
     unsubscribe?.();
+    // Closed, not vacated: a reload is not a player standing up, and the seat
+    // should still be theirs when the page comes back.
+    closeTable(false);
     root.remove();
   };
 

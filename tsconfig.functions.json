@@ -1,0 +1,37 @@
+{
+  // Typechecking the referee's own code, which the main tsconfig cannot see.
+  //
+  // `supabase/functions` is Deno, not Node: it imports `npm:` specifiers and
+  // reaches for `Deno.env`, neither of which the browser build knows about. So
+  // it sits outside `tsconfig.json`'s `include`, and until this file existed it
+  // was the one part of the system nothing checked — which is precisely the
+  // part that must agree with `src/net/supabase/protocol.ts` field for field.
+  //
+  // Two shims make it checkable without installing Deno:
+  //
+  //  - the `npm:` specifier is pointed at the copy already in `node_modules`,
+  //    which is the same package the function will load at runtime;
+  //  - `../_shared/engine.js` resolves to the `.d.ts` the bundler emits beside
+  //    it, which re-exports the real source types. So a field renamed in
+  //    `referee.ts` fails here rather than at three in the morning in
+  //    production.
+  //
+  // Run with `npm run typecheck` — it does both configs.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "types": ["node"],
+    // The function imports its sibling as `./rules.ts`, which is how Deno
+    // resolves and how the rest of this codebase deliberately does not.
+    "allowImportingTsExtensions": true,
+    "lib": ["ES2022", "DOM"],
+    "paths": {
+      "npm:@supabase/supabase-js@^2.112.3": ["node_modules/@supabase/supabase-js/dist/index.d.mts"],
+      "@engine/*": ["src/engine/*"],
+      "@render/*": ["src/render/*"],
+      "@ui/*": ["src/ui/*"],
+      "@scenarios/*": ["src/scenarios/*"],
+      "@net/*": ["src/net/*"]
+    }
+  },
+  "include": ["supabase/functions/**/*.ts"]
+}

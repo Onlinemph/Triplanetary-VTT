@@ -1,0 +1,398 @@
+/**
+ * The referee: every rules decision an online table makes, and no I/O.
+ *
+ * This is `server/room.ts`'s idea again, and for the same reason — the rules
+ * loop is the part worth testing, and it is worth testing without a database
+ * anywhere near it. Everything here is a pure function from a stored table and
+ * an order to the rows that ought to be written. The Edge Function reads, calls
+ * one of these, and writes; it decides nothing.
+ *
+ * Three jobs:
+ *
+ *  - **Judge an order.** Check the seat against the command's claimed author,
+ *    then hand it to `applyCommand`, which has the last word. Being correctly
+ *    seated does not make an illegal move legal.
+ *  - **Roll the dice.** The referee rolls, not the players — see the sealed die
+ *    in `protocol.ts`. The seed it used goes into the log so the game stays
+ *    reproducible.
+ *  - **Say who may know what.** Redact per seat for a fog game; seal the
+ *    generator for every game.
+ *
+ * It also plays the computer's seats, because a solo game over the wire is the
+ * same game as a two-player one: the AI's orders go through this same judge, on
+ * the same terms, and a client is never asked to drive an opponent it could
+ * lie about.
+ */
+
+import {
+  type Command,
+  type GameState,
+  type PlayerId,
+  DEFAULT_MAP,
+  applyCommand,
+} from '../../engine/index.js';
+import type { GameMap } from '../../engine/map.js';
+import { commandIsAuthorised, redactState, sealDie } from '../redact.js';
+import { aiCommand } from '../../ai/driver.js';
+import type { GameStatus, LoggedCommand, SeatInfo, SeatKind, TableInfo } from './protocol.js';
+
+// ---------------------------------------------------------------------------
+// What the store holds
+// ---------------------------------------------------------------------------
+
+export interface SeatRow {
+  readonly seat: PlayerId;
+  readonly ordinal: number;
+  readonly faction: string;
+  readonly name: string;
+  readonly kind: SeatKind;
+  /** The account holding it, or `null` while it is open. */
+  readonly userId: string | null;
+  /** Epoch milliseconds of the last call from this seat, for presence. */
+  readonly lastSeen: number | null;
+}
+
+/**
+ * A table as the database keeps it.
+ *
+ * `state` is authoritative and its generator is always sealed: the referee
+ * rolls with a fresh seed per command and never with this one, so the number
+ * stored here is deliberately meaningless.
+ */
+export interface StoredGame {
+  readonly id: string;
+  readonly code: string;
+  readonly scenarioId: string;
+  readonly fog: boolean;
+  readonly status: GameStatus;
+  readonly state: GameState;
+  readonly commandCount: number;
+  readonly seats: readonly SeatRow[];
+  readonly hostId: string;
+}
+
+/** How long a seat stays "present" after its last call. */
+export const PRESENCE_MS = 45_000;
+
+// ---------------------------------------------------------------------------
+// Reading a table
+// ---------------------------------------------------------------------------
+
+export const seatOf = (game: StoredGame, userId: string | null): PlayerId | null => {
+  if (userId === null) return null;
+  return game.seats.find((s) => s.userId === userId)?.seat ?? null;
+};
+
+export const tableInfo = (game: StoredGame, userId: string | null, now: number): TableInfo => ({
+  id: game.id,
+  code: game.code,
+  scenarioId: game.scenarioId,
+  fog: game.fog,
+  status: game.status,
+  turn: game.state.turn,
+  commandCount: game.commandCount,
+  seats: [...game.seats]
+    .sort((a, b) => a.ordinal - b.ordinal)
+    .map(
+      (s): SeatInfo => ({
+        seat: s.seat,
+        ordinal: s.ordinal,
+        faction: s.faction,
+        name: s.name,
+        kind: s.kind,
+        present: s.kind === 'computer' || (s.lastSeen !== null && now - s.lastSeen < PRESENCE_MS),
+        mine: userId !== null && s.userId === userId,
+      }),
+    ),
+});
+
+/**
+ * The board as one seat is entitled to see it.
+ *
+ * Two filters, and the second applies to every game. `redactState` removes what
+ * fog hides; `sealDie` removes the generator, which no player may hold whether
+ * the game is fogged or not.
+ */
+export const viewFor = (
+  game: StoredGame,
+  seat: PlayerId | null,
+  map: GameMap = DEFAULT_MAP,
+): GameState => sealDie(redactState(game.state, seat, map));
+
+/** Every seat's view, for the fog-of-war write-out. Spectators read `null`. */
+export const viewsForAll = (
+  game: StoredGame,
+  map: GameMap = DEFAULT_MAP,
+): Record<string, GameState> => {
+  const out: Record<string, GameState> = {};
+  for (const s of game.seats) out[s.seat] = viewFor(game, s.seat, map);
+  return out;
+};
+
+// ---------------------------------------------------------------------------
+// Judging an order
+// ---------------------------------------------------------------------------
+
+export interface Accepted {
+  readonly ok: true;
+  readonly game: StoredGame;
+  readonly logged: LoggedCommand;
+  /** Per-seat snapshots to write, for a fog game. Empty for an open one. */
+  readonly views: Record<string, GameState>;
+}
+
+export interface Refused {
+  readonly ok: false;
+  readonly reason: string;
+}
+
+export type Judgement = Accepted | Refused;
+
+/**
+ * Apply one order on behalf of one seat.
+ *
+ * Three gates, in order, and the order matters. A spectator is turned away
+ * before anything else looks at the command. A seated player may not act for
+ * another seat — `commandIsAuthorised` is the check a relay cannot do, because
+ * over a relay `by` is just a string somebody typed. And then the rules decide,
+ * which is the only gate that knows anything about Triplanetary.
+ *
+ * `die` is the generator seed to roll this command with. The caller draws it
+ * from a source no player can see; it is returned in `logged` so that replaying
+ * the log reproduces the game roll for roll.
+ */
+export const judge = (
+  game: StoredGame,
+  seat: PlayerId | null,
+  cmd: Command,
+  die: number,
+  map: GameMap = DEFAULT_MAP,
+): Judgement => {
+  if (game.status === 'finished') return { ok: false, reason: 'this game is over' };
+  if (game.status !== 'playing') return { ok: false, reason: 'this game has not started' };
+
+  if (!commandIsAuthorised(seat, cmd.by)) {
+    return {
+      ok: false,
+      reason:
+        seat === null
+          ? 'spectators may not issue commands'
+          : `you hold the seat "${seat}" and may not act for "${cmd.by}"`,
+    };
+  }
+
+  return resolve(game, cmd, die, map);
+};
+
+/**
+ * Apply a command that has already cleared the seat check.
+ *
+ * Split out because the referee's own computer seats have no seat check to
+ * clear — they are the referee — but must be judged by the rules on exactly the
+ * same terms as anybody else.
+ */
+const resolve = (game: StoredGame, cmd: Command, die: number, map: GameMap): Judgement => {
+  // Roll with the seed the caller drew, never with the stored one.
+  const rolling: GameState = { ...game.state, rng: { seed: die >>> 0 } };
+  const out = applyCommand(rolling, cmd, map);
+  if (!out.result.ok) return { ok: false, reason: out.result.reason ?? 'refused' };
+
+  const next: StoredGame = {
+    ...game,
+    // Seal it straight back: the stored generator must never be a number a
+    // future roll depends on, or a leak of the state becomes a leak of the dice.
+    state: sealDie(out.state),
+    commandCount: game.commandCount + 1,
+    status: out.state.victory ? 'finished' : game.status,
+  };
+  return {
+    ok: true,
+    game: next,
+    logged: { idx: next.commandCount, cmd, die: die >>> 0 },
+    views: game.fog ? viewsForAll(next, map) : {},
+  };
+};
+
+// ---------------------------------------------------------------------------
+// The computer's seats
+// ---------------------------------------------------------------------------
+
+/**
+ * Play out every order the computer's seats owe, one at a time.
+ *
+ * Run after each human order and when the game starts, so a solo table advances
+ * without the browser being asked to drive an opponent. The AI decides against
+ * the same redacted view a person in that seat would get — `aiCommand` does the
+ * redacting itself — and every order it gives is judged by {@link resolve},
+ * so it is refused on exactly the terms a person's would be.
+ *
+ * `dice` supplies a fresh seed per order. It is a function rather than a list
+ * because the number of orders is not known until they are given.
+ */
+export const playComputerSeats = (
+  game: StoredGame,
+  dice: () => number,
+  map: GameMap = DEFAULT_MAP,
+  limit = 400,
+): { game: StoredGame; logged: LoggedCommand[]; views: Record<string, GameState> } => {
+  const computers = new Set(
+    game.seats.filter((s) => s.kind === 'computer').map((s) => s.seat),
+  );
+  const logged: LoggedCommand[] = [];
+  let current = game;
+  if (computers.size === 0 || current.status !== 'playing') {
+    return { game: current, logged, views: {} };
+  }
+
+  for (let step = 0; step < limit; step += 1) {
+    if (current.state.victory) break;
+    const order = aiCommand(current.state, computers, map);
+    if (order === null) break;
+    const out = resolve(current, order.command, dice(), map);
+    if (!out.ok) break; // A refused computer order is a bug to see, not to retry.
+    current = out.game;
+    logged.push(out.logged);
+  }
+
+  return {
+    game: current,
+    logged,
+    views: current.fog && logged.length > 0 ? viewsForAll(current, map) : {},
+  };
+};
+
+// ---------------------------------------------------------------------------
+// Catching up
+// ---------------------------------------------------------------------------
+
+/**
+ * Replay a log onto a starting position.
+ *
+ * The audit path, and the one a client walks on every open-information sync.
+ * Each entry carries the seed it was rolled with, so this reproduces the game
+ * exactly — including the dice — from data that reveals nothing about the next
+ * roll.
+ */
+export const replayLog = (
+  initial: GameState,
+  log: readonly LoggedCommand[],
+  map: GameMap = DEFAULT_MAP,
+): { state: GameState; failed: LoggedCommand | null } => {
+  let state = initial;
+  for (const entry of [...log].sort((a, b) => a.idx - b.idx)) {
+    const out = applyCommand({ ...state, rng: { seed: entry.die >>> 0 } }, entry.cmd, map);
+    if (!out.result.ok) return { state, failed: entry };
+    state = out.state;
+  }
+  return { state: sealDie(state), failed: null };
+};
+
+// ---------------------------------------------------------------------------
+// Seating
+// ---------------------------------------------------------------------------
+
+export interface SeatChange {
+  readonly ok: boolean;
+  readonly reason?: string;
+  readonly seats?: readonly SeatRow[];
+  readonly seat?: PlayerId | null;
+}
+
+/**
+ * Sit somebody down.
+ *
+ * A seat with a live holder is not available; one whose holder left is, which
+ * is how a reconnect resumes a game rather than starting a spectator session.
+ * Asking for no seat in particular takes the lowest open one, so the common
+ * case — a friend following a link — is a single click.
+ */
+export const takeSeat = (
+  game: StoredGame,
+  userId: string,
+  wanted: PlayerId | null | undefined,
+  name: string | undefined,
+  now: number,
+): SeatChange => {
+  const already = game.seats.find((s) => s.userId === userId);
+  if (already && (wanted === undefined || wanted === already.seat)) {
+    return { ok: true, seats: touch(game.seats, already.seat, now), seat: already.seat };
+  }
+  if (wanted === null) return { ok: true, seats: game.seats, seat: null };
+
+  // Changing seats mid-game is a fog attack wearing a reconnect's clothes. The
+  // referee keeps a fresh snapshot in `views` for every seat, vacated ones
+  // included, so an opponent who steps away leaves their board sitting in a
+  // chair anybody may sit in: hop across, read it, hop back, and the only trace
+  // is a flicker in the roster. Before the game starts there is nothing in
+  // those rows to read, which is the whole of the difference.
+  if (already && game.status !== 'lobby') {
+    return { ok: false, reason: 'you cannot change seats once the game has started' };
+  }
+
+  const open = [...game.seats]
+    .sort((a, b) => a.ordinal - b.ordinal)
+    .filter((s) => s.kind !== 'computer' && (s.userId === null || s.userId === userId));
+  const target = wanted === undefined ? open[0] : open.find((s) => s.seat === wanted);
+  if (!target) {
+    return { ok: false, reason: wanted === undefined ? 'this table is full' : 'that seat is taken' };
+  }
+
+  const seats = game.seats.map((s) => {
+    if (s.seat === target.seat) {
+      return {
+        ...s,
+        userId,
+        kind: 'human' as SeatKind,
+        name: name && name.trim() !== '' ? name.trim() : s.name,
+        lastSeen: now,
+      };
+    }
+    // One account, one seat: taking a new one vacates the old. `lastSeen` has
+    // to go with it — presence is "somebody is sitting here and we heard from
+    // them", and a vacated seat that keeps its timestamp shows a green dot over
+    // an empty chair for the next PRESENCE_MS.
+    return s.userId === userId
+      ? { ...s, userId: null, kind: 'open' as SeatKind, lastSeen: null }
+      : s;
+  });
+  return { ok: true, seats, seat: target.seat };
+};
+
+/** Stand up, leaving the seat for somebody else. Computer seats are not held. */
+export const leaveSeat = (game: StoredGame, userId: string): readonly SeatRow[] =>
+  game.seats.map((s) =>
+    s.userId === userId ? { ...s, userId: null, kind: 'open' as SeatKind, lastSeen: null } : s,
+  );
+
+const touch = (seats: readonly SeatRow[], seat: PlayerId, now: number): SeatRow[] =>
+  seats.map((s) => (s.seat === seat ? { ...s, lastSeen: now } : s));
+
+/** Mark a seat as heard from, for the presence dot in the roster. */
+export const seenNow = (game: StoredGame, seat: PlayerId | null, now: number): readonly SeatRow[] =>
+  seat === null ? game.seats : touch(game.seats, seat, now);
+
+// ---------------------------------------------------------------------------
+// Join codes
+// ---------------------------------------------------------------------------
+
+/**
+ * The alphabet a join code is read aloud in.
+ *
+ * No `0/O`, no `1/I/L`: a code exists to be typed from somebody else's screen
+ * or repeated down a phone, and the characters people confuse are the ones to
+ * leave out.
+ */
+export const CODE_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+export const CODE_LENGTH = 6;
+
+/** Build a code from a caller-supplied source of randomness. */
+export const codeFrom = (bytes: Uint8Array): string => {
+  let out = '';
+  for (let i = 0; i < CODE_LENGTH; i += 1) {
+    out += CODE_ALPHABET[(bytes[i] ?? 0) % CODE_ALPHABET.length];
+  }
+  return out;
+};
+
+export const isCode = (value: string): boolean =>
+  value.length === CODE_LENGTH && [...value].every((c) => CODE_ALPHABET.includes(c));

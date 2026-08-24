@@ -229,6 +229,48 @@ route to wherever it is going, close on something it can actually catch, take
 the fights worth taking, decline the ones that are not, and go home to refuel
 before it runs dry.
 
+### `src/net/supabase` — the online referee
+
+The rest of `src/net` is peer-to-peer: clients echo commands at each other and
+every client computes the state itself. That works for a table of friends and
+fails for strangers, for three reasons the relay cannot fix — `by` is a string
+anyone can type, a fogged secret cannot be kept on the machine it is hidden
+from, and a deterministic generator sitting in a shared state is a client that
+can see the dice before it decides whether to fire.
+
+So online play has a participant who is not one of the players: an Edge Function
+holding the Supabase service role, the only one that may write the command log,
+read the seed, or see the whole board.
+
+| File          | Owns                                                                                   |
+| ------------- | -------------------------------------------------------------------------------------- |
+| `protocol.ts` | The contract: one mutating call, six actions, and the shapes of both directions.       |
+| `referee.ts`  | Every rules decision, and no I/O — `server/room.ts`'s idea again, for the same reason. |
+| `client.ts`   | The browser side: anonymous sign-in, Realtime, catch-up, backoff.                      |
+
+The split matters more than it looks. `referee.ts` is a set of pure functions
+from a stored table and an order to the rows that ought to be written; the Edge
+Function reads, calls one, and writes. That is what makes the interesting half
+testable with no database anywhere near it, and it is why the rules loop has
+tests while the glue has a typecheck.
+
+**The sealed die.** The referee draws a fresh seed from `crypto.getRandomValues`
+for every command, applies the command with it, records it in the log beside the
+command, and seals the stored board's generator back to zero. Unpredictable
+forward, exact backward: a game is still its starting position plus an ordered
+list of commands, and the list simply carries its dice with it. `sealDie` in
+`redact.ts` strips the generator from everything that goes over the wire.
+
+**The database is the second lock.** `supabase/migrations/0002_policies.sql`
+contains no INSERT, UPDATE or DELETE policy at all — a client takes a seat by
+calling the function, not by writing the row that records it. Reads are gated on
+holding a seat; a fog game's command log is not readable by anyone, because the
+log plus the starting position is the board. Realtime inherits all of it, since
+a row reaches a subscriber only if row level security would let them select it.
+
+See [MULTIPLAYER.md](MULTIPLAYER.md) for the threat model and the deployment
+sequence.
+
 ### `src/net` — session and transport
 
 `GameSession` is the only object the shell holds. It owns the current state, the
