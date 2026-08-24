@@ -19,7 +19,8 @@
     "functions:build": "node scripts/build-functions.mjs",
     "functions:check": "node scripts/build-functions.mjs --check",
     "functions:typecheck": "deno check --sloppy-imports supabase/functions/game/index.ts",
-    "functions:deploy": "npm run functions:build && supabase functions deploy game"
+    "functions:deploy": "npm run functions:build && supabase functions deploy game",
+    "verify:supabase": "node scripts/verify-supabase.mjs"
   },
   "devDependencies": {
     "@electric-sql/pglite": "^0.5.7",

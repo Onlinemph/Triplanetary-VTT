@@ -15,3 +15,7 @@ coverage/
 # types. Ignoring it meant `npm run typecheck` could not resolve the bundle on a
 # fresh clone, which is exactly the machine CI is.
 supabase/functions/_shared/engine.js
+
+# Scratch written by the Supabase CLI (`supabase link`, `db push`, and friends).
+# Machine-local state about which project a working copy is pointed at.
+supabase/.temp/
