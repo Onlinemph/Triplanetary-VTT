@@ -30,3 +30,18 @@ export {
 export * from './protocol.js';
 
 export { CODE_ALPHABET, CODE_LENGTH, PRESENCE_MS, codeFrom, isCode, replayLog } from './referee.js';
+
+// The other way to play online: no Edge Function, no service role, one SQL
+// file pasted into a dashboard. `quick.ts` explains what it trades away for
+// that, and `supabase/quick/README.md` is the page a player is sent to.
+export {
+  QuickTable,
+  fingerprint,
+  type QuickEvents,
+  type QuickLike,
+  type QuickListing,
+  type QuickMove,
+  type QuickSeat,
+  type QuickSetup,
+  type QuickTableInfo,
+} from './quick.js';
