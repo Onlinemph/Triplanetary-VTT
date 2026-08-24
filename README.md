@@ -157,6 +157,12 @@ With no `.env.local` the online buttons are disabled with a one-line
 explanation, and everything else — hot seat, solo against the computer, save and
 load — works exactly as before. Supabase is an option, not a dependency.
 
+That holds in bytes, not just in wording. With no keys configured the client is
+unreachable code and the bundler drops it; with keys configured it is a separate
+chunk, fetched the first time somebody opens or joins a table. So the download
+for a player who never plays online is the same either way, and 58 kB smaller
+than a build that linked the library in.
+
 **What the server is for.** The Edge Function is the only participant that may
 write the command log, read the scenario seed, or see the whole board. Every
 order goes through it and through the same `applyCommand` your browser runs, so

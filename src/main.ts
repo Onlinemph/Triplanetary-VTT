@@ -18,11 +18,15 @@
 import { DEFAULT_MAP } from '@engine/map.js';
 import type { GameOptions, GameState, PlayerId } from '@engine/types.js';
 import { GameSession } from '@net/session.js';
-import { TableClient, type TableClientEvents, type TableConnection } from '@net/supabase/index.js';
+import {
+  TableClient,
+  type SupabaseLike,
+  type TableClientEvents,
+  type TableConnection,
+} from '@net/supabase/index.js';
 import { MapRenderer } from '@render/renderer.js';
 import { SCENARIO_SUMMARIES, buildScenario } from '@scenarios/index.js';
 import { SHIP_CLASSES, type ShipClass } from '@engine/ships.js';
-import { createClient } from '@supabase/supabase-js';
 import { createApp } from '@ui/app.js';
 import type {
   LinkState,
@@ -124,10 +128,37 @@ const optionRecord = (o: Partial<GameOptions>): Record<string, boolean> => {
   return out;
 };
 
-let supabase: ReturnType<typeof createClient> | null = null;
-/** Made on first use: a build that never plays online never opens a connection. */
-const backend = (): ReturnType<typeof createClient> =>
-  (supabase ??= createClient(SUPABASE_URL, SUPABASE_ANON_KEY));
+/**
+ * The Supabase client, fetched and built on first use.
+ *
+ * `import()` rather than a static import, and the difference is a third of the
+ * download. Built with the two environment variables set, a static import makes
+ * one 534 kB chunk — 163 kB over the wire, and past the size Vite warns about;
+ * this makes it two, and the 218 kB holding supabase-js (58 kB gzipped) is
+ * fetched at the moment somebody opens or joins a table rather than at the
+ * moment they open the page. Which is the right moment: a player working
+ * through the scenarios alone never reaches for it at all, and one who does is
+ * already waiting on a network round trip.
+ *
+ * Without those variables the branch below is statically false, the import is
+ * unreachable, and Rollup drops supabase-js from the build entirely — so an
+ * offline build was never paying for it either way. This is about the builds
+ * that *do* have online play switched on.
+ *
+ * The *promise* is what gets memoised, not the client. Two lobby buttons
+ * pressed in the same tick would otherwise each start their own import and
+ * build their own client, and two clients means two anonymous sign-ins and two
+ * Realtime sockets for one player.
+ *
+ * `SupabaseLike` is `client.ts`'s own narrow structural type, so nothing here
+ * names a library type — which is what lets the static import go away entirely
+ * rather than survive as a type-only reference.
+ */
+let supabase: Promise<SupabaseLike> | null = null;
+const backend = async (): Promise<SupabaseLike> =>
+  (supabase ??= import('@supabase/supabase-js').then(({ createClient }) =>
+    createClient(SUPABASE_URL, SUPABASE_ANON_KEY),
+  ));
 
 const adopt = (client: TableClient, session: GameSession, opened: boolean): TablePort => ({
   session: port(session),
@@ -173,7 +204,7 @@ const online: OnlinePort =
         available: true,
         host: async (opts, events): Promise<TablePort> => {
           const session = vessel();
-          const client = new TableClient(backend(), session, {}, relay(events));
+          const client = new TableClient(await backend(), session, {}, relay(events));
           await client.create({
             scenarioId: opts.scenarioId,
             seed: opts.seed,
@@ -185,7 +216,7 @@ const online: OnlinePort =
         },
         join: async (code, seat, events): Promise<TablePort> => {
           const session = vessel();
-          const client = new TableClient(backend(), session, {}, relay(events));
+          const client = new TableClient(await backend(), session, {}, relay(events));
           await client.join(code, seat);
           return adopt(client, session, false);
         },
