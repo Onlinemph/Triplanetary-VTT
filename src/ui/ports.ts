@@ -197,7 +197,11 @@ export type OnlinePort =
        * account already holds and otherwise takes the lowest open one, which is
        * what makes following a link a single click and a reconnect a no-op.
        */
-      join(code: string, seat: PlayerId | null | undefined, events: TableEvents): Promise<TablePort>;
+      join(
+        code: string,
+        seat: PlayerId | null | undefined,
+        events: TableEvents,
+      ): Promise<TablePort>;
       /** The link a friend follows to reach a table. */
       linkFor(code: string): string;
     };

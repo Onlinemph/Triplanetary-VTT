@@ -33,6 +33,12 @@
  * reads it: it only consults a sibling declaration when a `@deno-types` comment
  * points at one, and nothing here does.
  *
+ * That file is committed, unlike the bundle beside it. It carries no compiled
+ * code, and `npm run typecheck` needs it to resolve `../_shared/engine.js` —
+ * which means a fresh clone that has never run this script must still have it,
+ * and a fresh clone is exactly what CI is. `--check` fails if the committed copy
+ * is not what this script would write, so the two cannot drift apart.
+ *
  * ## Verification
  *
  * A bundle that builds and then throws on import is worse than no bundle,
@@ -43,7 +49,7 @@
  */
 
 import { build } from 'esbuild';
-import { mkdir, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { dirname, join, relative } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -206,6 +212,25 @@ const smokeTest = async () => {
   return `${state.scenarioId}: ${state.phase} -> ${judged.game.state.phase}`;
 };
 
+/**
+ * Is the committed declaration still the one this script would write?
+ *
+ * It is the only generated file here that lives in git, because the typecheck
+ * needs it on a machine that has never run this script. Committed and generated
+ * is a combination that rots quietly, so the two are compared rather than
+ * trusted: add a module to `SURFACE` and forget to rebuild, and this says so.
+ */
+const checkDeclarations = async () => {
+  const want = declarations();
+  const have = await readFile(TYPES, 'utf8').catch(() => null);
+  if (have === want) return;
+  throw new Error(
+    have === null
+      ? `${relative(ROOT, TYPES)} is missing — run \`npm run functions:build\``
+      : `${relative(ROOT, TYPES)} is out of date with SURFACE — run \`npm run functions:build\``,
+  );
+};
+
 const main = async () => {
   const checkOnly = process.argv.includes('--check');
   if (!checkOnly) {
@@ -214,6 +239,7 @@ const main = async () => {
       `engine.js  ${(bytes / 1024).toFixed(1)} kB from ${String(modules)} modules\n`,
     );
   }
+  await checkDeclarations();
   process.stdout.write(`smoke test ok  ${await smokeTest()}\n`);
 };
 

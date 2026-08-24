@@ -235,9 +235,7 @@ const pruneForeignShips = (
     return ship && ship.owner !== viewer && !ship.destroyed ? REDACTED : value;
   }
   if (Array.isArray(value)) {
-    return value
-      .map((v) => pruneForeignShips(state, v, viewer))
-      .filter((v) => v !== REDACTED);
+    return value.map((v) => pruneForeignShips(state, v, viewer)).filter((v) => v !== REDACTED);
   }
   if (typeof value === 'object' && value !== null) {
     const out: Record<string, unknown> = {};
@@ -284,7 +282,9 @@ const redactLog = (
   if (hidden.length === 0) return state.log;
   const labels = hidden.map((ship) => shipLabel(ship));
   return state.log.filter(
-    (entry) => !labels.some((label) => entry.text.includes(label)) && !hidden.some((s) => entry.text.includes(s.id)),
+    (entry) =>
+      !labels.some((label) => entry.text.includes(label)) &&
+      !hidden.some((s) => entry.text.includes(s.id)),
   );
 };
 

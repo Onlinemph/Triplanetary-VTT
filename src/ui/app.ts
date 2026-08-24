@@ -1272,7 +1272,11 @@ export const createApp = (deps: AppDeps): App => {
     // An unspecified seat resumes the one this account already holds, which is
     // what a reconnect wants. Only after an explicit leave — when the seat has
     // genuinely been vacated — is it worth asking for the old one by name.
-    const wanted = watchOnly ? null : resume?.code === code ? (resume.seat ?? undefined) : undefined;
+    const wanted = watchOnly
+      ? null
+      : resume?.code === code
+        ? (resume.seat ?? undefined)
+        : undefined;
     try {
       enterTable(await online.join(code, wanted, tableEvents()));
     } catch (err) {

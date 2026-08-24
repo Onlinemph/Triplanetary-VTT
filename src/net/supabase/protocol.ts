@@ -182,12 +182,7 @@ export interface SyncRequest {
 }
 
 export type PlayRequest =
-  | CreateRequest
-  | JoinRequest
-  | LeaveRequest
-  | StartRequest
-  | CommandRequest
-  | SyncRequest;
+  CreateRequest | JoinRequest | LeaveRequest | StartRequest | CommandRequest | SyncRequest;
 
 // ---------------------------------------------------------------------------
 // Responses

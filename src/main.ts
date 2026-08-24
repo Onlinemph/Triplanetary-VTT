@@ -18,11 +18,7 @@
 import { DEFAULT_MAP } from '@engine/map.js';
 import type { GameOptions, GameState, PlayerId } from '@engine/types.js';
 import { GameSession } from '@net/session.js';
-import {
-  TableClient,
-  type TableClientEvents,
-  type TableConnection,
-} from '@net/supabase/index.js';
+import { TableClient, type TableClientEvents, type TableConnection } from '@net/supabase/index.js';
 import { MapRenderer } from '@render/renderer.js';
 import { SCENARIO_SUMMARIES, buildScenario } from '@scenarios/index.js';
 import { SHIP_CLASSES, type ShipClass } from '@engine/ships.js';

@@ -462,11 +462,7 @@ export const createTableBadge = (act: TableActions): TableBadge => {
       el(
         'span',
         { class: `badge-turn${v.turn?.mine ? ' is-mine' : ''}` },
-        v.turn === null
-          ? 'in the lobby'
-          : v.turn.mine
-            ? 'your move'
-            : `waiting on ${v.turn.name}`,
+        v.turn === null ? 'in the lobby' : v.turn.mine ? 'your move' : `waiting on ${v.turn.name}`,
       ),
       el('i', { class: 'badge-rule' }),
       linkChip(v.link),

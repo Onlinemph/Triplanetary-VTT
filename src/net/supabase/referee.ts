@@ -93,17 +93,15 @@ export const tableInfo = (game: StoredGame, userId: string | null, now: number):
   commandCount: game.commandCount,
   seats: [...game.seats]
     .sort((a, b) => a.ordinal - b.ordinal)
-    .map(
-      (s): SeatInfo => ({
-        seat: s.seat,
-        ordinal: s.ordinal,
-        faction: s.faction,
-        name: s.name,
-        kind: s.kind,
-        present: s.kind === 'computer' || (s.lastSeen !== null && now - s.lastSeen < PRESENCE_MS),
-        mine: userId !== null && s.userId === userId,
-      }),
-    ),
+    .map((s): SeatInfo => ({
+      seat: s.seat,
+      ordinal: s.ordinal,
+      faction: s.faction,
+      name: s.name,
+      kind: s.kind,
+      present: s.kind === 'computer' || (s.lastSeen !== null && now - s.lastSeen < PRESENCE_MS),
+      mine: userId !== null && s.userId === userId,
+    })),
 });
 
 /**
@@ -235,9 +233,7 @@ export const playComputerSeats = (
   map: GameMap = DEFAULT_MAP,
   limit = 400,
 ): { game: StoredGame; logged: LoggedCommand[]; views: Record<string, GameState> } => {
-  const computers = new Set(
-    game.seats.filter((s) => s.kind === 'computer').map((s) => s.seat),
-  );
+  const computers = new Set(game.seats.filter((s) => s.kind === 'computer').map((s) => s.seat));
   const logged: LoggedCommand[] = [];
   let current = game;
   if (computers.size === 0 || current.status !== 'playing') {
@@ -334,7 +330,10 @@ export const takeSeat = (
     .filter((s) => s.kind !== 'computer' && (s.userId === null || s.userId === userId));
   const target = wanted === undefined ? open[0] : open.find((s) => s.seat === wanted);
   if (!target) {
-    return { ok: false, reason: wanted === undefined ? 'this table is full' : 'that seat is taken' };
+    return {
+      ok: false,
+      reason: wanted === undefined ? 'this table is full' : 'that seat is taken',
+    };
   }
 
   const seats = game.seats.map((s) => {
@@ -368,8 +367,11 @@ const touch = (seats: readonly SeatRow[], seat: PlayerId, now: number): SeatRow[
   seats.map((s) => (s.seat === seat ? { ...s, lastSeen: now } : s));
 
 /** Mark a seat as heard from, for the presence dot in the roster. */
-export const seenNow = (game: StoredGame, seat: PlayerId | null, now: number): readonly SeatRow[] =>
-  seat === null ? game.seats : touch(game.seats, seat, now);
+export const seenNow = (
+  game: StoredGame,
+  seat: PlayerId | null,
+  now: number,
+): readonly SeatRow[] => (seat === null ? game.seats : touch(game.seats, seat, now));
 
 // ---------------------------------------------------------------------------
 // Join codes
