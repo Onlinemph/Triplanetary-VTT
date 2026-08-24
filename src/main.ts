@@ -341,14 +341,24 @@ const online: OnlinePort =
             const session = vessel();
             const client = new QuickTable(await backend(), session, quickRelay(events));
             await client.join(code, jopts.password ?? '');
-            // A watcher passes `null` and stays standing. Anyone else takes the
-            // first chair nobody is in, which is what following a link should
-            // do without asking a second question.
+            // A watcher passes `null` and stays standing. Anyone else sits: a
+            // named seat if they asked for one, otherwise the first free chair,
+            // which is what following a link should do without a second
+            // question. Deciding *which* chair is free is the client's job, not
+            // this adapter's — it is the one that knows how the database ages
+            // a claim out.
             if (seat !== null) {
-              const open = session.state.playerOrder.find(
-                (s) => client.table?.seats[s] === undefined,
-              );
-              if (open !== undefined) await client.sit(seat ?? open);
+              if (seat === undefined) {
+                // A full table is not a failed join — the game is still worth
+                // watching, and a scenario for one player is a table with one
+                // chair. Say which it is rather than leaving every order to be
+                // refused with no explanation.
+                if ((await client.sitAnywhere()) === null) {
+                  events.onRefused?.(
+                    'Every side at this table is taken, so you are watching. Ask whoever is playing to leave a seat.',
+                  );
+                }
+              } else await client.sit(seat);
             }
             return quickAdopt(client, session, false);
           }

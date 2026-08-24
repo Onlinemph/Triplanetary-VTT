@@ -131,9 +131,75 @@ describe('a table, opened and joined', () => {
     });
     await bob.table.join(code, 'pw');
 
-    // Rebuilt from the frozen setup, not copied over the wire.
     expect(fingerprint(bob.session.state)).toBe(fingerprint(alice.session.state));
     expect(bob.session.state.scenarioId).toBe('flight-school');
+  });
+
+  it('shows the board that was hosted, before anybody has moved', async () => {
+    // Agreement is not correctness. Both clients start life holding a
+    // placeholder scenario, so "Alice and Bob match" was true even while both
+    // were showing the wrong board — which is exactly the bug this catches.
+    // The assertion is against a board built independently from the host's
+    // own setup.
+    const alice = player('Alice');
+    const bob = player('Bob');
+    const code = await alice.table.host({
+      scenarioId: 'bi-planetary',
+      password: 'pw',
+      setup: { seed: 4242 },
+    });
+    await bob.table.join(code, 'pw');
+
+    const expected = fingerprint(buildScenario('bi-planetary', { seed: 4242 }));
+    expect(fingerprint(alice.session.state)).toBe(expected);
+    expect(fingerprint(bob.session.state)).toBe(expected);
+    expect(bob.session.state.scenarioId).toBe('bi-planetary');
+  });
+
+  it('seats the host in their own table', async () => {
+    // Opening a table does not seat you — the database has no idea who asked.
+    // A host left standing can watch their own game and give no orders, which
+    // is what "You are not sitting at this table" was reporting.
+    const alice = player('Alice');
+    await alice.table.host({ scenarioId: 'flight-school', password: 'pw' });
+    expect(alice.table.seat).not.toBeNull();
+    expect(alice.session.state.playerOrder).toContain(alice.table.seat);
+  });
+
+  it('gives a joiner the next free chair, not the host’s', async () => {
+    // A two-sided scenario, necessarily: flight-school seats one, so there the
+    // right answer for a second player really is "no chair".
+    const alice = player('Alice');
+    const bob = player('Bob');
+    const code = await alice.table.host({ scenarioId: 'bi-planetary', password: 'pw' });
+    await bob.table.join(code, 'pw');
+    const took = await bob.table.sitAnywhere();
+
+    expect(took).not.toBeNull();
+    expect(took).not.toBe(alice.table.seat);
+  });
+
+  it('says so plainly when every side is taken', async () => {
+    const alice = player('Alice');
+    const bob = player('Bob');
+    const code = await alice.table.host({ scenarioId: 'flight-school', password: 'pw' });
+    await bob.table.join(code, 'pw');
+    // One seat, and the host is in it.
+    expect(await bob.table.sitAnywhere()).toBeNull();
+  });
+
+  it('lets the host actually give an order once seated', async () => {
+    const alice = player('Alice');
+    let refused = '';
+    const client = new QuickTable(backend(), alice.session, {
+      onRefused: (r) => {
+        refused = r;
+      },
+    });
+    await client.host({ scenarioId: 'flight-school', password: 'pw' });
+    const ok = await client.send({ type: 'endPhase', by: client.seat! });
+    expect(refused).toBe('');
+    expect(ok).toBe(true);
   });
 
   it('refuses the wrong password, in words a player can read', async () => {

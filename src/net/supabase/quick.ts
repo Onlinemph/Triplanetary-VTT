@@ -250,6 +250,10 @@ export class QuickTable {
       p_listed: opts.listed ?? true,
     })) as string;
     await this.join(code, opts.password);
+    // And sit down in it. Opening a table does not seat you — the database has
+    // no idea who asked — so a host who was not seated here could watch their
+    // own game and give no orders at all.
+    await this.sitAnywhere();
     return code;
   }
 
@@ -269,10 +273,39 @@ export class QuickTable {
       } as Parameters<typeof buildScenario>[1]),
     );
     this.log = [];
+    // Adopt the opening position *before* folding in any moves. `absorb` walks
+    // forward from the board already in hand and returns early when there is
+    // nothing to fold, so a table nobody has moved at yet would otherwise leave
+    // the session showing the placeholder scenario it was constructed with —
+    // the right board only appearing once somebody played.
+    this.rebuild();
     this.absorb(opened.moves ?? []);
     this.events.onTable?.(this.held.info);
     await this.listen();
     return this.held.info;
+  }
+
+  /**
+   * Take the lowest side nobody is in.
+   *
+   * There is no referee here to hand out chairs and no lobby to wait in, so
+   * sitting down is something the client has to do for itself — and a player
+   * who is not sitting anywhere cannot give a single order. A claim older than
+   * the database's five minutes counts as empty, matching what `tri_sit` will
+   * actually allow rather than what the roster happens to list.
+   */
+  async sitAnywhere(): Promise<PlayerId | null> {
+    const held = this.require();
+    const stale = Date.now() - 5 * 60_000;
+    for (const seat of this.session.state.playerOrder) {
+      const claim = held.info.seats[seat];
+      const at = claim === undefined ? null : Date.parse(claim.at);
+      if (claim === undefined || Number.isNaN(at) || (at ?? 0) < stale) {
+        await this.sit(seat);
+        return seat;
+      }
+    }
+    return null;
   }
 
   /** Take a side. Omitting one gives up whatever this browser was holding. */
