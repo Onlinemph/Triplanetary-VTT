@@ -30,7 +30,7 @@ import type { PlayerId } from '@engine/types.js';
 import { button, el, fill } from '../components/dom.js';
 import { icon } from '../components/glyphs.js';
 import { type Overlay, openModal } from '../components/modal.js';
-import type { LinkState, SeatInfo, TableInfo } from '../ports.js';
+import type { LinkState, OnlineMode, SeatInfo, TableInfo } from '../ports.js';
 import type { Notice } from '../viewmodel.js';
 
 /** Everything the lobby and the badge draw themselves from. */
@@ -122,10 +122,120 @@ const copyField = (
 export interface OnlineChoices {
   /** Why online play is off, or null when it is on. */
   readonly reason: string | null;
+  /** The arrangements this build can offer. Empty when online play is off. */
+  readonly modes?: readonly OnlineMode[];
   /** Open a table with whatever the picker currently has selected. */
-  onHost(): void;
+  onHost(mode: OnlineMode, password: string): void;
   onJoin(): void;
 }
+
+const MODE_TITLE: Record<OnlineMode, string> = {
+  quick: 'Quick table',
+  refereed: 'Refereed table',
+};
+
+const MODE_BLURB: Record<OnlineMode, string> = {
+  quick:
+    'Share a code and a password. Everyone’s browser runs the rules, so play with people you trust — and the two hidden-information scenarios are not offered.',
+  refereed:
+    'A judge on the server checks every order and keeps each side’s secrets. Needs the referee deployed to your project.',
+};
+
+/**
+ * Ask which kind of table, and for the password one of them needs.
+ *
+ * A dialog rather than two buttons, because the choice is not about
+ * convenience — it decides whether the rules are enforced and whether a fogged
+ * scenario can be played at all. A player picking it deserves to read what
+ * they are picking. When a build only offers one arrangement the choice is not
+ * shown at all, and a quick table drops straight to asking for a password.
+ */
+export const openHostDialog = (
+  host: HTMLElement,
+  o: {
+    modes: readonly OnlineMode[];
+    onHost(mode: OnlineMode, password: string): void;
+    onCancel?(): void;
+  },
+): Overlay => {
+  let mode: OnlineMode = o.modes[0] ?? 'quick';
+  let submitted = false;
+
+  const password = el('input', {
+    class: 'pass-entry',
+    type: 'text',
+    autocapitalize: 'none',
+    spellcheck: 'false',
+    'aria-label': 'Table password',
+    placeholder: 'a word you can read out',
+    onkeydown: (ev: Event) => {
+      if ((ev as KeyboardEvent).key === 'Enter') submit();
+    },
+  });
+
+  const passwordRow = el(
+    'div',
+    { class: 'join-form password-row' },
+    el('p', { class: 'sel-hint', text: 'Password for the table' }),
+    password,
+    el('p', {
+      class: 'hint',
+      text: 'Anyone with the code and this password can sit down. Read them both out together.',
+    }),
+  );
+
+  const showPassword = (): void => {
+    passwordRow.hidden = mode !== 'quick';
+  };
+
+  const choices = o.modes.map((m) =>
+    el(
+      'label',
+      { class: 'row-inline mode-row' },
+      el('input', {
+        type: 'radio',
+        name: 'online-mode',
+        checked: m === mode ? 'checked' : null,
+        onchange: () => {
+          mode = m;
+          showPassword();
+        },
+      }),
+      el(
+        'span',
+        {},
+        el('span', { class: 'sel-title', text: MODE_TITLE[m] }),
+        el('span', { class: 'sel-hint', text: MODE_BLURB[m] }),
+      ),
+    ),
+  );
+
+  const submit = (): void => {
+    const pw = password.value.trim();
+    if (mode === 'quick' && pw === '') {
+      password.focus();
+      return;
+    }
+    submitted = true;
+    overlay.close();
+    o.onHost(mode, pw);
+  };
+
+  const overlay = openModal(host, {
+    title: 'Play online',
+    subtitle:
+      o.modes.length > 1 ? 'Two ways to sit at a table' : 'Open a table and invite somebody',
+    body: el('div', { class: 'host-form' }, ...(o.modes.length > 1 ? choices : []), passwordRow),
+    onClose: () => {
+      if (!submitted) o.onCancel?.();
+    },
+    actions: [{ label: 'Open the table', variant: 'primary', closes: false, onClick: submit }],
+  });
+
+  showPassword();
+  if (mode === 'quick') password.focus();
+  return overlay;
+};
 
 /**
  * Add "play online" beside the picker's own Begin button.
@@ -155,7 +265,19 @@ export const mountOnlineChoices = (overlay: Overlay, o: OnlineChoices): void => 
       class: 'play-online',
       disabled: off,
       title: o.reason ?? 'Open a table and invite somebody with a code',
-      onClick: o.onHost,
+      onClick: () => {
+        const modes = o.modes ?? ['refereed'];
+        // A build offering only a refereed table has nothing to ask: no mode
+        // to choose and no password to set. Straight through, as before.
+        if (modes.length === 1 && modes[0] === 'refereed') {
+          o.onHost('refereed', '');
+          return;
+        }
+        openHostDialog(overlay.el.ownerDocument.body, {
+          modes,
+          onHost: o.onHost,
+        });
+      },
     }),
     button({
       label: 'Join with a code',
@@ -180,7 +302,16 @@ export const mountOnlineChoices = (overlay: Overlay, o: OnlineChoices): void => 
 export interface JoinPrompt {
   /** Prefilled from a `?join=` link. */
   readonly code?: string | null;
-  onJoin(code: string, watchOnly: boolean): void;
+  /** Prefilled from the link's fragment, which never leaves the browser. */
+  readonly password?: string | null;
+  /**
+   * True when this build can open quick tables, which are the ones with a
+   * password. The field is offered rather than demanded: the joiner does not
+   * know which kind of table a code belongs to until they try it, and a
+   * refereed table simply ignores what is typed here.
+   */
+  readonly wantsPassword?: boolean;
+  onJoin(code: string, watchOnly: boolean, password: string): void;
   onCancel?(): void;
 }
 
@@ -208,12 +339,25 @@ export const openJoinDialog = (host: HTMLElement, o: JoinPrompt): Overlay => {
     },
   });
 
+  const secret = el('input', {
+    class: 'pass-entry',
+    type: 'text',
+    value: o.password ?? '',
+    autocapitalize: 'none',
+    spellcheck: 'false',
+    'aria-label': 'Table password',
+    placeholder: 'password, for a quick table',
+    onkeydown: (ev: Event) => {
+      if ((ev as KeyboardEvent).key === 'Enter') submit();
+    },
+  });
+
   const submit = (): void => {
     const code = field.value.trim().toUpperCase();
     if (code === '') return;
     submitted = true;
     overlay.close();
-    o.onJoin(code, watching);
+    o.onJoin(code, watching, secret.value.trim());
   };
 
   const overlay = openModal(host, {
@@ -223,9 +367,13 @@ export const openJoinDialog = (host: HTMLElement, o: JoinPrompt): Overlay => {
       'div',
       { class: 'join-form' },
       field,
+      ...(o.wantsPassword === true ? [secret] : []),
       el('p', {
         class: 'hint',
-        text: 'You will land in the lobby, where you can see the scenario, the roster, and take a seat.',
+        text:
+          o.wantsPassword === true
+            ? 'The password is for a quick table. Leave it empty for a refereed one — you will land in the lobby either way, where you can see the scenario, the roster, and take a seat.'
+            : 'You will land in the lobby, where you can see the scenario, the roster, and take a seat.',
       }),
       el(
         'label',

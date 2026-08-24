@@ -2162,6 +2162,52 @@ kbd {
   letter-spacing: 0.32em;
 }
 
+/*
+ * A password is not a join code, and must not be dressed as one.
+ *
+ * `.code-entry` is upper case with wide letter spacing, which is right for six
+ * characters read off somebody's screen. Applied to a password it lies: the
+ * transform is cosmetic, so a player types `hunter2`, reads `HUNTER2` back, and
+ * has no way to tell which of the two the table actually has.
+ */
+.pass-entry {
+  width: 100%;
+  padding: 9px 12px;
+  font-size: 16px;
+  background: rgba(0, 0, 0, 0.28);
+  border: 1px solid var(--hair-strong);
+  border-radius: var(--radius);
+}
+
+.pass-entry::placeholder {
+  color: var(--ink-faint);
+}
+
+.host-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+/* The two arrangements, each with the sentence that distinguishes it. */
+.mode-row {
+  gap: 10px;
+  align-items: flex-start;
+}
+
+.mode-row .sel-title,
+.mode-row .sel-hint {
+  display: block;
+}
+
+.mode-row input[type='radio'] {
+  margin-top: 3px;
+}
+
+.password-row[hidden] {
+  display: none;
+}
+
 .watch-row {
   gap: 7px;
 }

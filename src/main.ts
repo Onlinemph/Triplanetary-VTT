@@ -19,7 +19,10 @@ import { DEFAULT_MAP } from '@engine/map.js';
 import type { GameOptions, GameState, PlayerId } from '@engine/types.js';
 import { GameSession } from '@net/session.js';
 import {
+  QuickTable,
   TableClient,
+  type QuickEvents,
+  type QuickLike,
   type SupabaseLike,
   type TableClientEvents,
   type TableConnection,
@@ -33,8 +36,10 @@ import type {
   OnlinePort,
   RendererPort,
   ScenarioDescriptor,
+  SeatInfo,
   SessionPort,
   TableEvents,
+  TableInfo,
   TablePort,
 } from '@ui/ports.js';
 import './styles.css';
@@ -154,8 +159,8 @@ const optionRecord = (o: Partial<GameOptions>): Record<string, boolean> => {
  * names a library type — which is what lets the static import go away entirely
  * rather than survive as a type-only reference.
  */
-let supabase: Promise<SupabaseLike> | null = null;
-const backend = async (): Promise<SupabaseLike> =>
+let supabase: Promise<SupabaseLike & QuickLike> | null = null;
+const backend = async (): Promise<SupabaseLike & QuickLike> =>
   (supabase ??= import('@supabase/supabase-js').then(({ createClient }) =>
     createClient(SUPABASE_URL, SUPABASE_ANON_KEY),
   ));
@@ -193,6 +198,104 @@ const relay = (e: TableEvents): TableClientEvents => ({
   onRejected: (reason) => e.onRefused?.(reason),
 });
 
+/**
+ * The same, for a quick table.
+ *
+ * `onTable` is deliberately not forwarded: the quick client's table info is
+ * about the code and the claims, and the shell's `TableInfo` is assembled from
+ * the board in `quickAdopt`. Passing the raw one through would mean two places
+ * building the same object out of different halves.
+ *
+ * Drift gets a notice rather than silence. It is the one thing that can happen
+ * in this mode and not the refereed one, and a player watching their board
+ * change under them deserves the reason.
+ */
+const quickRelay = (e: TableEvents): QuickEvents => ({
+  onSeat: (seat) => e.onSeat?.(seat),
+  onRefused: (reason) => e.onRefused?.(reason),
+  onLink: (state) => {
+    // Already the shell's vocabulary — `LINK` exists to translate the refereed
+    // client's different three words, and putting it here would be a mapping
+    // from a set to itself.
+    quickLink = state === 'connecting' ? 'reconnecting' : state;
+    e.onLink?.(quickLink);
+  },
+  onDrift: (at) =>
+    e.onRefused?.(
+      `Move ${String(at)} did not produce the board the sender saw — rebuilt from the move list. If it keeps happening, both players should reload.`,
+    ),
+});
+
+/**
+ * A quick table, dressed as the shell's `TablePort`.
+ *
+ * The shell was written against a refereed table and should not have to learn
+ * a second vocabulary, so the differences are absorbed here rather than
+ * spreading into the UI. Two of them are worth naming.
+ *
+ * There is no lobby to close, so `start` does nothing: a quick table is playing
+ * from the moment it exists, because there is no referee that needs telling to
+ * begin. And there is no roster on the server — the seats are the scenario's,
+ * so the list is built from the board every browser already has, with the
+ * database's claim map saying which of them somebody is sitting in.
+ */
+const quickAdopt = (client: QuickTable, session: GameSession, opened: boolean): TablePort => {
+  const table = (): TableInfo | null => {
+    const info = client.table;
+    if (!info) return null;
+    const state = session.state;
+    const claims = info.seats;
+    return {
+      id: info.code,
+      code: info.code,
+      scenarioId: info.scenarioId,
+      fog: false,
+      status: 'playing',
+      turn: state.turn,
+      commandCount: client.index,
+      seats: state.playerOrder.map((seat, ordinal): SeatInfo => {
+        const claim = claims[seat];
+        return {
+          seat,
+          ordinal,
+          faction: state.players[seat]?.faction ?? '',
+          name:
+            claim?.name !== undefined && claim.name !== ''
+              ? claim.name
+              : (state.players[seat]?.name ?? seat),
+          kind: claim ? 'human' : 'open',
+          present: claim !== undefined,
+          mine: client.seat === seat,
+        };
+      }),
+    };
+  };
+
+  return {
+    session: port(session),
+    get seat() {
+      return client.seat;
+    },
+    get table() {
+      return table();
+    },
+    get link() {
+      return quickLink;
+    },
+    host: opened,
+    start: async () => undefined,
+    sit: (seat) => client.sit(seat),
+    send: (cmd) => client.send(cmd),
+    leave: () => client.leave(),
+    close: () => {
+      client.close();
+    },
+  };
+};
+
+/** The last link state a quick table reported, for the badge to read. */
+let quickLink: LinkState = 'offline';
+
 const online: OnlinePort =
   SUPABASE_URL === '' || SUPABASE_ANON_KEY === ''
     ? {
@@ -202,7 +305,26 @@ const online: OnlinePort =
       }
     : {
         available: true,
+        // Quick first: it is the one that needs nothing beyond the two values
+        // this build already has. A refereed table additionally needs the Edge
+        // Function deployed, which cannot be known from here — so it is
+        // offered, and it fails with the referee's own words if it is absent.
+        modes: ['quick', 'refereed'],
         host: async (opts, events): Promise<TablePort> => {
+          if (opts.mode === 'quick') {
+            const session = vessel();
+            const client = new QuickTable(await backend(), session, quickRelay(events));
+            await client.host({
+              scenarioId: opts.scenarioId,
+              password: opts.password ?? '',
+              setup: {
+                ...(opts.seed === undefined ? {} : { seed: opts.seed }),
+                options: optionRecord(opts.options),
+                ...(opts.fleets ? { fleets: opts.fleets } : {}),
+              },
+            });
+            return quickAdopt(client, session, true);
+          }
           const session = vessel();
           const client = new TableClient(await backend(), session, {}, relay(events));
           await client.create({
@@ -214,7 +336,22 @@ const online: OnlinePort =
           });
           return adopt(client, session, true);
         },
-        join: async (code, seat, events): Promise<TablePort> => {
+        join: async (code, seat, events, jopts): Promise<TablePort> => {
+          if (jopts?.mode === 'quick') {
+            const session = vessel();
+            const client = new QuickTable(await backend(), session, quickRelay(events));
+            await client.join(code, jopts.password ?? '');
+            // A watcher passes `null` and stays standing. Anyone else takes the
+            // first chair nobody is in, which is what following a link should
+            // do without asking a second question.
+            if (seat !== null) {
+              const open = session.state.playerOrder.find(
+                (s) => client.table?.seats[s] === undefined,
+              );
+              if (open !== undefined) await client.sit(seat ?? open);
+            }
+            return quickAdopt(client, session, false);
+          }
           const session = vessel();
           const client = new TableClient(await backend(), session, {}, relay(events));
           await client.join(code, seat);

@@ -132,8 +132,30 @@ nobody shooting, and six exercises in vector movement graded against par.
 
 ### Playing with other people, over the internet
 
-Sit at a table, share a six-character code, and play from anywhere. Two ways to
-set it up, and neither is more "real" than the other.
+Sit at a table, share a six-character code, and play from anywhere. There are
+two arrangements, and the game offers both on the same screen.
+
+### The quick table — one SQL file, nothing deployed
+
+Paste [`supabase/quick/schema.sql`](supabase/quick/schema.sql) into your
+project's SQL Editor, press Run, and copy two values. That is the setup: no
+command line, no account, no server.
+
+Postgres orders the moves, rolls the dice and relays them; every browser runs
+the rules over the same list and lands on the same board. Share a code and a
+password and play. **[Full instructions](supabase/quick/README.md)**.
+
+What it trades: the rules are enforced by each browser, so somebody who edits
+their own copy could propose a move the rules forbid — the others notice, and
+say so, but noticing is not preventing. And the two hidden-information
+scenarios, Escape and Lateral 7, are refused outright, because the move list
+rebuilds the board that the fog exists to hide.
+
+### The refereed table — a judge on the server
+
+Every order is checked against the rules before it is accepted, each side gets
+only the board it is entitled to, and the fogged scenarios work. It costs a
+deployment.
 
 **From a terminal**, if you have the repository checked out:
 

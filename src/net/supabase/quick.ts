@@ -58,12 +58,19 @@ import type { ChannelLike } from './client.js';
  * a quick table has no accounts. The password is the whole gate.
  */
 export interface QuickLike {
+  /**
+   * `PromiseLike`, not `Promise`, and the difference is not pedantry.
+   * supabase-js returns a query builder that is awaitable but is not a promise
+   * — it has no `catch` and no `finally` — so demanding a `Promise` here would
+   * make the real client fail to satisfy this interface while every hand-written
+   * test double sailed through. Which is the wrong way round.
+   */
   rpc(
     fn: string,
     args: Record<string, unknown>,
-  ): Promise<{ data: unknown; error: { message: string } | null }>;
+  ): PromiseLike<{ data: unknown; error: { message: string } | null }>;
   channel(name: string): ChannelLike;
-  removeChannel(channel: ChannelLike): Promise<unknown>;
+  removeChannel(channel: ChannelLike): PromiseLike<unknown>;
 }
 
 // ---------------------------------------------------------------------------

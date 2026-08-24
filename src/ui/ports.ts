@@ -174,9 +174,30 @@ export interface TablePort {
   close(): void;
 }
 
+/**
+ * Which of the two online arrangements a table uses.
+ *
+ * They are not tiers of the same thing, and the shell has to name both because
+ * the difference is a player's to make rather than a build's. A `refereed`
+ * table has a judge on the server: it enforces the rules, keeps a fogged board,
+ * and needs a deployment behind it. A `quick` table is a shared list of moves
+ * with a password on the door — every browser runs the rules itself, which is
+ * right for people who chose to sit down together and wrong for strangers.
+ */
+export type OnlineMode = 'quick' | 'refereed';
+
 export interface HostOptions extends ScenarioBuildOptions {
   readonly scenarioId: string;
   readonly computerSeats: ComputerSeats;
+  readonly mode?: OnlineMode;
+  /** Required by a `quick` table, meaningless to a refereed one. */
+  readonly password?: string;
+}
+
+/** What a joiner supplies beyond the code. */
+export interface JoinOptions {
+  readonly mode?: OnlineMode;
+  readonly password?: string;
 }
 
 /**
@@ -190,6 +211,17 @@ export type OnlinePort =
   | { readonly available: false; readonly reason: string }
   | {
       readonly available: true;
+      /**
+       * The arrangements this build can actually offer, most convenient first.
+       *
+       * Both need the project's URL and key; only `refereed` also needs the
+       * Edge Function deployed. A build cannot tell from here whether that
+       * deployment happened, so the list says what is *configured* and a
+       * refereed table that turns out to have no referee fails when it is
+       * opened — with the referee's own words, which are better than a guess
+       * made here.
+       */
+      readonly modes: readonly OnlineMode[];
       /** Open a table and take the first seat. */
       host(opts: HostOptions, events: TableEvents): Promise<TablePort>;
       /**
@@ -201,6 +233,7 @@ export type OnlinePort =
         code: string,
         seat: PlayerId | null | undefined,
         events: TableEvents,
+        opts?: JoinOptions,
       ): Promise<TablePort>;
       /** The link a friend follows to reach a table. */
       linkFor(code: string): string;

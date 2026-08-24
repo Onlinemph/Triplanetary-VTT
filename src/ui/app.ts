@@ -45,6 +45,7 @@ import { aiCommand } from '../ai/driver.js';
 import type {
   AppDeps,
   ComputerSeats,
+  OnlineMode,
   OnlinePort,
   RenderView,
   RendererPort,
@@ -200,6 +201,12 @@ export const createApp = (deps: AppDeps): App => {
    * immediately before they press it — see `mountOnlineChoices`.
    */
   let intent: 'here' | 'online' = 'here';
+  /**
+   * Which arrangement the online buttons chose, and the password a quick table
+   * needs. Held beside `intent` for the same reason: the picker's Begin button
+   * is the only door out, and it takes no arguments.
+   */
+  let onlineAs: { mode: OnlineMode; password: string } = { mode: 'refereed', password: '' };
   /**
    * The code and seat we last held.
    *
@@ -542,8 +549,10 @@ export const createApp = (deps: AppDeps): App => {
       pickerOverlay = overlay;
       mountOnlineChoices(overlay, {
         reason: online.available ? null : online.reason,
-        onHost: () => {
+        ...(online.available ? { modes: online.modes } : {}),
+        onHost: (mode, password) => {
           intent = 'online';
+          onlineAs = { mode, password };
           beginFrom(overlay);
         },
         onJoin: () => {
@@ -1257,7 +1266,13 @@ export const createApp = (deps: AppDeps): App => {
     try {
       enterTable(
         await online.host(
-          { scenarioId: result.id, ...result.opts, computerSeats: result.computerSeats },
+          {
+            scenarioId: result.id,
+            ...result.opts,
+            computerSeats: result.computerSeats,
+            mode: onlineAs.mode,
+            password: onlineAs.password,
+          },
           tableEvents(),
         ),
       );
@@ -1267,7 +1282,7 @@ export const createApp = (deps: AppDeps): App => {
     }
   };
 
-  const joinTable = async (code: string, watchOnly: boolean): Promise<void> => {
+  const joinTable = async (code: string, watchOnly: boolean, password = ''): Promise<void> => {
     if (!online.available) return;
     // An unspecified seat resumes the one this account already holds, which is
     // what a reconnect wants. Only after an explicit leave — when the seat has
@@ -1278,7 +1293,15 @@ export const createApp = (deps: AppDeps): App => {
         ? (resume.seat ?? undefined)
         : undefined;
     try {
-      enterTable(await online.join(code, wanted, tableEvents()));
+      // A password means a quick table; its absence means a refereed one. The
+      // joiner does not know which a code belongs to, so the mode follows what
+      // they typed rather than being asked for separately.
+      enterTable(
+        await online.join(code, wanted, tableEvents(), {
+          mode: password === '' ? 'refereed' : 'quick',
+          password,
+        }),
+      );
     } catch (err) {
       act.notify(`Could not join ${code}: ${reasonOf(err)}`, 'bad');
       if (session) act.newGame();
@@ -1290,9 +1313,10 @@ export const createApp = (deps: AppDeps): App => {
     if (!online.available || joinOverlay !== null) return;
     joinOverlay = openJoinDialog(overlays, {
       code,
-      onJoin: (typed, watchOnly) => {
+      wantsPassword: online.modes.includes('quick'),
+      onJoin: (typed, watchOnly, password) => {
         joinOverlay = null;
-        void joinTable(typed, watchOnly);
+        void joinTable(typed, watchOnly, password);
       },
       onCancel: () => {
         joinOverlay = null;
