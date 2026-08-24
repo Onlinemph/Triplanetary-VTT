@@ -70,10 +70,47 @@ const loadConfig = async () => {
       'set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY, in .env.local or the environment',
     );
   }
-  if (/service_role/.test(key)) {
-    throw new Error('that is the service role key — this script must run as an ordinary client');
+  const secret = looksPrivileged(key);
+  if (secret) {
+    throw new Error(
+      `that key ${secret} — this script must run as an ordinary client, or every check below passes for the wrong reason`,
+    );
   }
   return { url, key };
+};
+
+/**
+ * Is this a key that bypasses row level security?
+ *
+ * Worth more than one line, because getting it wrong is silent. Every denial
+ * in this file is asserted by *attempting* the thing and finding it refused; a
+ * privileged key is not refused, so the whole suite would go green while
+ * proving the opposite of what it claims. A guard that fails open is worse than
+ * no guard, so this errs toward refusing anything it cannot positively identify
+ * as a client key.
+ *
+ * Two formats, because Supabase has two:
+ *
+ *  - the current one, where the prefix says it outright — `sb_secret_` against
+ *    `sb_publishable_`;
+ *  - the legacy JWT, where it does not. `service_role` lives in the *payload*,
+ *    which is base64url, so searching the token text for that string finds
+ *    nothing. It has to be decoded.
+ */
+const looksPrivileged = (key) => {
+  if (key.startsWith('sb_secret_')) return 'is a secret key (sb_secret_…)';
+  if (key.startsWith('sb_publishable_')) return null;
+
+  const payload = key.split('.')[1];
+  if (payload === undefined) return null; // Not a JWT and not a prefixed key.
+  try {
+    const claims = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
+    if (claims.role === 'service_role') return 'is the service role key';
+  } catch {
+    // An unreadable payload is not evidence of anything. The prefix checks
+    // above are the ones that matter for keys minted today.
+  }
+  return null;
 };
 
 // ---------------------------------------------------------------------------
