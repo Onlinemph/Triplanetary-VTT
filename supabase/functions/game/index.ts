@@ -45,6 +45,13 @@
 
 import { createClient } from 'npm:@supabase/supabase-js@^2.112.3';
 
+// Deno does not look for a declaration file beside a `.js` the way TypeScript's
+// own resolver does — it needs to be told, and this is how. Without the line
+// the bundle is untyped, every `type` import below fails, and the errors
+// cascade into implicit-any on anything that touched them. The browser build
+// resolves the same file through `tsconfig.functions.json` and ignores this
+// comment, so the two agree on where the types come from.
+// @deno-types="../_shared/engine.d.ts"
 import {
   type Command,
   type CreateRequest,

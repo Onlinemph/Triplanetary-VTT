@@ -18,6 +18,7 @@
     "server:dev": "tsx watch server/index.ts",
     "functions:build": "node scripts/build-functions.mjs",
     "functions:check": "node scripts/build-functions.mjs --check",
+    "functions:typecheck": "deno check --sloppy-imports supabase/functions/game/index.ts",
     "functions:deploy": "npm run functions:build && supabase functions deploy game"
   },
   "devDependencies": {

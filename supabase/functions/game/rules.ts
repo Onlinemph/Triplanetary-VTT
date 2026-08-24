@@ -16,6 +16,8 @@
  * `../_shared/README.md`.
  */
 
+// See the note in `index.ts`: Deno needs pointing at the declaration file.
+// @deno-types="../_shared/engine.d.ts"
 import {
   type BuildOptions,
   type Command,

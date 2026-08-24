@@ -452,9 +452,27 @@ Both halves are testable with nothing running:
   was mutation-tested: ten deliberate holes were opened in the policies and each
   one was caught.
 
-What neither can prove is what Supabase itself does — Realtime's exact row
+A third check covers the function itself, and it exists because the obvious one
+is not enough. `npm run typecheck` reads `supabase/functions` with tsc and two
+shims, but tsc resolves `./x.js` to `./x.ts` and reads a declaration file
+sitting beside a bundle, and Deno does neither — so a function tsc likes can
+still be one Deno refuses. `npm run functions:typecheck` runs `deno check`, with
+the resolver that will actually see the code.
+
+Making that pass took a fix worth recording. The bundle's sibling `engine.d.ts`
+was invisible to Deno, which consults a declaration only when a `@deno-types`
+comment points at one; without it every type import from the bundle failed and
+cascaded into implicit-any across both files. The comment is now there. And the
+declaration re-exports the original sources by `.js` specifier, which is why the
+check runs with `--sloppy-imports` — those sources exist in the repository and
+not in the upload, which is precisely why this belongs in CI rather than at
+deploy time.
+
+What none of it can prove is what Supabase itself does — Realtime's exact row
 authorisation query, PostgREST's schema exposure, and whether `config.toml`'s
-keys are the ones the platform reads. Those need a project.
+keys are the ones the platform reads. Those need a project. Two smaller things
+also wait on one: nothing yet schedules `reap_stale_lobbies()`, and the schema
+tests run on PostgreSQL 18 while `config.toml` pins major version 17.
 
 ---
 

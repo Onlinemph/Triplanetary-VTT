@@ -55,6 +55,45 @@ jobs:
           path: dist
           retention-days: 7
 
+  # The referee, checked the way it is actually run.
+  #
+  # `npm run typecheck` covers `supabase/functions` with tsc and a pair of
+  # shims, which is worth having and is not the same thing: tsc resolves
+  # `./x.js` to `./x.ts` and reads a declaration file sitting beside a bundle,
+  # and Deno does neither by default. A function that passes there can still be
+  # one Deno refuses. So this job builds the bundle and checks the function
+  # with the resolver that will actually see it.
+  #
+  # It is a hard gate, unlike lint. This is the code that decides games, it is
+  # deployed separately from everything above, and a break here surfaces in
+  # production rather than in a browser somebody can reload.
+  functions:
+    name: edge function
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - run: npm ci
+
+      # Bundles the engine for Deno, checks the committed declaration file
+      # still matches what the script would write, then imports the bundle and
+      # judges a real command through it.
+      - name: Build and smoke-test the bundle
+        run: npm run functions:build
+
+      # `--sloppy-imports` is what lets Deno follow the declaration file's
+      # `.js` specifiers to the `.ts` sources they name. Only CI has those
+      # sources — the deploy uploads `supabase/functions` alone — which is
+      # exactly why the check belongs here and not at deploy time.
+      - name: Typecheck under Deno
+        run: npm run functions:typecheck
+
   lint:
     name: lint (advisory)
     runs-on: ubuntu-latest
