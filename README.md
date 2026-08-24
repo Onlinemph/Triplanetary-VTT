@@ -132,7 +132,10 @@ nobody shooting, and six exercises in vector movement graded against par.
 
 ### Playing with other people, over the internet
 
-Sit at a table, share a six-character code, and play from anywhere:
+Sit at a table, share a six-character code, and play from anywhere. Two ways to
+set it up, and neither is more "real" than the other.
+
+**From a terminal**, if you have the repository checked out:
 
 ```bash
 npx supabase login
@@ -148,6 +151,31 @@ npm run dev
 join without an account, and `supabase/config.toml` only governs the _local_
 stack until you push it; without this the online buttons appear and every join
 fails on authentication.
+
+**From GitHub, with no terminal at all**, which is how the hosted copy is
+deployed. Add five repository secrets under **Settings → Secrets and variables →
+Actions**:
+
+| secret                   | where it comes from                             |
+| ------------------------ | ----------------------------------------------- |
+| `SUPABASE_ACCESS_TOKEN`  | supabase.com/dashboard/account/tokens           |
+| `SUPABASE_PROJECT_REF`   | the id in your dashboard URL                    |
+| `SUPABASE_DB_PASSWORD`   | set when the project was created                |
+| `VITE_SUPABASE_URL`      | Project Settings → API                          |
+| `VITE_SUPABASE_ANON_KEY` | Project Settings → API, the **anon public** key |
+
+Then, in the **Actions** tab, run **Deploy to Supabase** — it pushes the
+migrations and ships the Edge Function. Turn on anonymous sign-in in the
+dashboard under **Authentication → Sign In / Providers**, which is a project
+setting rather than a deployment and so is not automated. Finally re-run
+**Deploy to GitHub Pages**, because Vite bakes the two `VITE_` values into the
+page at build time and the published site needs a build that has them.
+
+The anon key is safe in all of this: it ships inside the page every player
+downloads and grants nothing on its own. It lives in a secret because which
+project the site talks to is the owner's business, not because the string needs
+hiding. The **service role** key is the one that must never leave the Edge
+Function, and nothing above ever asks for it.
 
 Then press **Play online** on the scenario screen, or paste a code into **Join a
 table**. A link of the form `?join=ABC234` drops a friend straight into the
