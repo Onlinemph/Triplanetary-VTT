@@ -11,10 +11,11 @@
  * go, what a shot is worth, whether a ram is allowed — is asked of the ported
  * engine (`reachable`, `previewAttack`, `canRam`), and every change leaves as
  * a `Command`. It mounts into a host element the Triplanetary shell provides,
- * owns its own listeners for exactly as long as it is mounted, and ends the
- * one way a campaign battle ends: with a `BattleResult` handed to whoever is
- * waiting for it — the war room in this browser, or a token for one running
- * somewhere else.
+ * owns its own listeners for exactly as long as it is mounted, and plays any
+ * of the ported scenarios. The ending depends on what was fought: a campaign
+ * battle ends with a `BattleResult` handed to whoever is waiting for it — the
+ * war room in this browser, or a token for one running somewhere else — and a
+ * printed scenario ends with the verdict alone.
  */
 
 import { type Hex, eq, label as hexLabel } from '../engine/hex.js';
@@ -50,26 +51,43 @@ import {
 import type { BattleResult, OrderOfBattle } from '../../campaign/orders.js';
 import { type ReachHint, type RenderView, EMPTY_VIEW, MapRenderer } from '../render/renderer.js';
 import { GameSession } from '../net/session.js';
-import { LANDING } from '../scenarios/landing.js';
+import { LANDING, scenarioById } from '../scenarios/index.js';
 import { readBattleResult } from '../campaign/result.js';
 import { button, el, row, setChildren } from './dom.js';
 import '../ogre.css';
 
+/**
+ * What to fight. A campaign order carries its ending with it — the result
+ * must go somewhere — while a printed scenario is just a game: it ends with
+ * a verdict and the door.
+ */
+export type OgreBattleSource =
+  | {
+      readonly kind: 'order';
+      readonly order: OrderOfBattle;
+      /**
+       * The primary way home when a war room in this browser is waiting on
+       * this battle ("Report to the campaign"); null shows the result token
+       * instead, for a battle whose campaign runs somewhere else.
+       */
+      readonly reportLabel: string | null;
+      /** Takes the finished battle's result home. */
+      onResult(result: BattleResult): void;
+      /** The pasteable token a result travels as, for the null-label ending. */
+      resultToken(result: BattleResult): string;
+    }
+  | {
+      readonly kind: 'scenario';
+      /** One of the ported scenarios' ids; an unknown id falls back to The Landing. */
+      readonly id: string;
+      readonly seed: number;
+    };
+
 export interface OgreBattleOptions {
   /** Where to mount. The view covers it while the battle is open. */
   readonly host: HTMLElement;
-  readonly order: OrderOfBattle;
-  /**
-   * The primary way home when a war room in this browser is waiting on this
-   * battle ("Report to the campaign"); null shows the result token instead,
-   * for a battle whose campaign runs somewhere else.
-   */
-  readonly reportLabel: string | null;
-  /** Takes the finished battle's result home. */
-  onResult(result: BattleResult): void;
-  /** The pasteable token a result travels as, for the null-label ending. */
-  resultToken(result: BattleResult): string;
-  /** Leave without a result. The order can be fought again from the start. */
+  readonly battle: OgreBattleSource;
+  /** Leave without a result. The battle can be fought again from the start. */
   onExit(): void;
 }
 
@@ -90,11 +108,15 @@ export const createOgreBattle = (opts: OgreBattleOptions): OgreBattle => {
   const root = el('div', { class: 'ogre-app' });
   opts.host.appendChild(root);
 
+  const battle = opts.battle;
+  const scenario = battle.kind === 'order' ? LANDING : (scenarioById(battle.id) ?? LANDING);
   const session = new GameSession(
-    LANDING.build({ seed: opts.order.seed, order: opts.order }),
-    LANDING.map,
+    battle.kind === 'order'
+      ? scenario.build({ seed: battle.order.seed, order: battle.order })
+      : scenario.build({ seed: battle.seed }),
+    scenario.map,
     {
-      victoryCheck: LANDING.checkVictory,
+      victoryCheck: scenario.checkVictory,
     },
   );
 
@@ -137,7 +159,7 @@ export const createOgreBattle = (opts: OgreBattleOptions): OgreBattle => {
 
   // The renderer is built once the canvas is in the document, so its first
   // measurement is of a real box rather than a detached one.
-  const renderer = new MapRenderer(canvas, LANDING.map);
+  const renderer = new MapRenderer(canvas, scenario.map);
 
   // ---------------------------------------------------------------------
   // Derived reads
@@ -449,7 +471,7 @@ export const createOgreBattle = (opts: OgreBattleOptions): OgreBattle => {
         'div',
         { class: 'brand' },
         el('span', { class: 'brand-mark' }, 'OGRE'),
-        el('span', { class: 'brand-sub' }, LANDING.name),
+        el('span', { class: 'brand-sub' }, scenario.name),
       ),
       el(
         'div',
@@ -1196,18 +1218,19 @@ export const createOgreBattle = (opts: OgreBattleOptions): OgreBattle => {
     const names = v.winners.map((w) => state.players[w]?.name ?? w).join(' and ');
     modal.className = 'modal';
 
-    // The battle ends with somewhere for its result to go. When the war room
-    // in this browser is waiting on it, one button hands it over; otherwise —
-    // the order came as a token from a campaign running somewhere else — the
-    // result leaves the way the order arrived.
-    const result = readBattleResult(state, session.log);
+    // A campaign battle ends with somewhere for its result to go. When the
+    // war room in this browser is waiting on it, one button hands it over;
+    // otherwise — the order came as a token from a campaign running somewhere
+    // else — the result leaves the way the order arrived. A printed scenario
+    // owes nobody anything: the verdict is the whole ending.
+    const result = battle.kind === 'order' ? readBattleResult(state, session.log) : null;
     const extras: (HTMLElement | null)[] = [];
     const actions: HTMLElement[] = [];
 
-    if (result && opts.reportLabel !== null) {
-      actions.push(button(opts.reportLabel, () => opts.onResult(result), { class: 'primary' }));
-    } else if (result) {
-      const token = opts.resultToken(result);
+    if (result && battle.kind === 'order' && battle.reportLabel !== null) {
+      actions.push(button(battle.reportLabel, () => battle.onResult(result), { class: 'primary' }));
+    } else if (result && battle.kind === 'order') {
+      const token = battle.resultToken(result);
       const box = el('textarea', { class: 'battle-token' });
       box.value = token;
       box.readOnly = true;
@@ -1268,6 +1291,9 @@ export const createOgreBattle = (opts: OgreBattleOptions): OgreBattle => {
         'div',
         { class: 'sheet wide' },
         el('h1', {}, 'How this plays'),
+        el('h3', {}, scenario.name),
+        ...scenario.briefing.split('\n\n').map((p) => el('p', {}, p)),
+        el('ul', {}, ...scenario.victoryConditions.map((c) => el('li', {}, c))),
         el('h3', {}, 'The turn'),
         el(
           'ol',
@@ -1368,7 +1394,7 @@ export const createOgreBattle = (opts: OgreBattleOptions): OgreBattle => {
   const unsubscribe = session.subscribe(() => draw());
   // The same console hook the standalone app offers, under its own name:
   // `ogreBattle.session.serialise()` is a complete, replayable bug report.
-  (window as unknown as { ogreBattle?: unknown }).ogreBattle = { session, scenario: LANDING };
+  (window as unknown as { ogreBattle?: unknown }).ogreBattle = { session, scenario };
   resize();
   draw();
 

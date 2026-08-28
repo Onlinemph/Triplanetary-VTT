@@ -71,6 +71,7 @@ import { mountCampaignChoice, openWarRoom } from './panels/campaign.js';
 import { createLogPanel } from './panels/logpanel.js';
 import { openHelpDrawer } from './panels/help.js';
 import { type PickerResult, openScenarioPicker } from './panels/scenarioPicker.js';
+import { mountAllGames, openOgrePicker, openStartMenu } from './panels/startMenu.js';
 import { createTopBar } from './panels/topbar.js';
 import {
   type Actions,
@@ -186,6 +187,7 @@ export const createApp = (deps: AppDeps): App => {
   let seed = deps.randomSeed();
   let helpOverlay: Overlay | null = null;
   let pickerOverlay: Overlay | null = null;
+  let menuOverlay: Overlay | null = null;
   let noticeTimer = 0;
   let noticeSeq = 0;
   let victoryShown = false;
@@ -524,54 +526,74 @@ export const createApp = (deps: AppDeps): App => {
     },
 
     newGame() {
-      if (pickerOverlay) return;
-      intent = 'here';
-      const overlay = openScenarioPicker(
-        overlays,
-        deps.scenarios,
-        { id: scenarioId, options: gameOptions, seed },
-        (result) => {
-          pickerOverlay = null;
-          if (intent === 'online') {
-            void hostTable(result);
-            return;
-          }
-          startScenario(
-            result.id,
-            result.opts.seed,
-            result.opts.options,
-            result.opts.fleets,
-            result.computerSeats,
-          );
+      if (menuOverlay || pickerOverlay || ogrePickerOverlay) return;
+      menuOverlay = openStartMenu(overlays, {
+        campaignRunning: deps.campaign.current() !== null,
+        dismissible: session !== null || table !== null,
+        onClose: () => {
+          menuOverlay = null;
         },
-        session !== null,
-        () => {
-          pickerOverlay = null;
-        },
-      );
-      pickerOverlay = overlay;
-      mountOnlineChoices(overlay, {
-        host: overlays,
-        reason: online.available ? null : online.reason,
-        ...(online.available ? { modes: online.modes } : {}),
-        onHost: (mode, password) => {
-          intent = 'online';
-          onlineAs = { mode, password };
-          beginFrom(overlay);
-        },
-        onJoin: () => {
-          overlay.close();
-          promptJoin(null);
-        },
-      });
-      mountCampaignChoice(overlay, {
-        running: deps.campaign.current() !== null,
-        onOpen: () => {
-          overlay.close();
-          openCampaign();
-        },
+        onTriplanetary: () => openTriPicker(),
+        onOgre: () => void openOgreScenarios(),
+        onCampaign: () => openCampaign(),
       });
     },
+  };
+
+  /**
+   * The Triplanetary door — the scenario picker this app has always opened
+   * first, now one of three. Its foot keeps every other way out: host and
+   * join, the campaign, and the way back to the start menu.
+   */
+  const openTriPicker = (): void => {
+    if (pickerOverlay) return;
+    intent = 'here';
+    const overlay = openScenarioPicker(
+      overlays,
+      deps.scenarios,
+      { id: scenarioId, options: gameOptions, seed },
+      (result) => {
+        pickerOverlay = null;
+        if (intent === 'online') {
+          void hostTable(result);
+          return;
+        }
+        startScenario(
+          result.id,
+          result.opts.seed,
+          result.opts.options,
+          result.opts.fleets,
+          result.computerSeats,
+        );
+      },
+      session !== null,
+      () => {
+        pickerOverlay = null;
+      },
+    );
+    pickerOverlay = overlay;
+    mountOnlineChoices(overlay, {
+      host: overlays,
+      reason: online.available ? null : online.reason,
+      ...(online.available ? { modes: online.modes } : {}),
+      onHost: (mode, password) => {
+        intent = 'online';
+        onlineAs = { mode, password };
+        beginFrom(overlay);
+      },
+      onJoin: () => {
+        overlay.close();
+        promptJoin(null);
+      },
+    });
+    mountCampaignChoice(overlay, {
+      running: deps.campaign.current() !== null,
+      onOpen: () => {
+        overlay.close();
+        openCampaign();
+      },
+    });
+    mountAllGames(overlay, () => act.newGame());
   };
 
   /**
@@ -1354,23 +1376,71 @@ export const createApp = (deps: AppDeps): App => {
     const reportable = order.battleId === pendingId;
     groundBattle = make.createOgreBattle({
       host: overlays,
-      order,
-      reportLabel: reportable ? 'Report to the campaign' : null,
-      onResult: (result) => {
-        const outcome = deps.campaign.current()?.dispatch({ type: 'reportBattle', result });
-        if (!outcome?.ok) {
-          act.notify(outcome?.reason ?? 'The campaign refused the result.', 'bad');
-          return;
-        }
-        closeGroundBattle();
-        openCampaign();
+      battle: {
+        kind: 'order',
+        order,
+        reportLabel: reportable ? 'Report to the campaign' : null,
+        onResult: (result) => {
+          const outcome = deps.campaign.current()?.dispatch({ type: 'reportBattle', result });
+          if (!outcome?.ok) {
+            act.notify(outcome?.reason ?? 'The campaign refused the result.', 'bad');
+            return;
+          }
+          closeGroundBattle();
+          openCampaign();
+        },
+        resultToken: (result) => deps.campaign.resultToken(result),
       },
-      resultToken: (result) => deps.campaign.resultToken(result),
       onExit: () => {
         closeGroundBattle();
         if (deps.campaign.current()?.state.pending) openCampaign();
         else if (!session && table === null) act.newGame();
       },
+    });
+  };
+
+  /** A printed Ogre scenario, fought for its own sake: verdict, then home. */
+  const openOgreScenario = async (id: string, battleSeed: number): Promise<void> => {
+    if (groundBattle) return;
+    const make = await import('../ogre/ui/battle.js').catch(() => null);
+    if (make === null) {
+      act.notify('The Ogre battle view could not be loaded.', 'bad');
+      act.newGame();
+      return;
+    }
+    groundBattle = make.createOgreBattle({
+      host: overlays,
+      battle: { kind: 'scenario', id, seed: battleSeed },
+      onExit: () => {
+        closeGroundBattle();
+        if (!session && table === null) act.newGame();
+      },
+    });
+  };
+
+  /**
+   * The Ogre door: the ported scenarios are loaded the moment somebody wants
+   * them — the list rides the same on-demand chunks as the battle view.
+   */
+  let ogrePickerOverlay: Overlay | null = null;
+  const openOgreScenarios = async (): Promise<void> => {
+    if (ogrePickerOverlay) return;
+    const mod = await import('../ogre/scenarios/index.js').catch(() => null);
+    if (mod === null) {
+      act.notify('The Ogre scenarios could not be loaded.', 'bad');
+      act.newGame();
+      return;
+    }
+    ogrePickerOverlay = openOgrePicker(overlays, {
+      scenarios: mod.SCENARIOS,
+      seed: deps.randomSeed(),
+      newSeed: () => deps.randomSeed(),
+      dismissible: session !== null || table !== null,
+      onClose: () => {
+        ogrePickerOverlay = null;
+      },
+      onBack: () => act.newGame(),
+      onStart: (id, battleSeed) => void openOgreScenario(id, battleSeed),
     });
   };
 
