@@ -39,6 +39,8 @@ import type { CampaignDeps, CampaignHandle } from '../ports.js';
 export interface WarRoomHooks {
   /** Start the pending space battle in this app (asks who plays each seat). */
   fightHere(order: OrderOfBattle): void;
+  /** Start the pending ground battle in this app's embedded Ogre view. */
+  fightGround(order: OrderOfBattle): void;
   /** Host the pending space battle as an online table. Absent = no server. */
   hostOnline: ((order: OrderOfBattle) => void) | null;
   /** Why hosting is off, when it is. */
@@ -482,22 +484,32 @@ export const openWarRoom = (
         );
       } else {
         const link = el('a', {
-          class: 'btn btn-primary',
-          text: 'Open in Ogre',
+          class: 'btn btn-quiet',
+          text: 'Open in the Ogre app',
         }) as HTMLAnchorElement;
         link.href = deps.ogreUrl(order);
         link.target = '_blank';
         link.rel = 'noopener';
+        link.title = 'The same battle in the companion app — its result comes back as a token';
         kids.push(
           el('p', {
             class: 'hint',
             text:
               `${describeForce(pending.landed ?? {})} is ashore on ${siteName} against a garrison of ` +
-              `${describeForce(state.sites[pending.site]!.garrison)}. The landing is an Ogre battle: ` +
-              `open it in the companion app — or send the order token to whoever commands it — and ` +
-              `paste the result back.`,
+              `${describeForce(state.sites[pending.site]!.garrison)}. The landing is an Ogre battle. ` +
+              `Fight it right here at this keyboard, open it in the companion app, or send the ` +
+              `order token to whoever commands it and paste the result back.`,
           }),
-          el('div', { class: 'chips' }, link),
+          el(
+            'div',
+            { class: 'chips' },
+            button({
+              label: 'Fight it here',
+              variant: 'primary',
+              onClick: () => hooks.fightGround(order),
+            }),
+            link,
+          ),
         );
       }
 

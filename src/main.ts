@@ -492,13 +492,14 @@ const battleFrom = (
   if (token === null || token === '') return { battle: null, error: null };
   try {
     const order = decodeOrder(token);
-    if (scenarioById(order.scenarioId)) return { battle: order, error: null };
+    // 'landing' is not on this app's scenario list, but it is playable here
+    // all the same: the shell mounts the embedded Ogre view for it.
+    if (order.scenarioId === 'landing' || scenarioById(order.scenarioId)) {
+      return { battle: order, error: null };
+    }
     return {
       battle: null,
-      error:
-        order.scenarioId === 'landing'
-          ? 'That order is a ground battle — open it in the companion Ogre app.'
-          : `That order is for "${order.scenarioId}", which this app does not play.`,
+      error: `That order is for "${order.scenarioId}", which this app does not play.`,
     };
   } catch (err) {
     return {

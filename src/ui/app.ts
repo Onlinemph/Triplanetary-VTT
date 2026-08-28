@@ -1321,6 +1321,59 @@ export const createApp = (deps: AppDeps): App => {
     });
   };
 
+  // --- The embedded Ogre battle ---------------------------------------------
+
+  /** The mounted ground battle, if one is being fought. */
+  let groundBattle: { destroy(): void } | null = null;
+
+  const closeGroundBattle = (): void => {
+    groundBattle?.destroy();
+    groundBattle = null;
+  };
+
+  /**
+   * Fight a landing right here: the companion game's whole shell, ported and
+   * mounted over this one. Loaded on demand — a player who never reaches a
+   * ground battle never downloads the Ogre engine — the way the Supabase
+   * client is.
+   */
+  const openGroundBattle = async (order: OrderOfBattle): Promise<void> => {
+    if (groundBattle) return;
+    const make = await import('../ogre/ui/battle.js').catch(() => null);
+    if (make === null) {
+      act.notify(
+        'The Ogre battle view could not be loaded. Use the Open-in-Ogre link instead.',
+        'bad',
+      );
+      openCampaign();
+      return;
+    }
+    // Whether this battle has a war room waiting for it decides how it ends:
+    // a report button straight back, or a token for a campaign elsewhere.
+    const pendingId = deps.campaign.current()?.state.pending?.order?.battleId ?? null;
+    const reportable = order.battleId === pendingId;
+    groundBattle = make.createOgreBattle({
+      host: overlays,
+      order,
+      reportLabel: reportable ? 'Report to the campaign' : null,
+      onResult: (result) => {
+        const outcome = deps.campaign.current()?.dispatch({ type: 'reportBattle', result });
+        if (!outcome?.ok) {
+          act.notify(outcome?.reason ?? 'The campaign refused the result.', 'bad');
+          return;
+        }
+        closeGroundBattle();
+        openCampaign();
+      },
+      resultToken: (result) => deps.campaign.resultToken(result),
+      onExit: () => {
+        closeGroundBattle();
+        if (deps.campaign.current()?.state.pending) openCampaign();
+        else if (!session && table === null) act.newGame();
+      },
+    });
+  };
+
   // --- The war room ---------------------------------------------------------
 
   let warRoom: Overlay | null = null;
@@ -1336,6 +1389,7 @@ export const createApp = (deps: AppDeps): App => {
     if (warRoom) return;
     warRoom = openWarRoom(overlays, deps.campaign, {
       fightHere: (order) => closeWarRoom(() => promptBattle(order)),
+      fightGround: (order) => closeWarRoom(() => void openGroundBattle(order)),
       hostOnline: online.available
         ? (order) => closeWarRoom(() => hostCampaignBattle(order))
         : null,
@@ -1702,6 +1756,8 @@ export const createApp = (deps: AppDeps): App => {
     // sentence, because a dead parameter wants an explanation.
     const invited = deps.joinCode ?? null;
     if (invited !== null && invited !== '' && online.available) promptJoin(invited);
+    else if (deps.battle && deps.battle.scenarioId === 'landing')
+      void openGroundBattle(deps.battle);
     else if (deps.battle) promptBattle(deps.battle);
     else if (deps.battleError != null && deps.battleError !== '') {
       openModal(overlays, {
@@ -1715,6 +1771,7 @@ export const createApp = (deps: AppDeps): App => {
   };
 
   const destroy = (): void => {
+    closeGroundBattle();
     canvas.removeEventListener('pointerdown', onPointerDown);
     canvas.removeEventListener('pointermove', onPointerMove);
     canvas.removeEventListener('pointerup', onPointerUp);
