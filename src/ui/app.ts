@@ -42,9 +42,9 @@ import { button, el, fill } from './components/dom.js';
 import { icon } from './components/glyphs.js';
 import { type Overlay, openModal } from './components/modal.js';
 import { aiCommand } from '../ai/driver.js';
+import { type OrderOfBattle, isCampaignBattle, orderOf } from '@campaign/orders.js';
 import type {
   AppDeps,
-  BattleHandoff,
   ComputerSeats,
   OnlineMode,
   OnlinePort,
@@ -63,9 +63,11 @@ import {
   type TableView,
   createTableBadge,
   mountOnlineChoices,
+  openHostDialog,
   openJoinDialog,
   openLobby,
 } from './panels/lobby.js';
+import { mountCampaignChoice, openWarRoom } from './panels/campaign.js';
 import { createLogPanel } from './panels/logpanel.js';
 import { openHelpDrawer } from './panels/help.js';
 import { type PickerResult, openScenarioPicker } from './panels/scenarioPicker.js';
@@ -560,6 +562,13 @@ export const createApp = (deps: AppDeps): App => {
         onJoin: () => {
           overlay.close();
           promptJoin(null);
+        },
+      });
+      mountCampaignChoice(overlay, {
+        running: deps.campaign.current() !== null,
+        onOpen: () => {
+          overlay.close();
+          openCampaign();
         },
       });
     },
@@ -1163,9 +1172,17 @@ export const createApp = (deps: AppDeps): App => {
     if (!v) return;
     const names = v.winners.map((id) => session!.state.players[id]?.name ?? id).join(', ');
 
-    // A campaign battle ends with something to carry home: the encoded result
-    // the player pastes back into the campaign in the companion Ogre app.
-    const token = deps.battle ? deps.battle.resultFor(session.state, session.history) : null;
+    // Where a campaign battle's result goes. If the war room in this browser
+    // is waiting on exactly this battle, one button hands it over; otherwise —
+    // the battle arrived as a token or a table code from a campaign running
+    // somewhere else — the result leaves the way the order came, as a token.
+    const order = orderOf(session.state.scenarioData);
+    const fromCampaign = order !== null && isCampaignBattle(order);
+    const result = fromCampaign ? deps.campaign.resultFor(session.state, session.history) : null;
+    const pendingId = deps.campaign.current()?.state.pending?.order?.battleId ?? null;
+    const reportable = result !== null && order !== null && order.battleId === pendingId;
+    const token = result !== null && !reportable ? deps.campaign.resultToken(result) : null;
+
     const tokenField = token
       ? el('textarea', {
           class: 'battle-token',
@@ -1187,12 +1204,28 @@ export const createApp = (deps: AppDeps): App => {
             el('p', { class: 'help-p', text: v.reason }),
             el('p', {
               class: 'help-p',
-              text: 'This was a campaign battle. Copy the result below and paste it back into the campaign, in the Ogre app.',
+              text: 'This was a campaign battle. Copy the result below and paste it back into the war room it came from.',
             }),
             tokenField,
           )
         : el('p', { class: 'help-p', text: v.reason }),
       actions: [
+        ...(reportable && result !== null
+          ? [
+              {
+                label: 'Report to the campaign',
+                variant: 'primary' as const,
+                onClick: () => {
+                  const outcome = deps.campaign.current()?.dispatch({
+                    type: 'reportBattle',
+                    result,
+                  });
+                  if (outcome?.ok) openCampaign();
+                  else act.notify(outcome?.reason ?? 'The campaign refused the result.', 'bad');
+                },
+              },
+            ]
+          : []),
         ...(token
           ? [
               {
@@ -1213,23 +1246,38 @@ export const createApp = (deps: AppDeps): App => {
           variant: 'quiet',
           onClick: () => undefined,
         },
-        { label: 'New game', variant: token ? 'quiet' : 'primary', onClick: () => act.newGame() },
+        {
+          label: 'New game',
+          variant: token || reportable ? 'quiet' : 'primary',
+          onClick: () => act.newGame(),
+        },
       ],
     });
   };
 
   // --- Campaign battles ----------------------------------------------------
 
+  /** One line for the pre-game dialog: who sails where, against what. */
+  const transferSummary = (order: OrderOfBattle): string => {
+    const [convoy, patrol] = order.sides;
+    const target = deps.map.body(String(order.terms['target']))?.name ?? '?';
+    const freight = convoy?.forces['freight'] ?? 0;
+    return (
+      `${convoy?.faction ?? 'The convoy'} sails for ${target} with ${freight} lots of ` +
+      `ground force aboard; ${patrol?.faction ?? 'the patrol'} comes out to meet it.`
+    );
+  };
+
   /**
-   * Start a battle handed over from the campaign. The order decides the
-   * scenario and both fleets; the one choice left to make here is who plays
-   * each seat, which is what `promptBattle` asks.
+   * Start a battle the campaign ordered. The order decides the scenario and
+   * both fleets; the one choice left to make here is who plays each seat,
+   * which is what `promptBattle` asks.
    */
-  const startBattle = (battle: BattleHandoff, computer: ComputerSeats): void => {
+  const startBattle = (order: OrderOfBattle, computer: ComputerSeats): void => {
     closeTable(true);
     let state: GameState;
     try {
-      state = battle.build();
+      state = deps.buildScenario(order.scenarioId, { seed: order.seed, options: {}, order });
     } catch (err) {
       act.notify(reasonOf(err), 'bad');
       act.newGame();
@@ -1243,34 +1291,109 @@ export const createApp = (deps: AppDeps): App => {
     canvas.focus();
   };
 
-  /** A `?battle=` link is an instruction, like a `?join=` link: honour it first. */
-  const promptBattle = (battle: BattleHandoff): void => {
+  /** A campaign battle is an instruction, like a `?join=` link: honour it first. */
+  const promptBattle = (order: OrderOfBattle): void => {
     openModal(overlays, {
       title: 'A battle from the campaign',
       subtitle: 'Contested transfer',
       body: el(
         'div',
         {},
-        el('p', { class: 'help-p', text: battle.summary }),
+        el('p', { class: 'help-p', text: transferSummary(order) }),
         el('p', {
           class: 'help-p',
-          text: 'Play both seats at this keyboard, or hand one to the computer. When the transfer is decided, copy the result token back into the campaign.',
+          text: 'Play both seats at this keyboard, or hand one to the computer. When the transfer is decided, the result goes back to the campaign.',
         }),
       ),
       actions: [
-        { label: 'Both seats here', variant: 'primary', onClick: () => startBattle(battle, []) },
+        { label: 'Both seats here', variant: 'primary', onClick: () => startBattle(order, []) },
         {
           label: 'Computer flies the patrol',
           variant: 'quiet',
-          onClick: () => startBattle(battle, [1]),
+          onClick: () => startBattle(order, [1]),
         },
         {
           label: 'Computer flies the convoy',
           variant: 'quiet',
-          onClick: () => startBattle(battle, [0]),
+          onClick: () => startBattle(order, [0]),
         },
       ],
     });
+  };
+
+  // --- The war room ---------------------------------------------------------
+
+  let warRoom: Overlay | null = null;
+  /** What to do once the war room has closed — a battle to start, a table to host. */
+  let afterWarRoom: (() => void) | null = null;
+
+  const closeWarRoom = (then?: () => void): void => {
+    afterWarRoom = then ?? null;
+    warRoom?.close();
+  };
+
+  const openCampaign = (): void => {
+    if (warRoom) return;
+    warRoom = openWarRoom(overlays, deps.campaign, {
+      fightHere: (order) => closeWarRoom(() => promptBattle(order)),
+      hostOnline: online.available
+        ? (order) => closeWarRoom(() => hostCampaignBattle(order))
+        : null,
+      ...(online.available ? {} : { onlineReason: online.reason }),
+      notify: (text, tone) => act.notify(text, tone),
+      newSeed: () => deps.randomSeed(),
+      onClose: () => {
+        warRoom = null;
+        const next = afterWarRoom;
+        afterWarRoom = null;
+        if (next) next();
+        else if (!session && table === null) act.newGame();
+      },
+    });
+  };
+
+  /** Open an online table for a campaign transfer, and share the code. */
+  const hostCampaignBattle = (order: OrderOfBattle): void => {
+    if (!online.available) return;
+    const modes = online.modes;
+    if (modes.length === 1 && modes[0] === 'refereed') {
+      void hostTransfer(order, 'refereed', '');
+      return;
+    }
+    openHostDialog(overlays, {
+      modes,
+      onHost: (mode, password) => void hostTransfer(order, mode, password),
+      onCancel: () => openCampaign(),
+    });
+  };
+
+  const hostTransfer = async (
+    order: OrderOfBattle,
+    mode: OnlineMode,
+    password: string,
+  ): Promise<void> => {
+    if (!online.available) return;
+    scenarioId = order.scenarioId;
+    seed = order.seed;
+    try {
+      enterTable(
+        await online.host(
+          {
+            scenarioId: order.scenarioId,
+            seed: order.seed,
+            options: {},
+            computerSeats: [],
+            mode,
+            password,
+            order,
+          },
+          tableEvents(),
+        ),
+      );
+    } catch (err) {
+      act.notify(`Could not open a table: ${reasonOf(err)}`, 'bad');
+      openCampaign();
+    }
   };
 
   // --- Online --------------------------------------------------------------

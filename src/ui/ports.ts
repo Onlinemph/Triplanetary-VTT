@@ -14,6 +14,8 @@ import type { Command, CommandResult } from '@engine/commands.js';
 import type { Hex, Point } from '@engine/hex.js';
 import type { GameMap } from '@engine/map.js';
 import type { GameOptions, GameState, PlayerId } from '@engine/types.js';
+import type { CampaignCommand, CampaignState } from '@campaign/engine.js';
+import type { BattleResult, OrderOfBattle } from '@campaign/orders.js';
 import type { SeatInfo, TableInfo } from '@net/supabase/protocol.js';
 import type { RenderView } from '@render/renderer.js';
 
@@ -122,6 +124,8 @@ export interface ScenarioBuildOptions {
   readonly options: Partial<GameOptions>;
   /** Fleets bought on the point-buy screen, by player id. */
   readonly fleets?: Readonly<Record<string, readonly string[]>>;
+  /** A campaign order of battle, for the scenario that builds from one. */
+  readonly order?: OrderOfBattle;
 }
 
 /** Seat indices the computer plays, into `ScenarioDescriptor.seats`. */
@@ -249,28 +253,41 @@ export type OnlinePort =
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
-// Campaign hand-off
+// The campaign
 // ---------------------------------------------------------------------------
 
+/** A running campaign: state to read, orders to give, changes to hear about. */
+export interface CampaignHandle {
+  readonly state: CampaignState;
+  readonly canUndo: boolean;
+  dispatch(cmd: CampaignCommand): { readonly ok: boolean; readonly reason?: string };
+  subscribe(fn: () => void): () => void;
+  undo(): void;
+}
+
 /**
- * A battle that arrived from the campaign (in the companion Ogre app) as a
- * `?battle=` token on the address bar.
- *
- * The shell treats the order itself as opaque — decoding, building and
- * result-encoding all live in `main.ts` with the campaign codec — and only
- * needs the three things here: something to show the players, a game to
- * start, and the token to hand back when it is over.
+ * Everything the war room needs from the world: the saved war, and the codec
+ * glue for the two hand-offs. `main.ts` implements it with `CampaignSession`,
+ * `localStorage` and the campaign codec; the shell never learns any of those
+ * concretely.
  */
-export interface BattleHandoff {
-  /** One line for the pre-game dialog: who sails where, against what. */
-  readonly summary: string;
-  /** Build the battle's starting position from the order. */
-  build(): GameState;
-  /**
-   * The encoded `BattleResult`, once the game has a victory; null while it is
-   * still undecided. The player pastes this back into the campaign.
-   */
-  resultFor(state: GameState, history: readonly Command[]): string | null;
+export interface CampaignDeps {
+  /** The saved war, if one is running. Stable across calls. */
+  current(): CampaignHandle | null;
+  /** Start a fresh war, replacing any saved one. */
+  start(seed: number): CampaignHandle;
+  /** Burn the ledger. */
+  abandon(): void;
+  /** The pasteable token a battle order travels as. */
+  orderToken(order: OrderOfBattle): string;
+  /** The link that opens a ground battle in the companion Ogre app. */
+  ogreUrl(order: OrderOfBattle): string;
+  /** Parse a pasted result token. Throws with a sentence worth showing. */
+  parseResult(text: string): BattleResult;
+  /** The result of a finished battle here, or null while it is undecided. */
+  resultFor(state: GameState, history: readonly Command[]): BattleResult | null;
+  /** The pasteable token for a result, for battles that must travel back. */
+  resultToken(result: BattleResult): string;
 }
 
 export interface AppDeps {
@@ -286,8 +303,14 @@ export interface AppDeps {
   readonly online?: OnlinePort;
   /** A join code off the address bar, so a link lands straight in the lobby. */
   readonly joinCode?: string | null;
-  /** A campaign battle off the address bar, decoded and ready to start. */
-  readonly battle?: BattleHandoff | null;
+  /**
+   * A campaign battle off the address bar (`?battle=…`), decoded and ready to
+   * start — sent by a campaign running in another browser, the way a `?join=`
+   * code is sent by a table running somewhere else.
+   */
+  readonly battle?: OrderOfBattle | null;
   /** Why a `?battle=` token on the address bar could not be honoured. */
   readonly battleError?: string | null;
+  /** The campaign layer — see `CampaignDeps`. */
+  readonly campaign: CampaignDeps;
 }
