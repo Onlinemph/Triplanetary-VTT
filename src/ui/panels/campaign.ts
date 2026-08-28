@@ -47,6 +47,8 @@ export interface WarRoomHooks {
   readonly onlineReason?: string;
   notify(text: string, tone: 'info' | 'warn' | 'bad'): void;
   newSeed(): number;
+  /** The campaign changed under the war room — the shell's chart pins follow. */
+  onChanged?(): void;
   onClose?(): void;
 }
 
@@ -100,6 +102,10 @@ export const openWarRoom = (
     width: 'wide',
     ...(hooks.onClose ? { onClose: hooks.onClose } : {}),
   });
+  // The war room docks beside the chart instead of covering it: the scrim
+  // goes transparent and lets the pointer through, so the inner system stays
+  // visible — and pannable — with the campaign's sites pinned to it.
+  overlay.el.parentElement?.classList.add('war-scrim');
 
   const handleOrBust = (): CampaignHandle => {
     const handle = deps.current();
@@ -289,7 +295,7 @@ export const openWarRoom = (
       }
       return el(
         'div',
-        { class: 'war-site' },
+        { class: 'war-site', 'data-site': def.id },
         el(
           'div',
           { class: 'war-site-name' },
@@ -622,6 +628,9 @@ export const openWarRoom = (
   };
 
   const draw = (): void => {
+    // Anything that redraws the room may have changed the war; the shell's
+    // pins re-read the state on their next frame, after this one settles.
+    hooks.onChanged?.();
     const handle = deps.current();
     if (!handle) {
       intro();

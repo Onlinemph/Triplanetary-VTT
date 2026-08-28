@@ -237,8 +237,9 @@ happens when they land. The start menu asks which you want: **Triplanetary**,
 **Ogre**, or **Two games, one war**. The whole companion game — engine,
 renderer, record sheets and all four of its scenarios — is embedded, loaded on
 demand behind its own door, so an Ogre attack on a command post is playable
-here for its own sake. **The campaign lives here too**, and the war room is
-hot-seat and saves itself in the browser after every order. A contested
+here for its own sake. **The campaign lives here too**: the war room docks
+beside the live chart with the eight sites pinned to their planets and moons,
+is hot-seat, and saves itself in the browser after every order. A contested
 transfer is this game: fight it at this keyboard, with the computer flying
 either side, or **host it as an online table** — quick or refereed, like any
 other scenario, with the order of battle riding the table's setup so every

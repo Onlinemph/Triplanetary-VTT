@@ -38,11 +38,13 @@ import {
 } from '@engine/types.js';
 import type { PlotOption, PlotPreview } from '@engine/movement.js';
 import { phaseIsIdle } from '@engine/reducer.js';
+import { createInitialState } from '@engine/state.js';
 import { button, el, fill } from './components/dom.js';
 import { icon } from './components/glyphs.js';
 import { type Overlay, openModal } from './components/modal.js';
 import { aiCommand } from '../ai/driver.js';
 import { type OrderOfBattle, isCampaignBattle, orderOf } from '@campaign/orders.js';
+import { CAMPAIGN_SIDES, SITES } from '@campaign/data.js';
 import type {
   AppDeps,
   ComputerSeats,
@@ -109,6 +111,9 @@ export const createApp = (deps: AppDeps): App => {
   // part of the chart, and pinning them with `hexToScreen` keeps the renderer
   // free of transient UI state.
   const flashLayer = el('div', { class: 'flash-layer', 'aria-hidden': 'true' });
+  // The campaign's sites, pinned to their bodies while the war room is open —
+  // the same `hexToScreen` trick as the flash layer, but clickable.
+  const warPins = el('div', { class: 'war-pins' });
   const overlays = el('div', { class: 'overlays' });
   const noticeHost = el('div', {
     class: 'notice-host',
@@ -158,6 +163,7 @@ export const createApp = (deps: AppDeps): App => {
     { class: 'app' },
     canvas,
     flashLayer,
+    warPins,
     topBar.el,
     noticeHost,
     badge.el,
@@ -996,6 +1002,95 @@ export const createApp = (deps: AppDeps): App => {
     });
   };
 
+  // --- The war-room backdrop ------------------------------------------------
+
+  /**
+   * A shipless state for drawing the bare chart: the planets, the orbits and
+   * the printed bases, with nothing in flight. Minted once — the strategic
+   * layer never mutates it.
+   */
+  let chartState: GameState | null = null;
+  const warChartState = (): GameState =>
+    (chartState ??= createInitialState({
+      scenarioId: 'war-room',
+      seed: 1,
+      players: [],
+      ships: [],
+      map: deps.map,
+    }));
+
+  /**
+   * With no game in progress the canvas shows the chart itself, so the start
+   * menu and the war room sit over the inner system rather than a void — and
+   * while the war room is open, the campaign's sites are pinned to their
+   * bodies on it.
+   */
+  const drawWarBackdrop = (): void => {
+    if (!renderer) return;
+    renderer.render(warChartState(), {
+      viewer: null,
+      showGravity: false,
+      showDetection: false,
+      showCourseHistory: false,
+    });
+    updateWarPins();
+  };
+
+  const updateWarPins = (): void => {
+    const r = renderer;
+    const camp = warRoom ? deps.campaign.current() : null;
+    if (!r || !camp) {
+      if (warPins.childElementCount > 0) fill(warPins);
+      return;
+    }
+    const state = camp.state;
+    fill(
+      warPins,
+      ...SITES.flatMap((def) => {
+        const body = deps.map.bodies.find((b) => b.id === def.id);
+        const site = state.sites[def.id];
+        if (!body || !site) return [];
+        const holder = site.holder ? CAMPAIGN_SIDES[site.holder] : null;
+        const p = r.hexToScreen(body.hex);
+        const troops = Object.values(site.garrison).reduce((n, c) => n + c, 0);
+        const contested = state.pending?.site === def.id;
+        return [
+          el(
+            'button',
+            {
+              class: `war-pin${contested ? ' is-contested' : ''}`,
+              type: 'button',
+              style: {
+                left: `${p.x}px`,
+                top: `${p.y}px`,
+                '--player': holder?.color ?? 'var(--ink-faint)',
+              },
+              title: `${def.name} — ${holder?.name ?? 'unclaimed'}`,
+              onclick: () => focusWarSite(def.id),
+            },
+            el('span', { class: 'war-pin-name', text: def.name }),
+            el('span', {
+              class: 'war-pin-meta mono',
+              text: `${def.production} PP · ${troops > 0 ? `${troops} garrison` : 'open'}`,
+            }),
+            contested ? el('span', { class: 'war-pin-flag', text: 'under attack' }) : null,
+          ),
+        ];
+      }),
+    );
+  };
+
+  /** A pin was clicked: bring that site's card into view in the war room. */
+  const focusWarSite = (id: string): void => {
+    const card = warRoom?.el.querySelector<HTMLElement>(`[data-site="${id}"]`);
+    if (!card) return;
+    card.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    card.classList.remove('is-flash');
+    // Reflow so a second click on the same site restarts the animation.
+    void card.offsetWidth;
+    card.classList.add('is-flash');
+  };
+
   /**
    * Advance through phases in which nobody has an order to give.
    *
@@ -1111,10 +1206,15 @@ export const createApp = (deps: AppDeps): App => {
   };
 
   const render = (): void => {
+    // With no game running the play panels are empty frames; hide them so the
+    // chart under the start menu and the war room is the chart, not chrome.
+    root.classList.toggle('is-idle', !session);
     if (!session) {
       paintTable();
+      drawWarBackdrop();
       return;
     }
+    if (warPins.childElementCount > 0) fill(warPins);
     runComputerSeats();
     autoAdvance();
     const state = session.state;
@@ -1466,14 +1566,26 @@ export const createApp = (deps: AppDeps): App => {
       ...(online.available ? {} : { onlineReason: online.reason }),
       notify: (text, tone) => act.notify(text, tone),
       newSeed: () => deps.randomSeed(),
+      // Every order redraws the war room; the pins on the chart follow it.
+      onChanged: () => schedule(),
       onClose: () => {
         warRoom = null;
+        syncViewInset();
+        schedule();
         const next = afterWarRoom;
         afterWarRoom = null;
         if (next) next();
         else if (!session && table === null) act.newGame();
       },
     });
+    // The war room docks to the side of the chart rather than covering it:
+    // frame the whole disc in what it leaves visible, so the sites it pins
+    // are actually on screen.
+    if (!session) {
+      syncViewInset();
+      renderer?.fitChart();
+    }
+    schedule();
   };
 
   /** Open an online table for a campaign transfer, and share the code. */
@@ -1778,6 +1890,12 @@ export const createApp = (deps: AppDeps): App => {
       return Number.isFinite(v) ? v : 0;
     };
     const gap = px('--gap');
+    // With no game underneath, the play panels are hidden; what occludes the
+    // chart is the docked war room, when it is open.
+    if (!session) {
+      const warW = warRoom ? Math.min(600, window.innerWidth * 0.92) : 0;
+      return { top: px('--top-h') + gap, right: warW + gap, bottom: gap, left: gap };
+    }
     // Below the stacking breakpoint the side panels become bottom sheets, so
     // only the top bar is really occluding the chart.
     const stacked = window.matchMedia('(max-width: 900px)').matches;
@@ -1818,6 +1936,9 @@ export const createApp = (deps: AppDeps): App => {
     canvas.addEventListener('wheel', onWheel, { passive: false });
     window.addEventListener('keydown', onKeyDown);
     resizeObserver.observe(canvas);
+    // First paint: with no game yet, this draws the bare chart so whatever
+    // opens next — the start menu, a prompt, the war room — sits over it.
+    schedule();
 
     // A `?join=` link is an instruction, not a preference: somebody sent it, and
     // the first thing to show is the table it names rather than a scenario list

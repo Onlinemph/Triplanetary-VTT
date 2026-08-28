@@ -182,6 +182,120 @@ canvas.map.is-dragging {
   z-index: 5;
 }
 
+/* With no game running the play panels are empty frames over the chart. */
+.app.is-idle .panel-left,
+.app.is-idle .panel-right,
+.app.is-idle .panel-bottom,
+.app.is-idle .sheet-tabs {
+  display: none;
+}
+
+/* --- Campaign sites, pinned to their bodies on the chart ------------------ */
+
+.war-pins {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+  z-index: 6;
+}
+
+.war-pin {
+  position: absolute;
+  transform: translate(-50%, calc(-100% - 14px));
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  padding: 5px 9px 6px;
+  border-radius: var(--radius-sm);
+  border: 1px solid color-mix(in srgb, var(--player) 55%, transparent);
+  border-bottom-width: 2px;
+  background: color-mix(in srgb, var(--player) 14%, rgba(8, 11, 18, 0.82));
+  backdrop-filter: blur(2px);
+  pointer-events: auto;
+  cursor: pointer;
+  text-align: center;
+}
+
+.war-pin::after {
+  content: '';
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  border: 5px solid transparent;
+  border-top-color: color-mix(in srgb, var(--player) 55%, transparent);
+}
+
+.war-pin:hover {
+  background: color-mix(in srgb, var(--player) 26%, rgba(8, 11, 18, 0.88));
+}
+
+.war-pin-name {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: var(--ink);
+}
+
+.war-pin-meta {
+  font-size: 9.5px;
+  color: var(--ink-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  white-space: nowrap;
+}
+
+.war-pin-flag {
+  font-size: 9.5px;
+  font-weight: 600;
+  color: var(--bad);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.war-pin.is-contested {
+  animation: war-pin-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes war-pin-pulse {
+  50% {
+    border-color: var(--bad);
+  }
+}
+
+/* The war room docks beside the chart rather than covering it. */
+.scrim.war-scrim {
+  background: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  pointer-events: none;
+  place-items: stretch end;
+  padding: 0;
+}
+
+.war-scrim .modal {
+  pointer-events: auto;
+  width: min(600px, 92vw);
+  max-height: 100%;
+  height: 100%;
+  border-radius: 0;
+  border-top: none;
+  border-bottom: none;
+  border-right: none;
+}
+
+.war-site.is-flash {
+  animation: war-site-flash 1.1s var(--ease);
+}
+
+@keyframes war-site-flash {
+  20% {
+    background: var(--accent-dim);
+  }
+}
+
 .flash-ring {
   position: absolute;
   width: 34px;
