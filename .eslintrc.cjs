@@ -53,8 +53,9 @@ module.exports = {
   },
   overrides: [
     {
-      // The rules engine and the scenarios are pure functions of their input.
-      files: ['src/engine/**/*.ts', 'src/scenarios/**/*.ts'],
+      // The rules engine, the scenarios and the campaign boundary are pure
+      // functions of their input.
+      files: ['src/engine/**/*.ts', 'src/scenarios/**/*.ts', 'src/campaign/**/*.ts'],
       excludedFiles: ['**/*.test.ts'],
       rules: {
         'no-console': 'error',

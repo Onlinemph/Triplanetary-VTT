@@ -108,8 +108,9 @@ const TERRA = map.body('terra')!;
 describe('scenarios', () => {
   it('every scenario builds a coherent state', async () => {
     const { SCENARIOS, buildScenario } = await import('../src/scenarios/index.js');
-    // Ten printed scenarios, plus the Flight School trainer.
-    expect(SCENARIOS.length).toBe(11);
+    // Ten printed scenarios, the Flight School trainer, and the campaign's
+    // Contested Transfer.
+    expect(SCENARIOS.length).toBe(12);
 
     for (const def of SCENARIOS) {
       const state = buildScenario(def.id, { seed: 42 });

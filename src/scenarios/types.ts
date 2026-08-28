@@ -18,6 +18,7 @@ import type { Command, CommandResult } from '@engine/commands.js';
 import type { GameMap } from '@engine/map.js';
 import type { ShipClass } from '@engine/ships.js';
 import type { GameOptions, GameState, VictoryState } from '@engine/types.js';
+import type { OrderOfBattle } from '@campaign/orders.js';
 
 /** Rulebook shorthand for how long a scenario runs. */
 export type ScenarioLength = 'short' | 'medium' | 'long';
@@ -50,6 +51,14 @@ export interface BuildOptions {
    * caller that does not care can ignore this entirely.
    */
   readonly fleets?: Readonly<Record<string, readonly ShipClass[]>>;
+  /**
+   * The campaign's order of battle, for scenarios that build from a supplied
+   * force list rather than a fixed allowance. Scenarios that price their own
+   * fleets ignore it; the one that reads it (`contestedTransfer.ts`) falls
+   * back to a printed default when it is absent, so a caller that does not
+   * care can ignore this entirely.
+   */
+  readonly order?: OrderOfBattle;
 }
 
 /** A scenario's opening point-buy: who has a budget, and how much. */

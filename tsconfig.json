@@ -18,6 +18,7 @@
     "baseUrl": ".",
     "paths": {
       "@engine/*": ["src/engine/*"],
+      "@campaign/*": ["src/campaign/*"],
       "@render/*": ["src/render/*"],
       "@ui/*": ["src/ui/*"],
       "@scenarios/*": ["src/scenarios/*"],

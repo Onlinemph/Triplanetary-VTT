@@ -17,6 +17,7 @@ import { SHIP_CLASSES } from '@engine/ships.js';
 import type { GameState } from '@engine/types.js';
 
 import { biPlanetary } from './biPlanetary.js';
+import { contestedTransfer } from './contestedTransfer.js';
 import { escape } from './escape.js';
 import { fleetMutiny } from './fleetMutiny.js';
 import { flightSchool } from './flightSchool.js';
@@ -47,6 +48,9 @@ export const SCENARIOS: readonly ScenarioDef[] = [
   fleetMutiny,
   interplanetaryWar,
   prospecting,
+  // The campaign's space battle, last on the list: it points at the campaign
+  // in the companion app, and the printed scenarios come first.
+  contestedTransfer,
 ];
 
 export {
@@ -61,6 +65,7 @@ export {
   fleetMutiny,
   interplanetaryWar,
   prospecting,
+  contestedTransfer,
 };
 
 const BY_ID: ReadonlyMap<string, ScenarioDef> = new Map(SCENARIOS.map((s) => [s.id, s]));
