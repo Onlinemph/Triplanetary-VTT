@@ -163,10 +163,15 @@ export const setupFrom = (
   seed: number,
   options: Record<string, boolean> | undefined,
   fleets: Readonly<Record<string, readonly string[]>> | undefined,
+  order?: unknown,
 ): BuildOptions => ({
   seed,
   options: options as Partial<GameState['options']>,
   fleets: fleets as BuildOptions['fleets'],
+  // A campaign order of battle rides the same trust boundary as the fleets:
+  // arbitrary JSON until the scenario has looked at it, and the scenario
+  // throws on one it dislikes.
+  order: order as BuildOptions['order'],
 });
 
 const trimmed = (name: string | undefined): string | null => {

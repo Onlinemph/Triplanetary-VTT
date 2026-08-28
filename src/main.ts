@@ -28,10 +28,16 @@ import {
   type TableConnection,
 } from '@net/supabase/index.js';
 import { MapRenderer } from '@render/renderer.js';
-import { SCENARIO_SUMMARIES, buildScenario } from '@scenarios/index.js';
+import { SCENARIO_SUMMARIES, buildScenario, scenarioById } from '@scenarios/index.js';
 import { SHIP_CLASSES, type ShipClass } from '@engine/ships.js';
+import { decodeOrder, decodeResult, encodeOrder, encodeResult } from '@campaign/codec.js';
+import { type OrderOfBattle, orderOf } from '@campaign/orders.js';
+import { readBattleResult } from '@campaign/result.js';
+import { CampaignSession } from '@campaign/session.js';
 import { createApp } from '@ui/app.js';
 import type {
+  CampaignDeps,
+  CampaignHandle,
   LinkState,
   OnlinePort,
   RendererPort,
@@ -54,6 +60,9 @@ const port = (session: GameSession): SessionPort => ({
   },
   get map() {
     return session.map;
+  },
+  get history() {
+    return session.history;
   },
   dispatch: (cmd) => session.dispatch(cmd),
   subscribe: (fn) => session.subscribe(fn),
@@ -321,6 +330,9 @@ const online: OnlinePort =
                 ...(opts.seed === undefined ? {} : { seed: opts.seed }),
                 options: optionRecord(opts.options),
                 ...(opts.fleets ? { fleets: opts.fleets } : {}),
+                // A campaign order rides the frozen setup so every joiner
+                // rebuilds the order's battle, not the printed default.
+                ...(opts.order ? { order: opts.order } : {}),
               },
             });
             return quickAdopt(client, session, true);
@@ -332,6 +344,7 @@ const online: OnlinePort =
             seed: opts.seed,
             options: optionRecord(opts.options),
             ...(opts.fleets ? { fleets: opts.fleets } : {}),
+            ...(opts.order ? { order: opts.order } : {}),
             computerSeats: opts.computerSeats,
           });
           return adopt(client, session, true);
@@ -376,11 +389,137 @@ const online: OnlinePort =
         },
       };
 
+// ---------------------------------------------------------------------------
+// The campaign
+// ---------------------------------------------------------------------------
+
+/**
+ * Where the companion Ogre app lives, for the "Open in Ogre" link on a ground
+ * battle. Overridable at build time for forks and local hacking; the token in
+ * the link works against any copy of the app.
+ */
+const OGRE_URL = envValue(import.meta.env.VITE_OGRE_URL) || 'https://onlinemph.github.io/OGRE-VTT/';
+
+const CAMPAIGN_KEY = 'triplanetary-campaign-v1';
+
+let campaign: CampaignSession | null = null;
+let campaignLoaded = false;
+
+/** Save after every accepted order. A campaign file is a seed and a log. */
+const persistCampaign = (session: CampaignSession): void => {
+  if (session !== campaign) return; // an abandoned war must not resurrect itself
+  try {
+    localStorage.setItem(CAMPAIGN_KEY, session.serialise());
+  } catch {
+    console.warn('the campaign could not be saved to localStorage');
+  }
+};
+
+const adoptCampaign = (session: CampaignSession): CampaignSession => {
+  session.subscribe(() => persistCampaign(session));
+  persistCampaign(session);
+  return session;
+};
+
+const loadCampaign = (): CampaignSession | null => {
+  if (campaignLoaded) return campaign;
+  campaignLoaded = true;
+  try {
+    const raw = localStorage.getItem(CAMPAIGN_KEY);
+    campaign = raw == null ? null : adoptCampaign(CampaignSession.deserialise(raw));
+  } catch (err) {
+    console.warn('the saved campaign would not load', err);
+    campaign = null;
+  }
+  return campaign;
+};
+
+const handleOf = (session: CampaignSession): CampaignHandle => ({
+  get state() {
+    return session.state;
+  },
+  get canUndo() {
+    return session.canUndo;
+  },
+  dispatch: (cmd) => session.dispatch(cmd),
+  subscribe: (fn) => session.subscribe(fn),
+  undo: () => session.undo(),
+});
+
+const campaignDeps: CampaignDeps = {
+  current: () => {
+    const session = loadCampaign();
+    return session ? handleOf(session) : null;
+  },
+  start: (seed) => {
+    campaignLoaded = true;
+    campaign = adoptCampaign(new CampaignSession(seed));
+    return handleOf(campaign);
+  },
+  abandon: () => {
+    campaignLoaded = true;
+    campaign = null;
+    try {
+      localStorage.removeItem(CAMPAIGN_KEY);
+    } catch {
+      // Nothing to do: with storage blocked there was nothing saved either.
+    }
+  },
+  orderToken: (order) => encodeOrder(order),
+  ogreUrl: (order) => {
+    const url = new URL(OGRE_URL);
+    url.searchParams.set('battle', encodeOrder(order));
+    return url.toString();
+  },
+  parseResult: (text) => decodeResult(text),
+  resultFor: (state, history) => {
+    // The shell may have wandered off to an ordinary scenario; a game that
+    // was not built from an order has no result to hand back.
+    if (orderOf(state.scenarioData) === null) return null;
+    return readBattleResult(state, DEFAULT_MAP, history);
+  },
+  resultToken: (result) => encodeResult(result),
+};
+
+/**
+ * A `?battle=` token is an `OrderOfBattle` sent by a campaign running in
+ * another browser. A token for a scenario this app does not play (a landing,
+ * say, pasted at the wrong app) gets told which app it wanted.
+ */
+const battleFrom = (
+  token: string | null,
+): { battle: OrderOfBattle | null; error: string | null } => {
+  if (token === null || token === '') return { battle: null, error: null };
+  try {
+    const order = decodeOrder(token);
+    // 'landing' is not on this app's scenario list, but it is playable here
+    // all the same: the shell mounts the embedded Ogre view for it.
+    if (order.scenarioId === 'landing' || scenarioById(order.scenarioId)) {
+      return { battle: order, error: null };
+    }
+    return {
+      battle: null,
+      error: `That order is for "${order.scenarioId}", which this app does not play.`,
+    };
+  } catch (err) {
+    return {
+      battle: null,
+      error: err instanceof Error ? err.message : 'the token does not decode',
+    };
+  }
+};
+
+const { battle, error: battleError } = battleFrom(
+  new URL(window.location.href).searchParams.get('battle'),
+);
+
 const app = createApp({
   root: mount,
   map: DEFAULT_MAP,
   online,
   joinCode: new URL(window.location.href).searchParams.get('join'),
+  battle,
+  battleError,
   // `SCENARIO_SUMMARIES` is the table already flattened to the shell's shape:
   // `ScenarioDef.players` is a {min, max} range, `ScenarioDescriptor.players` a
   // single seat count.
@@ -408,6 +547,7 @@ const app = createApp({
   // The seed is the only place the shell reaches for entropy; the engine itself
   // never does, so a game is fully reproducible from its seed and command log.
   randomSeed: () => Math.floor(Math.random() * 0xffffffff),
+  campaign: campaignDeps,
 });
 
 app.start();

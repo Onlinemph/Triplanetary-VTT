@@ -1678,6 +1678,56 @@ canvas.map.is-dragging {
   min-width: 0;
 }
 
+/* --- The start menu: two complete games, and the war that links them ------ */
+
+.start-menu {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+}
+
+.game-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 16px 14px 18px;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.03);
+  cursor: pointer;
+  text-align: left;
+}
+
+.game-card:hover {
+  background: rgba(255, 255, 255, 0.07);
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+}
+
+.game-name {
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.game-tag {
+  font-size: 10px;
+  color: var(--ink-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.game-blurb {
+  font-size: 11.5px;
+  color: var(--ink-dim);
+  line-height: 1.45;
+}
+
+@media (max-width: 720px) {
+  .start-menu {
+    grid-template-columns: 1fr;
+  }
+}
+
 .scenario-brief {
   display: flex;
   flex-direction: column;
@@ -2486,5 +2536,151 @@ kbd {
 
   .lobby-head {
     flex-direction: column;
+  }
+}
+
+/* --------------------------------------------------------------------------
+   Campaign hand-off: the pasteable order/result token.
+   -------------------------------------------------------------------------- */
+
+.battle-token {
+  width: 100%;
+  margin-top: 8px;
+  padding: 8px 10px;
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--ink-dim);
+  background: var(--panel-solid);
+  border: 1px solid var(--hair);
+  border-radius: 8px;
+  resize: vertical;
+  word-break: break-all;
+}
+
+/* --------------------------------------------------------------------------
+   The war room: the campaign screen.
+   -------------------------------------------------------------------------- */
+
+.war-room .chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 8px 0;
+  align-items: center;
+}
+
+.war-sides {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin: 10px 0;
+}
+
+.war-side {
+  padding: 10px 12px;
+  border: 1px solid var(--hair);
+  border-left: 3px solid var(--player, var(--hair));
+  border-radius: 10px;
+  opacity: 0.75;
+}
+
+.war-side.is-active {
+  opacity: 1;
+  background: var(--panel-raised);
+}
+
+.war-site {
+  display: grid;
+  grid-template-columns: 1fr 1.5fr auto;
+  gap: 8px;
+  align-items: center;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--hair);
+}
+
+.war-site:last-child {
+  border-bottom: none;
+}
+
+.war-site-name {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.war-site-hold {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.war-holder {
+  color: var(--player, var(--ink));
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.war-count {
+  min-width: 28px;
+  text-align: center;
+}
+
+.war-sub {
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--ink-dim);
+}
+
+.war-ledger {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 180px;
+  overflow-y: auto;
+  font-size: 12.5px;
+}
+
+.war-entry {
+  display: flex;
+  gap: 8px;
+  padding: 3px 0;
+  color: var(--ink-dim);
+}
+
+.war-entry.tone-good {
+  color: var(--good);
+}
+.war-entry.tone-warn {
+  color: var(--warn);
+}
+.war-entry.tone-bad {
+  color: var(--bad);
+}
+
+.war-turn {
+  color: var(--ink-faint);
+  flex: none;
+}
+
+.war-foot {
+  border-top: 1px solid var(--hair);
+  padding-top: 10px;
+  margin-top: 12px;
+}
+
+.war-abandon {
+  margin-left: auto;
+  color: var(--bad);
+}
+
+@media (max-width: 720px) {
+  .war-sides {
+    grid-template-columns: 1fr;
+  }
+
+  .war-site {
+    grid-template-columns: 1fr;
   }
 }

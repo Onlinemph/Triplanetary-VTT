@@ -29,6 +29,7 @@ import { DEFAULT_MAP } from '../src/engine/map.js';
 import { buildScenario } from '../src/scenarios/index.js';
 import { QuickTable, fingerprint, type QuickLike } from '../src/net/supabase/quick.js';
 import type { ChannelLike } from '../src/net/supabase/client.js';
+import type { OrderOfBattle } from '../src/campaign/orders.js';
 
 const SCHEMA = readFileSync(
   fileURLToPath(new URL('../supabase/quick/schema.sql', import.meta.url)),
@@ -154,6 +155,41 @@ describe('a table, opened and joined', () => {
     expect(fingerprint(alice.session.state)).toBe(expected);
     expect(fingerprint(bob.session.state)).toBe(expected);
     expect(bob.session.state.scenarioId).toBe('bi-planetary');
+  });
+
+  it('carries a campaign order to every browser at the table', async () => {
+    // A contested transfer from the campaign: the order rides in the frozen
+    // setup, so a joiner rebuilds the order's battle — hulls, freight and
+    // terms — not the scenario's printed default.
+    const order: OrderOfBattle = {
+      battleId: 'b1-mars-space',
+      seed: 7,
+      scenarioId: 'contested-transfer',
+      sides: [
+        {
+          player: 'combine',
+          faction: 'North American Combine',
+          forces: { transport: 1, corvette: 1, freight: 3 },
+        },
+        { player: 'paneuro', faction: 'Paneuropean Federation', forces: { corvette: 2 } },
+      ],
+      terms: { origin: 'terra', target: 'mars', turnLimit: 20, cargoLots: 3 },
+    };
+    const alice = player('Alice');
+    const bob = player('Bob');
+    const code = await alice.table.host({
+      scenarioId: 'contested-transfer',
+      password: 'pw',
+      setup: { order },
+    });
+    await bob.table.join(code, 'pw');
+
+    const expected = fingerprint(buildScenario('contested-transfer', { order }));
+    expect(fingerprint(alice.session.state)).toBe(expected);
+    expect(fingerprint(bob.session.state)).toBe(expected);
+    // Both boards carry the order itself, which is what the result reader
+    // needs at whichever browser ends up reporting the battle home.
+    expect(bob.session.state.scenarioData['order']).toEqual(order);
   });
 
   it('seats the host in their own table', async () => {

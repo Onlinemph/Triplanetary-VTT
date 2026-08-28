@@ -27,6 +27,7 @@
     "paths": {
       "npm:@supabase/supabase-js@^2.112.3": ["node_modules/@supabase/supabase-js/dist/index.d.mts"],
       "@engine/*": ["src/engine/*"],
+      "@campaign/*": ["src/campaign/*"],
       "@render/*": ["src/render/*"],
       "@ui/*": ["src/ui/*"],
       "@scenarios/*": ["src/scenarios/*"],

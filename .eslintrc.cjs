@@ -44,7 +44,13 @@ module.exports = {
     ],
     '@typescript-eslint/no-explicit-any': 'error',
     '@typescript-eslint/no-floating-promises': 'error',
-    '@typescript-eslint/switch-exhaustiveness-check': 'error',
+    // A `default` clause is a deliberate "everything else behaves the same"
+    // statement — the ported Ogre terrain switches say exactly that — so it
+    // counts as exhaustive here, as it does in the companion repository.
+    '@typescript-eslint/switch-exhaustiveness-check': [
+      'error',
+      { considerDefaultExhaustiveForUnions: true },
+    ],
     '@typescript-eslint/no-unnecessary-condition': 'off',
     eqeqeq: ['error', 'always', { null: 'ignore' }],
     'no-console': ['warn', { allow: ['warn', 'error'] }],
@@ -53,8 +59,16 @@ module.exports = {
   },
   overrides: [
     {
-      // The rules engine and the scenarios are pure functions of their input.
-      files: ['src/engine/**/*.ts', 'src/scenarios/**/*.ts'],
+      // The rules engine, the scenarios and the campaign boundary are pure
+      // functions of their input.
+      files: [
+        'src/engine/**/*.ts',
+        'src/scenarios/**/*.ts',
+        'src/campaign/**/*.ts',
+        'src/ogre/engine/**/*.ts',
+        'src/ogre/scenarios/**/*.ts',
+        'src/ogre/campaign/**/*.ts',
+      ],
       excludedFiles: ['**/*.test.ts'],
       rules: {
         'no-console': 'error',
