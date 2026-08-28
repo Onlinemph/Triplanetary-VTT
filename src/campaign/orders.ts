@@ -57,6 +57,17 @@ export interface BattleResult {
 export const ORDER_KEY = 'order';
 
 /**
+ * Whether an order came from a campaign, as opposed to being a scenario's own
+ * printed default. The convention, held on both sides of the boundary: a
+ * default order's battleId ends in `-default` (`transfer-default`,
+ * `landing-default`), and a campaign never mints one that does. The victory
+ * screen uses this to offer a result token only for battles with somewhere to
+ * send it.
+ */
+export const isCampaignBattle = (order: OrderOfBattle): boolean =>
+  !order.battleId.endsWith('-default');
+
+/**
  * The order a state was built from, if it was built from one.
  *
  * The order rides in `scenarioData` — the free-form channel the campaign
