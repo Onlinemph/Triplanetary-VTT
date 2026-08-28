@@ -931,6 +931,15 @@ describe('reaping abandoned lobbies', () => {
       alter table public.games disable trigger games_touch_updated_at;
       update public.games set updated_at = now() - interval '30 days'
         where id in ('${STALE}', '${OLD_PLAYING}', '${OLD_DONE}');
+      -- FRESH gets a definite age too, and the reason is a flake this suite
+      -- shipped. It used to stay at its insert-time default, and the sweep
+      -- test asked for everything older than *now* — a question the clock
+      -- cannot reliably answer about a row written in the same millisecond,
+      -- which on a fast CI runner it sometimes was. Two seconds is old enough
+      -- to be strictly older than any later statement on a millisecond clock,
+      -- and young enough that the default 12-hour sweep still spares it.
+      update public.games set updated_at = now() - interval '2 seconds'
+        where id = '${FRESH}';
       alter table public.games enable trigger games_touch_updated_at;
     `);
   });
@@ -970,10 +979,12 @@ describe('reaping abandoned lobbies', () => {
   });
 
   it('takes an age, so the referee can sweep harder if it needs to', async () => {
-    // Zero, not one second: the fresh lobby was made milliseconds ago and is
-    // genuinely not a second old yet, so `interval '1 second'` correctly spares
-    // it and would prove nothing about the parameter.
-    const out = await asReferee(`select public.reap_stale_lobbies(interval '0 seconds') as gone`);
+    // One second against a lobby aged two: the fresh lobby is spared by the
+    // default twelve hours and taken by this, which is the parameter doing
+    // something — and both facts hold whatever the clock's granularity. The
+    // previous version swept at '0 seconds' and raced the clock instead; see
+    // the note on the backdate above.
+    const out = await asReferee(`select public.reap_stale_lobbies(interval '1 second') as gone`);
     expect(out.error).toBeNull();
     const left = await survivors();
     expect(left).not.toContain(STALE);
