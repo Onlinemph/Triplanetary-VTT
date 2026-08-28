@@ -239,9 +239,12 @@ the browser after every order. A contested transfer is this game: fight it at
 this keyboard, with the computer flying either side, or **host it as an online
 table** — quick or refereed, like any other scenario, with the order of battle
 riding the table's setup so every joiner rebuilds the same battle. A landing is
-an Ogre battle: the **Open in Ogre** link carries it over as a pasteable token,
-and the result comes home through a paste box. What lands is whatever tonnage
-got down, at ten tons of hold to the armour unit. See
+an Ogre battle, **fought right here too**: the whole companion game — engine,
+renderer and record sheets — is embedded, loaded on demand the moment a
+landing begins, and the result reports straight back to the war room. The
+**Open in the Ogre app** link and the pasteable order/result tokens remain,
+for fighting the ground half on another machine. What lands is whatever
+tonnage got down, at ten tons of hold to the armour unit. See
 [docs/CAMPAIGN.md](docs/CAMPAIGN.md).
 
 ---
@@ -287,6 +290,8 @@ src/
   scenarios/   the rulebook's scenarios, as pure builders + victory checks
   campaign/    the war with OGRE-VTT: its engine, tables and session, and the
                battle boundary (orders, token codec, result reader)
+  ogre/        the companion game, embedded: OGRE-VTT's engine, renderer and
+               The Landing, with its shell pruned to a mountable battle view
   ai/          the computer opponent: a state in, one command out
   net/         GameSession (command log, undo, save) and the transports
     supabase/  the online referee's contract, rules loop and browser client

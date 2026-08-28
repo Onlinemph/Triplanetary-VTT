@@ -32,12 +32,14 @@ giving, pass the keyboard, and end the turn when both sides are done.
   order token to whoever flies it elsewhere. When the transfer is decided,
   the victory screen reports the result straight back to the war room in this
   browser, and offers it as a token everywhere else.
-- **A landing** is an Ogre battle. The war room's **Open in Ogre** link opens
-  the companion app with the order aboard (`?battle=<token>`); the result
-  comes home through the paste box. What lands is whatever tonnage actually
-  got down, converted at ten tons of hold to the armour unit — a transport
-  lands five armour units, and shipping a Mark V is a seventeen-lot convoy
-  operation.
+- **A landing** is an Ogre battle — and it is fought right here too. **Fight
+  it here** mounts the embedded Ogre view (see below) and the result reports
+  straight back, exactly as a transfer's does. The **Open in the Ogre app**
+  link and the order/result tokens remain, for fighting the ground half in
+  the companion app or on another machine. What lands is whatever tonnage
+  actually got down, converted at ten tons of hold to the armour unit — a
+  transport lands five armour units, and shipping a Mark V is a
+  seventeen-lot convoy operation.
 - **Results are read, not typed.** Survivors return to pools or become the
   new garrison; a defeated landing force is stranded and lost; delivered
   tonnage is read off the board.
@@ -65,8 +67,20 @@ Here, under `src/campaign/`:
   verbatim in OGRE-VTT rather than shared; the codec tests on both sides pin
   the wire format, which is the actual compatibility contract.
 
-In OGRE-VTT: the same boundary files, and The Landing — the scenario a ground
-battle builds.
+And under `src/ogre/`: **the companion game itself, embedded**. OGRE-VTT's
+engine, renderer and The Landing are ported wholesale (imports made relative,
+nothing else changed — its own rules tests run here under `tests/ogre/` to
+prove it), and its shell is pruned to a mountable battle view
+(`src/ogre/ui/battle.ts`) with the application chrome removed and the ending
+reworked: a _Report to the campaign_ button when a war room in this browser
+is waiting, a result token otherwise. Its stylesheet is scoped under
+`.ogre-app` so the amber palette stays inside the battle, and the whole thing
+is a code-split chunk loaded the moment a landing begins — a player who never
+reaches the ground never downloads it.
+
+In OGRE-VTT: the same boundary files, and the original of The Landing — the
+standalone app remains fully playable, and remains the way to fight the
+ground half on a machine that only has the Ogre app.
 
 ## The online half
 
