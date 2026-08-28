@@ -233,18 +233,20 @@ relay server.
 This app is linked to its companion,
 [OGRE-VTT](https://github.com/onlinemph/OGRE-VTT), by a campaign over the inner
 Solar System: Triplanetary decides who gets to the ground, and Ogre decides what
-happens when they land. **The campaign lives here** — press **Open the
-campaign** on the scenario screen. The war room is hot-seat and saves itself in
-the browser after every order. A contested transfer is this game: fight it at
-this keyboard, with the computer flying either side, or **host it as an online
-table** — quick or refereed, like any other scenario, with the order of battle
-riding the table's setup so every joiner rebuilds the same battle. A landing is
-an Ogre battle, **fought right here too**: the whole companion game — engine,
-renderer and record sheets — is embedded, loaded on demand the moment a
-landing begins, and the result reports straight back to the war room. The
-**Open in the Ogre app** link and the pasteable order/result tokens remain,
-for fighting the ground half on another machine. What lands is whatever
-tonnage got down, at ten tons of hold to the armour unit. See
+happens when they land. The start menu asks which you want: **Triplanetary**,
+**Ogre**, or **Two games, one war**. The whole companion game — engine,
+renderer, record sheets and all four of its scenarios — is embedded, loaded on
+demand behind its own door, so an Ogre attack on a command post is playable
+here for its own sake. **The campaign lives here too**, and the war room is
+hot-seat and saves itself in the browser after every order. A contested
+transfer is this game: fight it at this keyboard, with the computer flying
+either side, or **host it as an online table** — quick or refereed, like any
+other scenario, with the order of battle riding the table's setup so every
+joiner rebuilds the same battle. A landing is an Ogre battle, **fought right
+here too**, and the result reports straight back to the war room. The **Open
+in the Ogre app** link and the pasteable order/result tokens remain, for
+fighting the ground half on another machine. What lands is whatever tonnage
+got down, at ten tons of hold to the armour unit. See
 [docs/CAMPAIGN.md](docs/CAMPAIGN.md).
 
 ---

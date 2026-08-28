@@ -13,10 +13,12 @@ this document says what was built and how to play it.
 
 ## How to play it
 
-Open the scenario screen and press **Open the campaign** (it reads **Return
-to the war** once one is saved in this browser — the campaign saves itself
-after every order). The war room is hot-seat: pick whose orders you are
-giving, pass the keyboard, and end the turn when both sides are done.
+The start menu offers three games: **Triplanetary**, **Ogre**, and **Two
+games, one war** — the campaign. (The Triplanetary scenario picker keeps a
+campaign door in its foot as well, and the campaign card notes when a war is
+already saved in this browser — the campaign saves itself after every order.)
+The war room is hot-seat: pick whose orders you are giving, pass the
+keyboard, and end the turn when both sides are done.
 
 - **Buying and garrisoning** happen in the war room. Prices are in production
   points; held sites pay their production at each consolidation, and two
@@ -68,15 +70,18 @@ Here, under `src/campaign/`:
   the wire format, which is the actual compatibility contract.
 
 And under `src/ogre/`: **the companion game itself, embedded**. OGRE-VTT's
-engine, renderer and The Landing are ported wholesale (imports made relative,
+engine, renderer and all four scenarios — Mark III Attack, Mark V Attack, The
+Crossing, and The Landing — are ported wholesale (imports made relative,
 nothing else changed — its own rules tests run here under `tests/ogre/` to
 prove it), and its shell is pruned to a mountable battle view
 (`src/ogre/ui/battle.ts`) with the application chrome removed and the ending
-reworked: a _Report to the campaign_ button when a war room in this browser
-is waiting, a result token otherwise. Its stylesheet is scoped under
-`.ogre-app` so the amber palette stays inside the battle, and the whole thing
-is a code-split chunk loaded the moment a landing begins — a player who never
-reaches the ground never downloads it.
+matched to what was fought: a _Report to the campaign_ button when a war room
+in this browser is waiting, a result token for a campaign running somewhere
+else, and the verdict alone for a printed scenario played from the start
+menu's **Ogre** door. Its stylesheet is scoped under `.ogre-app` so the amber
+palette stays inside the battle, and the whole thing is a set of code-split
+chunks loaded the moment a battle (or the Ogre scenario list) is asked for —
+a player who never leaves space never downloads it.
 
 In OGRE-VTT: the same boundary files, and the original of The Landing — the
 standalone app remains fully playable, and remains the way to fight the
