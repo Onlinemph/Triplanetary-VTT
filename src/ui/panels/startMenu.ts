@@ -56,9 +56,9 @@ export const openStartMenu = (host: HTMLElement, o: StartMenuOpts): Overlay => {
       o.onOgre,
     ),
     card(
-      'Two games, one war',
-      o.campaignRunning ? 'the campaign — a war is saved here' : 'the campaign',
-      'Triplanetary decides who gets to the ground; Ogre decides what happens when they land. Buy fleets and armour, run convoys, and hold two thirds of the inner system.',
+      'Orbital Drop',
+      'two games, one war',
+      'Triplanetary handles everything above the atmosphere; Ogre handles everything below it. Buy tanks as cargo, run convoys under the guns, and put a cybertank on somebody else’s colony.',
       o.onCampaign,
     ),
   );

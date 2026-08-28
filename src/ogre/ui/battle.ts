@@ -109,7 +109,13 @@ export const createOgreBattle = (opts: OgreBattleOptions): OgreBattle => {
   opts.host.appendChild(root);
 
   const battle = opts.battle;
-  const scenario = battle.kind === 'order' ? LANDING : (scenarioById(battle.id) ?? LANDING);
+  // An order names its own scenario — The Landing for the old campaign,
+  // The Assault for Orbital Drop — and an unknown name falls back to the
+  // landing rather than crashing a battle that already has its forces.
+  const scenario =
+    battle.kind === 'order'
+      ? (scenarioById(battle.order.scenarioId) ?? LANDING)
+      : (scenarioById(battle.id) ?? LANDING);
   const session = new GameSession(
     battle.kind === 'order'
       ? scenario.build({ seed: battle.order.seed, order: battle.order })

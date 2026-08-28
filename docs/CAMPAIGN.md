@@ -1,5 +1,11 @@
 # Two games, one war
 
+> **Superseded as the combined game by [Orbital Drop](ORBITAL-DROP.md)**,
+> which plays the war as a live Triplanetary scenario rather than a separate
+> strategic layer. The war room below still works — the Triplanetary scenario
+> picker keeps its door — and its battle boundary (orders, tokens, the
+> embedded landing) is the plumbing Orbital Drop's ground battles ride.
+
 This app is linked to its companion,
 [OGRE-VTT](https://github.com/onlinemph/OGRE-VTT), by a campaign over the
 inner Solar System: Triplanetary decides who gets to the ground, and Ogre

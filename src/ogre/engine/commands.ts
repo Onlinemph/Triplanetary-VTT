@@ -145,6 +145,35 @@ export interface ResignCommand extends CommandBase {
   readonly type: 'resign';
 }
 
+/**
+ * Orbital Drop §3.03: bring one reaction-force unit onto the map.
+ *
+ * The unit already exists in the state with `offMap: 'reserve'`; from the
+ * scenario's reaction turn on, its owner may place it on any legal hex of
+ * their own map edge during their movement phase. It arrives with its move
+ * spent — racing back to the alarm is the whole of that turn's work.
+ */
+export interface DeployReserveCommand extends CommandBase {
+  readonly type: 'deployReserve';
+  readonly unit: UnitId;
+  readonly at: Hex;
+}
+
+/**
+ * Orbital Drop §6.01: one fire-support strike from a warship in orbit.
+ *
+ * Attack strength is the ship's Triplanetary combat strength, resolved as an
+ * ordinary CRT attack against any target, at any range. The scenario holds
+ * the strikes still owed in `scenarioData.orbitalStrikes`; each command
+ * consumes one.
+ */
+export interface OrbitalStrikeCommand extends CommandBase {
+  readonly type: 'orbitalStrike';
+  /** Index into the scenario's remaining strike list. */
+  readonly strike: number;
+  readonly target: TargetRef;
+}
+
 export type Command =
   | MoveUnitCommand
   | RamCommand
@@ -159,7 +188,9 @@ export type Command =
   | CombineInfantryCommand
   | AttackCommand
   | EndPhaseCommand
-  | ResignCommand;
+  | ResignCommand
+  | DeployReserveCommand
+  | OrbitalStrikeCommand;
 
 export type CommandType = Command['type'];
 

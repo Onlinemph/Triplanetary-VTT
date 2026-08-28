@@ -234,7 +234,21 @@ This app is linked to its companion,
 [OGRE-VTT](https://github.com/onlinemph/OGRE-VTT), by a campaign over the inner
 Solar System: Triplanetary decides who gets to the ground, and Ogre decides what
 happens when they land. The start menu asks which you want: **Triplanetary**,
-**Ogre**, or **Two games, one war**. The whole companion game — engine,
+**Ogre**, or **Orbital Drop**.
+
+**Orbital Drop is the combined game, and it literally is Triplanetary**: a
+scenario ([docs/ORBITAL-DROP.md](docs/ORBITAL-DROP.md)) in which the space war
+is played as written — real ships, real vector plots, real planetary defences —
+and ground units join the equipment price list as cargo. A transport's fifty-ton
+hold is five tanks, or one module of a disassembled Ogre. Every base keeps six
+squads of free militia and whatever garrison its owner has quietly bought;
+declare an invasion from orbit, suppress the hexside or run the guns, and when
+the transports are down the sky freezes and the battle is fought in the
+embedded Ogre view — on a battlefield generated from the world's terrain
+profile, with the reaction force racing home from turn 5, a module-shipped
+cybertank spending its first turns as an inert hull, and every warship overhead
+owing one orbital strike. The result resumes the day: a captured base changes
+hands and pays MCr 0.5 a day. The whole companion game — engine,
 renderer, record sheets and all four of its scenarios — is embedded, loaded on
 demand behind its own door, so an Ogre attack on a command post is playable
 here for its own sake. **The campaign lives here too**: the war room docks

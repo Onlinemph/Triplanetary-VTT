@@ -238,7 +238,22 @@ export type CargoKind =
   | 'orbitalBase'
   | 'passengers'
   | 'freight'
-  | 'megacredits';
+  | 'megacredits'
+  // Orbital Drop: ground forces ride as cargo, named in the companion game's
+  // vocabulary. Priced by the scenario (cost null), so no other scenario's
+  // shop sells tanks.
+  | 'gndINF'
+  | 'gndHVY'
+  | 'gndMSL'
+  | 'gndGEV'
+  | 'gndLT'
+  | 'gndLGEV'
+  | 'gndHWZ'
+  | 'gndMHWZ'
+  | 'gndSHVY'
+  | 'gndMCRL'
+  | 'mk3Module'
+  | 'mk5Module';
 
 export interface CargoDef {
   readonly kind: CargoKind;
@@ -299,5 +314,33 @@ export const CARGO: Readonly<Record<CargoKind, CargoDef>> = {
     mass: 1,
     cost: null,
     remarks: 'One ton of cargo space per MCr (Interplanetary War).',
+  },
+
+  // --- Orbital Drop: ground forces (tonnage per its §2 price list) ---------
+  // A transport's 50-ton hold is five tanks, or one Ogre module. Costs are
+  // null because only the Orbital Drop scenario sells them, at its own list.
+  gndINF: { kind: 'gndINF', name: 'Infantry squad', mass: 2, cost: null },
+  gndHVY: { kind: 'gndHVY', name: 'Heavy Tank', mass: 10, cost: null },
+  gndMSL: { kind: 'gndMSL', name: 'Missile Tank', mass: 10, cost: null },
+  gndGEV: { kind: 'gndGEV', name: 'GEV', mass: 10, cost: null },
+  gndLT: { kind: 'gndLT', name: 'Light Tank', mass: 5, cost: null },
+  gndLGEV: { kind: 'gndLGEV', name: 'Light GEV', mass: 5, cost: null },
+  gndHWZ: { kind: 'gndHWZ', name: 'Howitzer', mass: 20, cost: null },
+  gndMHWZ: { kind: 'gndMHWZ', name: 'Mobile Howitzer', mass: 20, cost: null },
+  gndSHVY: { kind: 'gndSHVY', name: 'Superheavy Tank', mass: 20, cost: null },
+  gndMCRL: { kind: 'gndMCRL', name: 'Missile Crawler (loaded)', mass: 30, cost: null },
+  mk3Module: {
+    kind: 'mk3Module',
+    name: 'Ogre Mark III module',
+    mass: 50,
+    cost: null,
+    remarks: 'Four modules assemble a Mark III; all must be landed first.',
+  },
+  mk5Module: {
+    kind: 'mk5Module',
+    name: 'Ogre Mark V module',
+    mass: 50,
+    cost: null,
+    remarks: 'Five modules assemble a Mark V; all must be landed first.',
   },
 };

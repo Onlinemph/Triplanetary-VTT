@@ -248,6 +248,55 @@ export interface DeliverCargo extends CommandBase {
 }
 
 /**
+ * Orbital Drop §2: buy ground forces into a hold at a base the buyer controls.
+ * The kinds are the `gnd*` and Ogre-module cargo entries, priced by the
+ * scenario's own list rather than the p. 9 catalogue.
+ */
+export interface PurchaseGround extends CommandBase {
+  readonly type: 'purchaseGround';
+  readonly ship: ShipId;
+  readonly kind: CargoKind;
+  readonly quantity: number;
+}
+
+/**
+ * Orbital Drop §3.02-3.03: buy garrison units for a base you hold, up to the
+ * base's caps — optionally into the reaction force, which enters the ground
+ * battle from its map edge on turn 5.
+ */
+export interface PurchaseGarrison extends CommandBase {
+  readonly type: 'purchaseGarrison';
+  readonly base: string;
+  /** An Ogre unit class id ('HVY', 'INF'…) or Ogre type ('MK3', 'MK5'). */
+  readonly unit: string;
+  readonly count: number;
+  readonly reaction?: boolean;
+}
+
+/** Orbital Drop §4.01: declare an invasion of a base, in the ordnance phase. */
+export interface DeclareInvasion extends CommandBase {
+  readonly type: 'declareInvasion';
+  readonly base: string;
+}
+
+/**
+ * Orbital Drop §7: apply the ground battle's verdict. The result is the
+ * campaign boundary's `BattleResult`, declared structurally here because the
+ * engine cannot import the boundary — the dependency runs the other way.
+ */
+export interface ResolveGroundBattle extends CommandBase {
+  readonly type: 'resolveGroundBattle';
+  readonly result: {
+    readonly battleId: string;
+    readonly winners: readonly string[];
+    readonly level: 'complete' | 'standard' | 'marginal';
+    readonly survivors: Readonly<Record<string, Readonly<Record<string, number>>>>;
+    readonly victoryPoints: Readonly<Record<string, number>>;
+    readonly replay: { readonly seed: number; readonly log: readonly unknown[] };
+  };
+}
+
+/**
  * Advanced system: "The owner chooses what kind of damage to recover from."
  *
  * A standing preference per ship rather than a prompt each turn — repairs happen
@@ -317,6 +366,10 @@ export type Command =
   | LoadCargo
   | AnnounceDestination
   | DeliverCargo
+  | PurchaseGround
+  | PurchaseGarrison
+  | DeclareInvasion
+  | ResolveGroundBattle
   | ChooseRepair
   | ChooseDevastatedSide
   | ConvertFleet

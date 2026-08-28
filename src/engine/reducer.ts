@@ -323,6 +323,15 @@ const COMMAND_PHASES: Readonly<Record<CommandType, readonly Phase[] | typeof ANY
   chooseDevastatedSide: ANY,
   // Retribution's Freedom Fleet musters between days.
   convertFleet: ['resupply'],
+  // Orbital Drop. Ground forces and garrisons are bought at the stopover with
+  // everything else; an invasion is declared in the ordnance phase (§4.01);
+  // the landing itself, and a lift-off from a failed one, are astrogation
+  // decisions like any other landing; the ground battle's verdict arrives
+  // whenever the battle ends.
+  purchaseGround: ['resupply'],
+  purchaseGarrison: ['resupply'],
+  declareInvasion: ['ordnance'],
+  resolveGroundBattle: ANY,
   // Flow.
   endPhase: ANY,
   concede: ANY,
@@ -353,6 +362,9 @@ const RESPONDER_COMMANDS: ReadonlySet<CommandType> = new Set<CommandType>([
   'declineCounterattack',
   'respondToSurrender',
   'chooseDevastatedSide',
+  // Orbital Drop: the ground battle's verdict arrives when the battle ends,
+  // whichever seat happens to hold the frozen sky.
+  'resolveGroundBattle',
 ]);
 
 // ---------------------------------------------------------------------------
@@ -763,6 +775,10 @@ const dispatch = (state: GameState, cmd: Command, map: GameMap): Outcome => {
     case 'announceDestination':
     case 'deliverCargo':
     case 'convertFleet':
+    case 'purchaseGround':
+    case 'purchaseGarrison':
+    case 'declareInvasion':
+    case 'resolveGroundBattle':
       return scenarioCommand(state, cmd, map);
 
     // --- Flow ---
@@ -1131,6 +1147,11 @@ const feasible = (state: GameState, type: CommandType, player: PlayerId, map: Ga
     case 'deliverCargo':
     case 'convertFleet':
       return commandHookFor(state.scenarioId) !== null && mine.length > 0;
+    case 'purchaseGround':
+    case 'purchaseGarrison':
+    case 'declareInvasion':
+    case 'resolveGroundBattle':
+      return commandHookFor(state.scenarioId) !== null;
   }
 };
 

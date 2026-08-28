@@ -541,7 +541,9 @@ export const createApp = (deps: AppDeps): App => {
         },
         onTriplanetary: () => openTriPicker(),
         onOgre: () => void openOgreScenarios(),
-        onCampaign: () => openCampaign(),
+        // The war IS a scenario now: Orbital Drop, hot seat, fresh seed.
+        onCampaign: () =>
+          startScenario('orbital-drop', deps.randomSeed(), gameOptions, undefined, []),
       });
     },
   };
@@ -1080,6 +1082,76 @@ export const createApp = (deps: AppDeps): App => {
     );
   };
 
+  /**
+   * Orbital Drop's pins: every body with a base, its holder and its garrison,
+   * read live off the game state. The same layer the old war room pins use.
+   */
+  const updateDropPins = (state: GameState): void => {
+    const r = renderer;
+    if (!r) return;
+    const data = state.scenarioData['orbitalDrop'] as
+      | {
+          garrisons?: Record<
+            string,
+            { units?: Record<string, number>; reaction?: Record<string, number> }
+          >;
+          invasion?: { world?: string } | null;
+        }
+      | undefined;
+    const garrisons = data?.garrisons ?? {};
+    const contestedWorld = data?.invasion?.world ?? null;
+
+    const byBody = new Map<string, { owner: PlayerId | null; bases: number; troops: number }>();
+    for (const base of Object.values(state.bases)) {
+      if (base.destroyed || base.kind === 'orbital') continue;
+      const world = deps.map.bodyAt(base.hex)?.id ?? base.id.split(':')[0]!;
+      const entry = byBody.get(world) ?? { owner: null, bases: 0, troops: 0 };
+      entry.bases += 1;
+      if (base.owner !== null) entry.owner = base.owner;
+      const g = garrisons[base.id];
+      const count = (f?: Record<string, number>): number =>
+        Object.values(f ?? {}).reduce((n, c) => n + c, 0);
+      entry.troops += count(g?.units) + count(g?.reaction);
+      byBody.set(world, entry);
+    }
+
+    fill(
+      warPins,
+      ...[...byBody.entries()].flatMap(([world, info]) => {
+        const body = deps.map.bodies.find((b) => b.id === world);
+        if (!body) return [];
+        const p = r.hexToScreen(body.hex);
+        const holder = info.owner ? state.players[info.owner] : null;
+        const contested = contestedWorld === world;
+        return [
+          el(
+            'button',
+            {
+              class: `war-pin${contested ? ' is-contested' : ''}`,
+              type: 'button',
+              style: {
+                left: `${p.x}px`,
+                top: `${p.y}px`,
+                '--player': holder?.color ?? 'var(--ink-faint)',
+              },
+              title: `${body.name} — ${holder?.name ?? 'militia only'}`,
+              onclick: () => {
+                renderer?.focusOn(body.hex);
+                schedule();
+              },
+            },
+            el('span', { class: 'war-pin-name', text: body.name }),
+            el('span', {
+              class: 'war-pin-meta mono',
+              text: `MCr ${(info.bases * 0.5).toFixed(1)}/day · ${info.troops > 0 ? `${info.troops} garrison` : 'militia'}`,
+            }),
+            contested ? el('span', { class: 'war-pin-flag', text: 'invasion' }) : null,
+          ),
+        ];
+      }),
+    );
+  };
+
   /** A pin was clicked: bring that site's card into view in the war room. */
   const focusWarSite = (id: string): void => {
     const card = warRoom?.el.querySelector<HTMLElement>(`[data-site="${id}"]`);
@@ -1214,7 +1286,12 @@ export const createApp = (deps: AppDeps): App => {
       drawWarBackdrop();
       return;
     }
-    if (warPins.childElementCount > 0) fill(warPins);
+    if (session.state.scenarioId === 'orbital-drop') {
+      updateDropPins(session.state);
+      syncOrbitalGround();
+    } else if (warPins.childElementCount > 0) {
+      fill(warPins);
+    }
     runComputerSeats();
     autoAdvance();
     const state = session.state;
@@ -1516,6 +1593,96 @@ export const createApp = (deps: AppDeps): App => {
         if (!session && table === null) act.newGame();
       },
     });
+  };
+
+  // --- Orbital Drop: the frozen sky --------------------------------------
+
+  /** The battle id already mounted (or offered), so render() mounts it once. */
+  let orbitalMounted: string | null = null;
+  let frozenPrompt: Overlay | null = null;
+
+  const orbitalPending = (): OrderOfBattle | null => {
+    if (!session || session.state.scenarioId !== 'orbital-drop') return null;
+    const data = session.state.scenarioData['orbitalDrop'] as
+      { pendingGround?: OrderOfBattle | null } | undefined;
+    return data?.pendingGround ?? null;
+  };
+
+  /** Mount the assault the freeze minted; its result resumes the day. */
+  const mountOrbitalBattle = async (order: OrderOfBattle): Promise<void> => {
+    if (groundBattle) return;
+    frozenPrompt?.close();
+    const make = await import('../ogre/ui/battle.js').catch(() => null);
+    if (make === null) {
+      act.notify('The ground battle view could not be loaded.', 'bad');
+      return;
+    }
+    groundBattle = make.createOgreBattle({
+      host: overlays,
+      battle: {
+        kind: 'order',
+        order,
+        reportLabel: 'Return to the war',
+        onResult: (result) => {
+          const s = session;
+          if (!s) return;
+          const outcome = s.dispatch({
+            type: 'resolveGroundBattle',
+            by: activePlayer(s.state),
+            result,
+          });
+          if (!outcome.ok) {
+            act.notify(outcome.reason ?? 'The war refused the result.', 'bad');
+            return;
+          }
+          closeGroundBattle();
+        },
+        resultToken: (result) => deps.campaign.resultToken(result),
+      },
+      onExit: () => {
+        closeGroundBattle();
+        openFrozenPrompt(order);
+      },
+    });
+  };
+
+  /** The sky stays frozen: leaving the battle only steps outside the door. */
+  const openFrozenPrompt = (order: OrderOfBattle): void => {
+    if (frozenPrompt) return;
+    frozenPrompt = openModal(overlays, {
+      title: 'The sky is frozen',
+      subtitle: 'Orbital Drop §4.05',
+      body: el('p', {
+        class: 'help-p',
+        text:
+          'All courses, ordnance and fuel states hold exactly as plotted. ' +
+          'Nothing moves until the ground battle is decided.',
+      }),
+      dismissible: false,
+      onClose: () => {
+        frozenPrompt = null;
+      },
+      actions: [
+        {
+          label: 'Return to the battle',
+          variant: 'primary',
+          onClick: () => void mountOrbitalBattle(order),
+        },
+      ],
+    });
+  };
+
+  /** Called from render(): mount the ground battle the moment the sky freezes. */
+  const syncOrbitalGround = (): void => {
+    const order = orbitalPending();
+    if (!order) {
+      orbitalMounted = null;
+      if (frozenPrompt) frozenPrompt.close();
+      return;
+    }
+    if (orbitalMounted === order.battleId) return;
+    orbitalMounted = order.battleId;
+    void mountOrbitalBattle(order);
   };
 
   /**
