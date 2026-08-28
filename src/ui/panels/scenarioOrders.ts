@@ -14,10 +14,13 @@
  */
 
 import { combatStrength } from '@engine/combat.js';
+import { canTradeAt, cargoSpace } from '@engine/logistics.js';
 import { DEFAULT_MAP } from '@engine/map.js';
+import { CARGO, type CargoKind } from '@engine/ships.js';
 import { cargoCount } from '@engine/state.js';
 import { FLIGHT_SCHOOL_EXERCISES, flightSchoolProgress } from '../../scenarios/flightSchool.js';
 import { fuelBurned } from '../../scenarios/helpers.js';
+import { GARRISON_PRICES, GROUND_PRICES } from '../../scenarios/orbitalDrop.js';
 import { type GameState, type Ship, activePlayer, controllerOf } from '@engine/types.js';
 import { type Child, button, el } from '../components/dom.js';
 import { note, section, statRow } from '../components/meters.js';
@@ -248,9 +251,181 @@ const flightSchoolSection = (ctx: Ctx): Child[] => {
   ];
 };
 
+// ---------------------------------------------------------------------------
+// Orbital Drop
+// ---------------------------------------------------------------------------
+
+const dropDataOf = (state: GameState): Record<string, unknown> =>
+  (state.scenarioData['orbitalDrop'] ?? {}) as Record<string, unknown>;
+
+const forceLine = (force: Readonly<Record<string, number>>): string => {
+  const parts = Object.entries(force)
+    .filter(([, n]) => n > 0)
+    .map(([unit, n]) => `${unit} ×${n}`);
+  return parts.length > 0 ? parts.join(', ') : 'none';
+};
+
+/**
+ * Orbital Drop's orders, scoped the way the game plays: the ground shop and
+ * the garrison quartermaster live at the base the selected ship is docked at,
+ * and the invasion is declared from the ship's own ordnance phase. Every
+ * button is offered and the engine refuses it with a sentence, exactly like
+ * every other order.
+ */
+const orbitalDropSection = (ctx: Ctx, ship: Ship): Child[] => {
+  const { state, act } = ctx;
+  if (state.scenarioId !== 'orbital-drop') return [];
+  const by = activePlayer(state);
+  if (controllerOf(ship) !== by) return [];
+  const data = dropDataOf(state);
+  const out: Child[] = [];
+
+  const pending = data['pendingGround'] as { battleId?: string } | null | undefined;
+  if (pending) {
+    return [
+      section(
+        'Orbital Drop',
+        note('warn', 'The sky is frozen: a ground battle must be decided before the war moves.'),
+      ),
+    ];
+  }
+
+  const invasion = data['invasion'] as
+    { base: string; world: string; declaredTurn: number } | null | undefined;
+  if (invasion) {
+    out.push(
+      section(
+        'Invasion',
+        note(
+          'warn',
+          `Invasion declared against ${invasion.base}. Land transports at its hexside — ` +
+            'suppress the hexside first, or the guns fire once at each lander at 2:1.',
+        ),
+      ),
+    );
+  }
+
+  // --- The ground shop and the quartermaster, at the docked base ----------
+  if (state.phase === 'resupply') {
+    const at = canTradeAt(state, ship, DEFAULT_MAP);
+    const base = at.ok && at.baseId !== undefined ? state.bases[at.baseId] : undefined;
+    const held = !!base && base.owner !== null && base.owner === by;
+
+    if (held) {
+      out.push(
+        section(
+          'Ground forces',
+          note('info', `Hold: ${cargoSpace(ship)} tons free. Bought here, carried as cargo.`),
+          el(
+            'div',
+            { class: 'chips' },
+            ...Object.entries(GROUND_PRICES).map(([kind, price]) =>
+              button({
+                label: `${CARGO[kind as CargoKind].name} ${price} · ${CARGO[kind as CargoKind].mass}t`,
+                variant: 'quiet',
+                title: `MCr ${price}, ${CARGO[kind as CargoKind].mass} tons of hold`,
+                onClick: () =>
+                  act.dispatch({
+                    type: 'purchaseGround',
+                    by,
+                    ship: ship.id,
+                    kind: kind as CargoKind,
+                    quantity: 1,
+                  }),
+              }),
+            ),
+          ),
+        ),
+      );
+
+      const g = (
+        data['garrisons'] as
+          | Record<string, { units?: Record<string, number>; reaction?: Record<string, number> }>
+          | undefined
+      )?.[base.id];
+      out.push(
+        section(
+          `Garrison at ${base.id}`,
+          statRow('Standing', forceLine(g?.units ?? {})),
+          statRow('Reaction force', forceLine(g?.reaction ?? {})),
+          note('info', 'Plus 6 squads of free militia — there is never a walkover.'),
+          el(
+            'div',
+            { class: 'chips' },
+            el('span', { class: 'sel-label', text: 'Buy' }),
+            ...Object.entries(GARRISON_PRICES).map(([unit, price]) =>
+              button({
+                label: `${unit} ${price}`,
+                variant: 'quiet',
+                title: `MCr ${price}, into the standing garrison`,
+                onClick: () =>
+                  act.dispatch({ type: 'purchaseGarrison', by, base: base.id, unit, count: 1 }),
+              }),
+            ),
+          ),
+          el(
+            'div',
+            { class: 'chips' },
+            el('span', { class: 'sel-label', text: 'Reaction' }),
+            ...['INF', 'HVY', 'MSL', 'GEV'].map((unit) =>
+              button({
+                label: `${unit} ${GARRISON_PRICES[unit]}`,
+                variant: 'quiet',
+                title: 'Held off the map; enters the ground battle from turn 5',
+                onClick: () =>
+                  act.dispatch({
+                    type: 'purchaseGarrison',
+                    by,
+                    base: base.id,
+                    unit,
+                    count: 1,
+                    reaction: true,
+                  }),
+              }),
+            ),
+          ),
+        ),
+      );
+    }
+  }
+
+  // --- Declaring the invasion ---------------------------------------------
+  if (state.phase === 'ordnance' && !invasion) {
+    const targets = Object.values(state.bases).filter(
+      (b) => !b.destroyed && b.kind === 'planetary' && b.side && b.owner !== by,
+    );
+    if (targets.length > 0) {
+      out.push(
+        section(
+          'Declare invasion',
+          note(
+            'info',
+            'Takes a ship in orbit over the hexside. The landings begin tomorrow; the garrison hears the alarm today.',
+          ),
+          el(
+            'div',
+            { class: 'chips' },
+            ...targets.map((b) =>
+              button({
+                label: b.id,
+                variant: 'quiet',
+                title: b.owner === null ? 'Held by militia only' : `Held by ${b.owner}`,
+                onClick: () => act.dispatch({ type: 'declareInvasion', by, base: b.id }),
+              }),
+            ),
+          ),
+        ),
+      );
+    }
+  }
+
+  return out;
+};
+
 /** Every scenario-only control that applies to this ship, right now. */
 export const scenarioOrders = (ctx: Ctx, ship: Ship): Child[] => [
   ...flightSchoolSection(ctx),
   ...piracySection(ctx, ship),
   ...retributionSection(ctx, ship),
+  ...orbitalDropSection(ctx, ship),
 ];
