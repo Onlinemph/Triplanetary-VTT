@@ -337,7 +337,9 @@ const createAction = async (req: CreateRequest, userId: string): Promise<Respons
     // The client chose the options and the fleets, so both are arbitrary JSON
     // until the scenario has looked at them. `buildScenario` is the thing that
     // knows what a hull is called; a refusal here is a bad request, not a bug.
-    opening = sealDie(buildScenario(req.scenarioId, setupFrom(seed, req.options, req.fleets)));
+    opening = sealDie(
+      buildScenario(req.scenarioId, setupFrom(seed, req.options, req.fleets, req.order)),
+    );
   } catch {
     return refuse('that scenario cannot be set up with those options');
   }
@@ -623,7 +625,19 @@ const syncAction = async (req: SyncRequest, userId: string): Promise<Response> =
         // turn one and call it caught up.
         initial:
           since === 0
-            ? buildScenario(game.scenarioId, setupFrom(setup.seed, setup.options, setup.fleets))
+            ? buildScenario(
+                game.scenarioId,
+                // A campaign order is not stored on its own row: the opening
+                // state embedded it in `scenarioData` at create, nothing in
+                // play ever rewrites it, and the stored board is the same
+                // state a few commands later — so it is read back from there.
+                setupFrom(
+                  setup.seed,
+                  setup.options,
+                  setup.fleets,
+                  setup.state.scenarioData['order'],
+                ),
+              )
             : null,
         log: await readLog(game.id, since),
       };

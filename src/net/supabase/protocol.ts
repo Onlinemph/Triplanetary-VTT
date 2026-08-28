@@ -126,6 +126,15 @@ export interface CreateRequest {
   readonly seed?: number;
   readonly options?: Record<string, boolean>;
   readonly fleets?: Readonly<Record<string, readonly string[]>>;
+  /**
+   * A campaign order of battle, for the scenario that builds from one.
+   * Arbitrary JSON here for the same reason `fleets` carries plain strings:
+   * `buildScenario` is what knows what an order is, and it refuses one it
+   * dislikes. The referee needs no copy of its own afterwards — the built
+   * state carries the order in `scenarioData`, and that is where a sync
+   * recovers it to rebuild the opening position.
+   */
+  readonly order?: unknown;
   /** Seat ordinals the computer should play. */
   readonly computerSeats?: readonly number[];
   readonly name?: string;

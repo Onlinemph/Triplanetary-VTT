@@ -104,6 +104,11 @@ export interface QuickSetup {
   readonly seed?: number;
   readonly options?: Record<string, boolean>;
   readonly fleets?: Readonly<Record<string, readonly string[]>>;
+  /**
+   * A campaign order of battle, for the scenario that builds from one.
+   * Opaque JSON on the wire, like the fleets: `buildScenario` validates it.
+   */
+  readonly order?: unknown;
 }
 
 export interface QuickListing {
@@ -270,6 +275,7 @@ export class QuickTable {
         ...(opened.setup.seed === undefined ? {} : { seed: opened.setup.seed }),
         ...(opened.setup.options === undefined ? {} : { options: opened.setup.options }),
         ...(opened.setup.fleets === undefined ? {} : { fleets: opened.setup.fleets }),
+        ...(opened.setup.order === undefined ? {} : { order: opened.setup.order }),
       } as Parameters<typeof buildScenario>[1]),
     );
     this.log = [];
