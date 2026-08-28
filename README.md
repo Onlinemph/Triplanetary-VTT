@@ -233,13 +233,16 @@ relay server.
 This app is linked to its companion,
 [OGRE-VTT](https://github.com/onlinemph/OGRE-VTT), by a campaign over the inner
 Solar System: Triplanetary decides who gets to the ground, and Ogre decides what
-happens when they land. The campaign itself lives in the Ogre app; what arrives
-here is a **Contested Transfer** — a convoy with an invasion in its holds,
-opened by a `?battle=` link or a pasted order token, fought like any other game
-(hot seat or against the computer), and answered with a result token the
-victory screen offers to copy. The scenario is also on the ordinary scenario
-list. See [docs/CAMPAIGN.md](docs/CAMPAIGN.md) for this app's half of the
-hand-off, and the Ogre repository for the campaign design itself.
+happens when they land. **The campaign lives here** — press **Open the
+campaign** on the scenario screen. The war room is hot-seat and saves itself in
+the browser after every order. A contested transfer is this game: fight it at
+this keyboard, with the computer flying either side, or **host it as an online
+table** — quick or refereed, like any other scenario, with the order of battle
+riding the table's setup so every joiner rebuilds the same battle. A landing is
+an Ogre battle: the **Open in Ogre** link carries it over as a pasteable token,
+and the result comes home through a paste box. What lands is whatever tonnage
+got down, at ten tons of hold to the armour unit. See
+[docs/CAMPAIGN.md](docs/CAMPAIGN.md).
 
 ---
 
@@ -282,7 +285,8 @@ src/
     movement.ts combat.ts ordnance.ts       the phase rules
     detection.ts logistics.ts reducer.ts
   scenarios/   the rulebook's scenarios, as pure builders + victory checks
-  campaign/    the hand-off with OGRE-VTT: boundary types, token codec, result reader
+  campaign/    the war with OGRE-VTT: its engine, tables and session, and the
+               battle boundary (orders, token codec, result reader)
   ai/          the computer opponent: a state in, one command out
   net/         GameSession (command log, undo, save) and the transports
     supabase/  the online referee's contract, rules loop and browser client
