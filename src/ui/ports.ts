@@ -32,6 +32,11 @@ export interface SessionPort {
   /** Always the current state; re-read it after every dispatch. */
   readonly state: GameState;
   readonly map: GameMap;
+  /**
+   * The accepted commands so far. The shell never replays it; it exists so a
+   * campaign battle's result can carry its own replay — see `AppDeps.battle`.
+   */
+  readonly history: readonly Command[];
   dispatch(cmd: Command): CommandResult;
   /** Fires after any state change. Returns an unsubscribe function. */
   subscribe(fn: () => void): () => void;
@@ -243,6 +248,31 @@ export type OnlinePort =
 // Wiring
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Campaign hand-off
+// ---------------------------------------------------------------------------
+
+/**
+ * A battle that arrived from the campaign (in the companion Ogre app) as a
+ * `?battle=` token on the address bar.
+ *
+ * The shell treats the order itself as opaque — decoding, building and
+ * result-encoding all live in `main.ts` with the campaign codec — and only
+ * needs the three things here: something to show the players, a game to
+ * start, and the token to hand back when it is over.
+ */
+export interface BattleHandoff {
+  /** One line for the pre-game dialog: who sails where, against what. */
+  readonly summary: string;
+  /** Build the battle's starting position from the order. */
+  build(): GameState;
+  /**
+   * The encoded `BattleResult`, once the game has a victory; null while it is
+   * still undecided. The player pastes this back into the campaign.
+   */
+  resultFor(state: GameState, history: readonly Command[]): string | null;
+}
+
 export interface AppDeps {
   readonly root: HTMLElement;
   readonly map: GameMap;
@@ -256,4 +286,8 @@ export interface AppDeps {
   readonly online?: OnlinePort;
   /** A join code off the address bar, so a link lands straight in the lobby. */
   readonly joinCode?: string | null;
+  /** A campaign battle off the address bar, decoded and ready to start. */
+  readonly battle?: BattleHandoff | null;
+  /** Why a `?battle=` token on the address bar could not be honoured. */
+  readonly battleError?: string | null;
 }

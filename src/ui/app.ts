@@ -44,6 +44,7 @@ import { type Overlay, openModal } from './components/modal.js';
 import { aiCommand } from '../ai/driver.js';
 import type {
   AppDeps,
+  BattleHandoff,
   ComputerSeats,
   OnlineMode,
   OnlinePort,
@@ -1161,17 +1162,113 @@ export const createApp = (deps: AppDeps): App => {
     const v = session.state.victory;
     if (!v) return;
     const names = v.winners.map((id) => session!.state.players[id]?.name ?? id).join(', ');
+
+    // A campaign battle ends with something to carry home: the encoded result
+    // the player pastes back into the campaign in the companion Ogre app.
+    const token = deps.battle ? deps.battle.resultFor(session.state, session.history) : null;
+    const tokenField = token
+      ? el('textarea', {
+          class: 'battle-token',
+          readonly: true,
+          rows: '4',
+          'aria-label': 'Battle result token',
+          onFocus: (ev: FocusEvent) => (ev.target as HTMLTextAreaElement).select(),
+          text: token,
+        })
+      : null;
+
     openModal(overlays, {
       title: names ? `${names} win` : 'The game is over',
       subtitle: `${v.level} victory`,
-      body: el('p', { class: 'help-p', text: v.reason }),
+      body: token
+        ? el(
+            'div',
+            {},
+            el('p', { class: 'help-p', text: v.reason }),
+            el('p', {
+              class: 'help-p',
+              text: 'This was a campaign battle. Copy the result below and paste it back into the campaign, in the Ogre app.',
+            }),
+            tokenField,
+          )
+        : el('p', { class: 'help-p', text: v.reason }),
       actions: [
+        ...(token
+          ? [
+              {
+                label: 'Copy the result',
+                variant: 'primary' as const,
+                closes: false,
+                onClick: () => {
+                  navigator.clipboard?.writeText(token).then(
+                    () => act.notify('Result copied. Paste it into the campaign.', 'info'),
+                    () => tokenField?.select(),
+                  );
+                },
+              },
+            ]
+          : []),
         {
           label: 'Review the board',
           variant: 'quiet',
           onClick: () => undefined,
         },
-        { label: 'New game', variant: 'primary', onClick: () => act.newGame() },
+        { label: 'New game', variant: token ? 'quiet' : 'primary', onClick: () => act.newGame() },
+      ],
+    });
+  };
+
+  // --- Campaign battles ----------------------------------------------------
+
+  /**
+   * Start a battle handed over from the campaign. The order decides the
+   * scenario and both fleets; the one choice left to make here is who plays
+   * each seat, which is what `promptBattle` asks.
+   */
+  const startBattle = (battle: BattleHandoff, computer: ComputerSeats): void => {
+    closeTable(true);
+    let state: GameState;
+    try {
+      state = battle.build();
+    } catch (err) {
+      act.notify(reasonOf(err), 'bad');
+      act.newGame();
+      return;
+    }
+    scenarioId = state.scenarioId;
+    computerSeats = new Set(
+      computer.map((i) => state.playerOrder[i]).filter((p): p is PlayerId => p !== undefined),
+    );
+    installSession(deps.createSession(state));
+    canvas.focus();
+  };
+
+  /** A `?battle=` link is an instruction, like a `?join=` link: honour it first. */
+  const promptBattle = (battle: BattleHandoff): void => {
+    openModal(overlays, {
+      title: 'A battle from the campaign',
+      subtitle: 'Contested transfer',
+      body: el(
+        'div',
+        {},
+        el('p', { class: 'help-p', text: battle.summary }),
+        el('p', {
+          class: 'help-p',
+          text: 'Play both seats at this keyboard, or hand one to the computer. When the transfer is decided, copy the result token back into the campaign.',
+        }),
+      ),
+      actions: [
+        { label: 'Both seats here', variant: 'primary', onClick: () => startBattle(battle, []) },
+        {
+          label: 'Computer flies the patrol',
+          variant: 'quiet',
+          onClick: () => startBattle(battle, [1]),
+        },
+        {
+          label: 'Computer flies the convoy',
+          variant: 'quiet',
+          onClick: () => startBattle(battle, [0]),
+        },
       ],
     });
   };
@@ -1477,10 +1574,21 @@ export const createApp = (deps: AppDeps): App => {
 
     // A `?join=` link is an instruction, not a preference: somebody sent it, and
     // the first thing to show is the table it names rather than a scenario list
-    // the player is going to dismiss.
+    // the player is going to dismiss. A `?battle=` token from the campaign is
+    // the same kind of instruction; a token that would not decode still gets a
+    // sentence, because a dead parameter wants an explanation.
     const invited = deps.joinCode ?? null;
     if (invited !== null && invited !== '' && online.available) promptJoin(invited);
-    else act.newGame();
+    else if (deps.battle) promptBattle(deps.battle);
+    else if (deps.battleError != null && deps.battleError !== '') {
+      openModal(overlays, {
+        title: 'The battle token could not be read',
+        body: el('p', { class: 'help-p', text: deps.battleError }),
+        actions: [
+          { label: 'Go to the scenarios', variant: 'primary', onClick: () => act.newGame() },
+        ],
+      });
+    } else act.newGame();
   };
 
   const destroy = (): void => {

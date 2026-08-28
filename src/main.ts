@@ -30,8 +30,12 @@ import {
 import { MapRenderer } from '@render/renderer.js';
 import { SCENARIO_SUMMARIES, buildScenario } from '@scenarios/index.js';
 import { SHIP_CLASSES, type ShipClass } from '@engine/ships.js';
+import { decodeOrder, encodeResult } from '@campaign/codec.js';
+import { orderOf } from '@campaign/orders.js';
+import { readBattleResult } from '@campaign/result.js';
 import { createApp } from '@ui/app.js';
 import type {
+  BattleHandoff,
   LinkState,
   OnlinePort,
   RendererPort,
@@ -54,6 +58,9 @@ const port = (session: GameSession): SessionPort => ({
   },
   get map() {
     return session.map;
+  },
+  get history() {
+    return session.history;
   },
   dispatch: (cmd) => session.dispatch(cmd),
   subscribe: (fn) => session.subscribe(fn),
@@ -376,11 +383,60 @@ const online: OnlinePort =
         },
       };
 
+// ---------------------------------------------------------------------------
+// Campaign hand-off
+// ---------------------------------------------------------------------------
+
+/**
+ * A `?battle=` token is a `OrderOfBattle` from the campaign in the companion
+ * Ogre app. It is decoded here — the shell never learns the codec — and what
+ * the shell gets is the three verbs it needs: a summary to show, a build to
+ * run, and a result token to hand back when the game is over.
+ */
+const battleFrom = (
+  token: string | null,
+): { battle: BattleHandoff | null; error: string | null } => {
+  if (token === null || token === '') return { battle: null, error: null };
+  try {
+    const order = decodeOrder(token);
+    const [convoy, patrol] = order.sides;
+    const target = DEFAULT_MAP.body(String(order.terms['target']))?.name ?? '?';
+    const freight = convoy?.forces['freight'] ?? 0;
+    return {
+      battle: {
+        summary:
+          `${convoy?.faction ?? 'The convoy'} sails for ${target} with ${freight} lots of ` +
+          `ground force aboard; ${patrol?.faction ?? 'the patrol'} comes out to meet it.`,
+        build: () => buildScenario(order.scenarioId, { order }),
+        resultFor: (state, history) => {
+          // The shell may have wandered off to an ordinary scenario since; a
+          // game that was not built from an order has no result to hand back.
+          if (orderOf(state.scenarioData) === null) return null;
+          const result = readBattleResult(state, DEFAULT_MAP, history);
+          return result === null ? null : encodeResult(result);
+        },
+      },
+      error: null,
+    };
+  } catch (err) {
+    return {
+      battle: null,
+      error: err instanceof Error ? err.message : 'the token does not decode',
+    };
+  }
+};
+
+const { battle, error: battleError } = battleFrom(
+  new URL(window.location.href).searchParams.get('battle'),
+);
+
 const app = createApp({
   root: mount,
   map: DEFAULT_MAP,
   online,
   joinCode: new URL(window.location.href).searchParams.get('join'),
+  battle,
+  battleError,
   // `SCENARIO_SUMMARIES` is the table already flattened to the shell's shape:
   // `ScenarioDef.players` is a {min, max} range, `ScenarioDescriptor.players` a
   // single seat count.

@@ -2488,3 +2488,22 @@ kbd {
     flex-direction: column;
   }
 }
+
+/* --------------------------------------------------------------------------
+   Campaign hand-off: the pasteable order/result token.
+   -------------------------------------------------------------------------- */
+
+.battle-token {
+  width: 100%;
+  margin-top: 8px;
+  padding: 8px 10px;
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--ink-dim);
+  background: var(--panel-solid);
+  border: 1px solid var(--hair);
+  border-radius: 8px;
+  resize: vertical;
+  word-break: break-all;
+}
