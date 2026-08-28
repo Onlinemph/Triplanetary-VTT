@@ -25,6 +25,7 @@ import { grandTour } from './grandTour.js';
 import { interplanetaryWar } from './interplanetaryWar.js';
 import { lateral7 } from './lateral7.js';
 import { nova } from './nova.js';
+import { orbitalDrop } from './orbitalDrop.js';
 import { piracy } from './piracy.js';
 import { prospecting } from './prospecting.js';
 import { retribution } from './retribution.js';
@@ -51,6 +52,9 @@ export const SCENARIOS: readonly ScenarioDef[] = [
   // The campaign's space battle, last on the list: it points at the campaign
   // in the companion app, and the printed scenarios come first.
   contestedTransfer,
+  // Two games, one war: the whole campaign, played as Triplanetary with the
+  // ground battles handed to the embedded Ogre.
+  orbitalDrop,
 ];
 
 export {
@@ -66,6 +70,7 @@ export {
   interplanetaryWar,
   prospecting,
   contestedTransfer,
+  orbitalDrop,
 };
 
 const BY_ID: ReadonlyMap<string, ScenarioDef> = new Map(SCENARIOS.map((s) => [s.id, s]));
