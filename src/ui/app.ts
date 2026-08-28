@@ -1038,10 +1038,77 @@ export const createApp = (deps: AppDeps): App => {
     updateWarPins();
   };
 
-  const updateWarPins = (): void => {
+  /**
+   * One chart pin: a slim chip off the body's right shoulder, scaled to the
+   * zoom the way the canvas layers scale. Far out it is a dot and a name;
+   * zoomed in it grows its economy line. It never sits on the planet.
+   */
+  const chartPin = (o: {
+    hex: Hex;
+    name: string;
+    color: string | null;
+    title: string;
+    meta: string;
+    flag: string | null;
+    contested: boolean;
+    onClick(): void;
+  }): HTMLElement | null => {
     const r = renderer;
+    if (!r) return null;
+    const px = r.hexPx();
+    const p = r.hexToScreen(o.hex);
+    const full = px >= 16;
+    const tiny = px < 7;
+    return el(
+      'button',
+      {
+        class:
+          'war-pin' +
+          (full ? ' war-pin--full' : '') +
+          (tiny ? ' war-pin--tiny' : '') +
+          (o.contested ? ' is-contested' : ''),
+        type: 'button',
+        style: {
+          left: `${p.x + Math.max(9, px * 0.95)}px`,
+          top: `${p.y}px`,
+          '--player': o.color ?? 'var(--ink-faint)',
+        },
+        title: o.title,
+        onclick: o.onClick,
+      },
+      el('span', { class: 'war-pin-dot' }),
+      el('span', { class: 'war-pin-name', text: o.name }),
+      full ? el('span', { class: 'war-pin-meta mono', text: o.meta }) : null,
+      full && o.flag ? el('span', { class: 'war-pin-flag', text: o.flag }) : null,
+    );
+  };
+
+  /**
+   * Chips in a cluster — Terra and Luna, the Jovian moons — slide apart
+   * instead of stacking: any chip overlapping an earlier one steps below it.
+   */
+  const declutterPins = (): void => {
+    const kids = [...warPins.children] as HTMLElement[];
+    const boxes = kids
+      .map((n) => ({ n, r: n.getBoundingClientRect() }))
+      .sort((a, b) => a.r.top - b.r.top || a.r.left - b.r.left);
+    for (let i = 1; i < boxes.length; i++) {
+      for (let j = 0; j < i; j++) {
+        const a = boxes[j]!.r;
+        const b = boxes[i]!.r;
+        if (a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom) {
+          const shift = a.bottom - b.top + 2;
+          const node = boxes[i]!.n;
+          node.style.top = `${parseFloat(node.style.top) + shift}px`;
+          boxes[i]!.r = new DOMRect(b.x, b.y + shift, b.width, b.height);
+        }
+      }
+    }
+  };
+
+  const updateWarPins = (): void => {
     const camp = warRoom ? deps.campaign.current() : null;
-    if (!r || !camp) {
+    if (!renderer || !camp) {
       if (warPins.childElementCount > 0) fill(warPins);
       return;
     }
@@ -1053,33 +1120,22 @@ export const createApp = (deps: AppDeps): App => {
         const site = state.sites[def.id];
         if (!body || !site) return [];
         const holder = site.holder ? CAMPAIGN_SIDES[site.holder] : null;
-        const p = r.hexToScreen(body.hex);
         const troops = Object.values(site.garrison).reduce((n, c) => n + c, 0);
         const contested = state.pending?.site === def.id;
-        return [
-          el(
-            'button',
-            {
-              class: `war-pin${contested ? ' is-contested' : ''}`,
-              type: 'button',
-              style: {
-                left: `${p.x}px`,
-                top: `${p.y}px`,
-                '--player': holder?.color ?? 'var(--ink-faint)',
-              },
-              title: `${def.name} — ${holder?.name ?? 'unclaimed'}`,
-              onclick: () => focusWarSite(def.id),
-            },
-            el('span', { class: 'war-pin-name', text: def.name }),
-            el('span', {
-              class: 'war-pin-meta mono',
-              text: `${def.production} PP · ${troops > 0 ? `${troops} garrison` : 'open'}`,
-            }),
-            contested ? el('span', { class: 'war-pin-flag', text: 'under attack' }) : null,
-          ),
-        ];
+        const pin = chartPin({
+          hex: body.hex,
+          name: def.name,
+          color: holder?.color ?? null,
+          title: `${def.name} — ${holder?.name ?? 'unclaimed'}`,
+          meta: `${def.production} PP · ${troops > 0 ? `${troops} garrison` : 'open'}`,
+          flag: contested ? 'under attack' : null,
+          contested,
+          onClick: () => focusWarSite(def.id),
+        });
+        return pin ? [pin] : [];
       }),
     );
+    declutterPins();
   };
 
   /**
@@ -1087,8 +1143,7 @@ export const createApp = (deps: AppDeps): App => {
    * read live off the game state. The same layer the old war room pins use.
    */
   const updateDropPins = (state: GameState): void => {
-    const r = renderer;
-    if (!r) return;
+    if (!renderer) return;
     const data = state.scenarioData['orbitalDrop'] as
       | {
           garrisons?: Record<
@@ -1120,36 +1175,28 @@ export const createApp = (deps: AppDeps): App => {
       ...[...byBody.entries()].flatMap(([world, info]) => {
         const body = deps.map.bodies.find((b) => b.id === world);
         if (!body) return [];
-        const p = r.hexToScreen(body.hex);
         const holder = info.owner ? state.players[info.owner] : null;
         const contested = contestedWorld === world;
-        return [
-          el(
-            'button',
-            {
-              class: `war-pin${contested ? ' is-contested' : ''}`,
-              type: 'button',
-              style: {
-                left: `${p.x}px`,
-                top: `${p.y}px`,
-                '--player': holder?.color ?? 'var(--ink-faint)',
-              },
-              title: `${body.name} — ${holder?.name ?? 'militia only'}`,
-              onclick: () => {
-                renderer?.focusOn(body.hex);
-                schedule();
-              },
-            },
-            el('span', { class: 'war-pin-name', text: body.name }),
-            el('span', {
-              class: 'war-pin-meta mono',
-              text: `MCr ${(info.bases * 0.5).toFixed(1)}/day · ${info.troops > 0 ? `${info.troops} garrison` : 'militia'}`,
-            }),
-            contested ? el('span', { class: 'war-pin-flag', text: 'invasion' }) : null,
-          ),
-        ];
+        const pin = chartPin({
+          hex: body.hex,
+          name: body.name,
+          color: holder?.color ?? null,
+          title:
+            `${body.name} — ${holder?.name ?? 'militia only'} · ` +
+            `MCr ${(info.bases * 0.5).toFixed(1)}/day · ` +
+            `${info.troops > 0 ? `${info.troops} garrison` : 'militia'}`,
+          meta: `MCr ${(info.bases * 0.5).toFixed(1)}/day · ${info.troops > 0 ? `${info.troops} garrison` : 'militia'}`,
+          flag: contested ? 'invasion' : null,
+          contested,
+          onClick: () => {
+            renderer?.focusOn(body.hex);
+            schedule();
+          },
+        });
+        return pin ? [pin] : [];
       }),
     );
+    declutterPins();
   };
 
   /** A pin was clicked: bring that site's card into view in the war room. */

@@ -204,6 +204,10 @@ export class MapRenderer {
     return this.cam.hexToScreen(h);
   }
 
+  hexPx(): number {
+    return this.cam.hexPx;
+  }
+
   panBy(dx: number, dy: number): void {
     this.cam.panBy(dx, dy);
   }

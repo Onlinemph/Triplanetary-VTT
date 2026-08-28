@@ -78,6 +78,7 @@ const createRenderer = (canvas: HTMLCanvasElement, map = DEFAULT_MAP): RendererP
     render: (state, view) => renderer.render(state, view),
     screenToHex: (x, y) => renderer.screenToHex(x, y),
     hexToScreen: (h) => renderer.hexToScreen(h),
+    hexPx: () => renderer.hexPx(),
     panBy: (dx, dy) => renderer.panBy(dx, dy),
     zoomAt: (x, y, factor) => renderer.zoomAt(x, y, factor),
     fitAll: (state) => renderer.fitAll(state),

@@ -60,6 +60,12 @@ export interface RendererPort {
   screenToHex(x: number, y: number): Hex;
   /** The inverse, in CSS pixels — used to pin DOM overlays to hexes. */
   hexToScreen(h: Hex): Point;
+  /**
+   * Screen pixels per hex radius at the current zoom — how big a hex looks
+   * right now. DOM overlays use it to scale and simplify themselves the way
+   * the canvas layers already do.
+   */
+  hexPx(): number;
   panBy(dx: number, dy: number): void;
   /** `factor` > 1 zooms in, anchored on the given client-space point. */
   zoomAt(x: number, y: number, factor: number): void;

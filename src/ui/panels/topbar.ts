@@ -111,6 +111,20 @@ export const createTopBar = (getScenarioName: () => string): Panel => {
         }),
         el('i', { class: 'toolbar-rule' }),
         button({
+          label: icon('minus'),
+          onClick: () => act.zoom(0.8),
+          variant: 'quiet',
+          class: 'icon-btn',
+          title: 'Zoom out (−)',
+        }),
+        button({
+          label: icon('plus'),
+          onClick: () => act.zoom(1.25),
+          variant: 'quiet',
+          class: 'icon-btn',
+          title: 'Zoom in (+)',
+        }),
+        button({
           label: icon('fit'),
           onClick: () => act.fit(),
           variant: 'quiet',
