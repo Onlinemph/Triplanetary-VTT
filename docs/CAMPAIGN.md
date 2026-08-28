@@ -20,6 +20,12 @@ already saved in this browser — the campaign saves itself after every order.)
 The war room is hot-seat: pick whose orders you are giving, pass the
 keyboard, and end the turn when both sides are done.
 
+The war room docks beside the live chart rather than covering it: the eight
+sites are pinned to their planets and moons on the inner system, each pin
+carrying its holder's colour, production and garrison, pulsing while the
+site is under attack. The chart still pans and zooms underneath, and
+clicking a pin brings that site's card into view in the room.
+
 - **Buying and garrisoning** happen in the war room. Prices are in production
   points; held sites pay their production at each consolidation, and two
   thirds of the map's production wins the war.
