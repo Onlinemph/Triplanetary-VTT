@@ -116,8 +116,13 @@ export interface ConventionalUnit {
    * map ... No unit may re-enter the map once it has left." (5.12) A unit that
    * escapes is not destroyed — several scenarios turn on the difference — so it
    * is off the board and out of play, but still its owner's.
+   *
+   * `'reserve'` is the one non-edge value: a reaction force waiting off the map
+   * (Orbital Drop §3.03), entered by the `deployReserve` order. It counts as
+   * surviving — a force that never had to fight went home intact — but it is
+   * not on the board.
    */
-  readonly offMap?: 'north' | 'south' | 'east' | 'west';
+  readonly offMap?: 'north' | 'south' | 'east' | 'west' | 'reserve';
 }
 
 /** One targetable component on an Ogre's record sheet. */
@@ -154,6 +159,15 @@ export interface OgreUnit {
   readonly stuck: boolean;
   readonly pendingHazard: PendingHazard;
 
+  /**
+   * The turn this Ogre finishes assembling, for one that shipped in modules
+   * (Orbital Drop §6, adapting the Vulcan assembly rules, 15.02.2). Until
+   * then it is an inert hull: it cannot move, ram or fire, and a D result
+   * against any part of it is treated as an X — the unfinished-Ogre rule.
+   * Absent means the Ogre arrived assembled.
+   */
+  readonly activatesOn?: number;
+
   readonly destroyed: boolean;
   readonly destroyedBy?: string;
   /**
@@ -162,12 +176,16 @@ export interface OgreUnit {
    * escapes is not destroyed — several scenarios turn on the difference — so it
    * is off the board and out of play, but still its owner's.
    */
-  readonly offMap?: 'north' | 'south' | 'east' | 'west';
+  readonly offMap?: 'north' | 'south' | 'east' | 'west' | 'reserve';
 }
 
 export type Unit = ConventionalUnit | OgreUnit;
 
 export const isOgre = (u: Unit): u is OgreUnit => u.kind === 'ogre';
+
+/** An Ogre still assembling: a stationary target that cannot yet act. */
+export const isInertOgre = (u: Unit, turn: number): boolean =>
+  isOgre(u) && u.activatesOn !== undefined && turn < u.activatesOn;
 
 // ---------------------------------------------------------------------------
 // Buildings

@@ -9,13 +9,15 @@
 import type { GameMap } from './map.js';
 import type { Command, CommandResult } from './commands.js';
 import { fail, ok } from './commands.js';
-import { eq } from './hex.js';
+import { eq, toOffset } from './hex.js';
+import { terrainAt } from './map.js';
 import { unitClass } from './units.js';
 import {
   type GameState,
   type Phase,
   type VictoryState,
   activePlayer,
+  isInertOgre,
   isOgre,
   onBoard,
   passengersOf,
@@ -41,7 +43,7 @@ import {
   runRecovery,
   wouldOverstack,
 } from './movement.js';
-import { resetFireFlags, resolveAttack } from './combat.js';
+import { resetFireFlags, resolveAttack, resolveOrbitalStrike } from './combat.js';
 import { resolveRam } from './ram.js';
 import {
   beginOverrun,
@@ -104,9 +106,9 @@ const route = (state: GameState, cmd: Command, map: GameMap): ApplyResult => {
     case 'moveUnit':
       return doMove(state, cmd.unit, cmd.path, map);
     case 'ram':
-      return doRam(state, cmd.unit, cmd.target, map);
+      return inertGuard(state, cmd.unit) ?? doRam(state, cmd.unit, cmd.target, map);
     case 'reduceInfantry':
-      return doReduceInfantry(state, cmd.unit, cmd.target);
+      return inertGuard(state, cmd.unit) ?? doReduceInfantry(state, cmd.unit, cmd.target);
     case 'mount':
       return doMount(state, cmd.unit, cmd.carrier);
     case 'dismount':
@@ -116,7 +118,9 @@ const route = (state: GameState, cmd: Command, map: GameMap): ApplyResult => {
     case 'combineInfantry':
       return doCombine(state, cmd.units);
     case 'overrun':
-      return wrap(state, beginOverrun(state, map, cmd.unit, cmd.target));
+      return (
+        inertGuard(state, cmd.unit) ?? wrap(state, beginOverrun(state, map, cmd.unit, cmd.target))
+      );
     case 'overrunAttack':
       return wrap(state, resolveOverrunAttack(state, map, cmd.attackers, cmd.target));
     case 'overrunRam':
@@ -129,7 +133,91 @@ const route = (state: GameState, cmd: Command, map: GameMap): ApplyResult => {
       return { state: advancePhase(state, map), result: ok() };
     case 'resign':
       return doResign(state, cmd.by);
+    case 'deployReserve':
+      return doDeployReserve(state, cmd.unit, cmd.at, map);
+    case 'orbitalStrike': {
+      if (state.phase !== 'fire') {
+        return { state, result: fail('orbital fire arrives in the fire phase') };
+      }
+      const side = state.scenarioData['orbitalStrikeSide'];
+      if (typeof side === 'string' && cmd.by !== side) {
+        return { state, result: fail('the fleet overhead is not yours') };
+      }
+      return wrap(state, resolveOrbitalStrike(state, map, cmd.strike, cmd.target));
+    }
   }
+};
+
+/**
+ * Orbital Drop §3.03: the reaction force enters from the defender's map edge,
+ * any or all of it, on any turn from the scenario's reaction turn on. A unit
+ * arrives with its move spent — the turn went on getting back to the alarm.
+ */
+const doDeployReserve = (
+  state: GameState,
+  unitId: string,
+  at: { q: number; r: number },
+  map: GameMap,
+): ApplyResult => {
+  if (state.phase !== 'movement') {
+    return { state, result: fail('reserves enter in the movement phase') };
+  }
+  const unit = state.units[unitId];
+  if (!unit || unit.destroyed || unit.offMap !== 'reserve') {
+    return { state, result: fail('that unit is not waiting in reserve') };
+  }
+  if (unit.owner !== activePlayer(state)) return { state, result: fail('not your unit') };
+
+  const rawTurn = state.scenarioData['reactionTurn'];
+  const reactionTurn = typeof rawTurn === 'number' ? rawTurn : 5;
+  if (state.turn < reactionTurn) {
+    return { state, result: fail(`the reaction force enters from turn ${reactionTurn}`) };
+  }
+
+  const edge = state.scenarioData['reserveEdge'];
+  const o = toOffset(at);
+  const onEdge =
+    edge === 'north'
+      ? o.row === 1
+      : edge === 'south'
+        ? o.row === map.rows
+        : edge === 'west'
+          ? o.col === 1
+          : o.col === map.cols;
+  if (o.col < 1 || o.col > map.cols || o.row < 1 || o.row > map.rows || !onEdge) {
+    return { state, result: fail('reserves enter on your own map edge') };
+  }
+
+  const terrain = terrainAt(map, at, state.terrainOverrides);
+  if (terrain === 'crater' || terrain === 'water') {
+    return { state, result: fail('nothing enters there') };
+  }
+  if (unitsAt(state, at).some((u) => u.owner !== unit.owner)) {
+    return { state, result: fail('that hex is held by the enemy') };
+  }
+  if (wouldOverstack(state, at, unit)) return { state, result: fail('that hex is full') };
+
+  const next = withUnit(state, {
+    ...unit,
+    offMap: undefined,
+    pos: at,
+    phaseStart: at,
+    moveUsed: movementAllowance(unit, 'movement'),
+    movementEnded: true,
+  });
+  return {
+    state: log(next, 'warn', `${unitName(unit)} races back from dispersal.`, [at]),
+    result: ok(),
+  };
+};
+
+/** An Ogre still assembling can do nothing at all; `null` means "carry on". */
+const inertGuard = (state: GameState, unitId: string): ApplyResult | null => {
+  const unit = state.units[unitId];
+  if (unit && isInertOgre(unit, state.turn)) {
+    return { state, result: fail(`${unitName(unit)} is still assembling`) };
+  }
+  return null;
 };
 
 /** Adapt the `{state, ok, reason}` shape the combat modules return. */
@@ -157,6 +245,9 @@ const doMove = (
   const unit = state.units[unitId];
   if (!unit || !onBoard(unit)) return { state, result: fail('no such unit') };
   if (unit.owner !== activePlayer(state)) return { state, result: fail('not your unit') };
+  if (isInertOgre(unit, state.turn)) {
+    return { state, result: fail(`${unitName(unit)} is still assembling`) };
+  }
   if (unit.kind === 'unit' && unit.ridingOn) {
     return { state, result: fail('that infantry is riding; dismount first') };
   }
