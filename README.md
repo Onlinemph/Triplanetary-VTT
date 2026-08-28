@@ -228,6 +228,19 @@ a WebSocket relay for play across machines. See
 [docs/MULTIPLAYER.md](docs/MULTIPLAYER.md), which includes a sixty-line reference
 relay server.
 
+### Two games, one war
+
+This app is linked to its companion,
+[OGRE-VTT](https://github.com/onlinemph/OGRE-VTT), by a campaign over the inner
+Solar System: Triplanetary decides who gets to the ground, and Ogre decides what
+happens when they land. The campaign itself lives in the Ogre app; what arrives
+here is a **Contested Transfer** — a convoy with an invasion in its holds,
+opened by a `?battle=` link or a pasted order token, fought like any other game
+(hot seat or against the computer), and answered with a result token the
+victory screen offers to copy. The scenario is also on the ordinary scenario
+list. See [docs/CAMPAIGN.md](docs/CAMPAIGN.md) for this app's half of the
+hand-off, and the Ogre repository for the campaign design itself.
+
 ---
 
 ## Design principles
@@ -269,6 +282,7 @@ src/
     movement.ts combat.ts ordnance.ts       the phase rules
     detection.ts logistics.ts reducer.ts
   scenarios/   the rulebook's scenarios, as pure builders + victory checks
+  campaign/    the hand-off with OGRE-VTT: boundary types, token codec, result reader
   ai/          the computer opponent: a state in, one command out
   net/         GameSession (command log, undo, save) and the transports
     supabase/  the online referee's contract, rules loop and browser client
@@ -276,7 +290,7 @@ src/
   ui/          panels, input, and the one-way command loop
   main.ts      the only file that wires the concrete pieces together
 supabase/      migrations (schema + row level security) and the Edge Function
-docs/          ARCHITECTURE.md, MULTIPLAYER.md, RULES-MAPPING.md
+docs/          ARCHITECTURE.md, MULTIPLAYER.md, RULES-MAPPING.md, CAMPAIGN.md
 tests/         rules tests, run by vitest
 ```
 
