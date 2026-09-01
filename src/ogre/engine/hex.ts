@@ -85,6 +85,42 @@ export const directionTo = (a: Hex, b: Hex): number => {
   return DIRECTIONS.findIndex((dir) => eq(dir, d));
 };
 
+/**
+ * The hexes on the straight line from `a` to `b`, both ends included.
+ *
+ * A cube-coordinate lerp, rounded hex by hex, with the usual nudge so a line
+ * that runs exactly along a hex edge falls consistently to one side. This is
+ * the line a laser looks down (12.02) and the path a cruise missile flies.
+ */
+export const hexLine = (a: Hex, b: Hex): Hex[] => {
+  const n = distance(a, b);
+  if (n === 0) return [a];
+  const out: Hex[] = [];
+  const ax = a.q + 1e-6;
+  const az = a.r + 1e-6;
+  const ay = -ax - az;
+  const bx = b.q + 1e-6;
+  const bz = b.r + 1e-6;
+  const by = -bx - bz;
+  for (let i = 0; i <= n; i++) {
+    const t = i / n;
+    const x = ax + (bx - ax) * t;
+    const y = ay + (by - ay) * t;
+    const z = az + (bz - az) * t;
+    let rx = Math.round(x);
+    let ry = Math.round(y);
+    let rz = Math.round(z);
+    const dx = Math.abs(rx - x);
+    const dy = Math.abs(ry - y);
+    const dz = Math.abs(rz - z);
+    if (dx > dy && dx > dz) rx = -ry - rz;
+    else if (dy > dz) ry = -rx - rz;
+    else rz = -rx - ry;
+    out.push(hex(rx, rz));
+  }
+  return out;
+};
+
 /** All hexes within `radius` steps of `center`, including `center` itself. */
 export const withinRadius = (center: Hex, radius: number): Hex[] => {
   const out: Hex[] = [];

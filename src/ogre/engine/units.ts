@@ -46,6 +46,9 @@ export type UnitClassId =
   | 'MCP'
   | 'TK'
   | 'HT'
+  | 'TRAIN'
+  | 'LSR'
+  | 'LTWR'
   // Infantry
   | 'INF'
   | 'MAR'
@@ -90,6 +93,12 @@ export interface UnitClass {
   readonly vp: number;
   /** Infantry squads this unit can carry (5.11.1). */
   readonly carries?: number;
+  /**
+   * A laser (Section 12): fires at any range along a line of sight. A
+   * standard laser is blocked by raised terrain in between; a tower fires
+   * over it but cannot fire *into* it.
+   */
+  readonly laser?: 'standard' | 'tower';
 
   /** Where the cited numbers come from. */
   readonly note: string;
@@ -381,6 +390,60 @@ export const UNIT_CLASSES: Readonly<Record<UnitClassId, UnitClass>> = {
     unconfirmed: ['move', 'secondMove', 'defense'],
   },
 
+  TRAIN: {
+    id: 'TRAIN',
+    name: 'Train',
+    abbr: 'TRN',
+    kind: 'transport',
+    mobility: 'rail',
+    attack: 0,
+    range: 0,
+    defense: 3,
+    move: 0,
+    size: 5,
+    armorUnits: 0,
+    vp: 12,
+    carries: 6,
+    note: 'Provisional. Section 9 is implemented from its shape rather than its text: the train moves only along rail links at its speed marker, which changes by one a turn (9.02); "A D result does not affect the train" (7.11); a ram against it is resolved at the Size Table’s train column (9.05). Its defence, size, capacity and victory value are placeholders to correct against the counter.',
+    unconfirmed: ['defense', 'size', 'vp'],
+  },
+
+  LSR: {
+    id: 'LSR',
+    name: 'Laser',
+    abbr: 'LSR',
+    kind: 'structure',
+    mobility: 'immobile',
+    attack: 3,
+    range: 99,
+    defense: 2,
+    move: 0,
+    size: 2,
+    armorUnits: 2,
+    vp: 12,
+    laser: 'standard',
+    note: 'Section 12: "the only rule in the game with line of sight". Fires at any range along a clear line; forest, swamp, town and rubble in between block it (12.02). The attack and defence values are placeholders to correct against the counter.',
+    unconfirmed: ['attack', 'defense', 'vp'],
+  },
+
+  LTWR: {
+    id: 'LTWR',
+    name: 'Laser Tower',
+    abbr: 'LTWR',
+    kind: 'structure',
+    mobility: 'immobile',
+    attack: 3,
+    range: 99,
+    defense: 4,
+    move: 0,
+    size: 4,
+    armorUnits: 3,
+    vp: 18,
+    laser: 'tower',
+    note: 'Section 12.03: fires over intervening terrain but cannot fire into forest, swamp, town or rubble, which also hide a unit from it. Values are placeholders to correct against the counter.',
+    unconfirmed: ['attack', 'defense', 'vp'],
+  },
+
   INF: {
     id: 'INF',
     name: 'Infantry',
@@ -448,6 +511,12 @@ export const UNIT_CLASSES: Readonly<Record<UnitClassId, UnitClass>> = {
 
 /** The Heavy Weapons Team's one-shot missile (3.02.2). */
 export const HEAVY_WEAPON = { attack: 3, range: 4 } as const;
+
+/** The train's speed marker runs from a standstill to this (9.02). Provisional. */
+export const TRAIN_MAX_SPEED = 4;
+
+/** A unit that fires along a line of sight rather than at a printed range. */
+export const isLaserClass = (id: UnitClassId): boolean => UNIT_CLASSES[id].laser !== undefined;
 
 export const unitClass = (id: UnitClassId): UnitClass => UNIT_CLASSES[id];
 

@@ -137,7 +137,7 @@ const deny = (reason: string): StepInfo => ({
  */
 const bonusEligibleFor = (unit: Unit, route: Route): boolean => {
   const mobility = mobilityOf(unit);
-  if (mobility === 'wheeled') return false;
+  if (mobility === 'wheeled' || mobility === 'rail') return false;
   if (route === 'rail') return mobility === 'gev' || mobility === 'infantry';
   return true;
 };
@@ -166,13 +166,17 @@ export const stepInfo = (
 
   const mobility = mobilityOf(unit);
   const route = routeBetween(map, from, to, state.routesCut);
-  const side = sideFeatureBetween(map, from, to);
+  const side = sideFeatureBetween(map, from, to, state.sideOverrides);
   const fromTerrain = terrainAt(map, from, state.terrainOverrides);
   const toTerrain = terrainAt(map, to, state.terrainOverrides);
 
   // Craters are impassable whatever the route (2.01.2); a road does not pave
   // over a crater.
   if (toTerrain === 'crater') return deny('craters are impassable');
+
+  // "The train moves only along railroad hexes" (9.01): every step is a rail
+  // link, and a cut in the line stops it dead.
+  if (mobility === 'rail' && route !== 'rail') return deny('the train keeps to the rails');
 
   const crossing = sideCrossing(side, mobility, route !== undefined);
   if (!crossing.allowed) return deny(crossing.reason ?? 'that hexside is impassable');
@@ -271,7 +275,7 @@ export const planPath = (
   path: readonly Hex[],
 ): PathPlan => {
   const phase = state.phase;
-  const allowance = movementAllowance(unit, phase);
+  const allowance = movementAllowance(unit, phase, state.options);
   const empty: PathPlan = {
     ok: false,
     totalCost: 0,
@@ -467,7 +471,7 @@ export interface Reach {
  * it walks the same {@link stepInfo}.
  */
 export const reachable = (state: GameState, map: GameMap, unit: Unit): Reach[] => {
-  const allowance = movementAllowance(unit, state.phase);
+  const allowance = movementAllowance(unit, state.phase, state.options);
   if (allowance <= 0 || unit.movementEnded) return [];
 
   const best = new Map<string, Reach>();
@@ -534,6 +538,9 @@ export const beginMovementPhase = (
       onRouteAllPhase: isRouteHex(map, u.pos),
       movementEnded,
       ...(phase === 'movement' ? { ramsThisTurn: 0, rammedOgreThisTurn: false } : {}),
+      ...(phase === 'movement' && u.kind === 'unit' && u.trainSpeed !== undefined
+        ? { trainSpeedSet: false }
+        : {}),
     }));
   }
   return next;

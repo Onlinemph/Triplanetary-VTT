@@ -28,7 +28,7 @@ import { type GameMap, inBounds, terrainAt } from './map.js';
 import { rollDie } from './rng.js';
 import { type Odds, describeOdds, oddsFor, resolve } from './crt.js';
 import { OGRE_WEAPONS } from './ogres.js';
-import { entryCost } from './terrain.js';
+import { baseTerrain, entryCost } from './terrain.js';
 import { unitClass } from './units.js';
 import {
   type AttackerRef,
@@ -103,7 +103,7 @@ export const canOverrun = (
   const entry = entryCost(terrain, mobilityOf(mover));
   if (entry.cost === null) return no(entry.reason ?? 'that hex is impassable');
 
-  const allowance = movementAllowance(mover, state.phase);
+  const allowance = movementAllowance(mover, state.phase, state.options);
   // 5.09's minimum move still applies: a unit that has not moved may always
   // take one hex, and an overrun is a hex like any other.
   const affordable = mover.moveUsed + entry.cost <= allowance || mover.moveUsed === 0;
@@ -250,7 +250,7 @@ export const overrunStrength = (u: Unit, ref: AttackerRef): number => {
     doubled = true;
   } else {
     const cls = unitClass(u.classId);
-    if (cls.kind === 'structure') {
+    if (cls.kind === 'structure' && cls.attack === 0) {
       // A command post has no attack strength anywhere else in the game.
       strength = 1;
       doubled = false;
@@ -302,6 +302,8 @@ export interface OverrunPreview {
   readonly odds: Odds;
   readonly treadAttack: boolean;
   readonly summary: string;
+  /** Structure Points a building would lose (11.04.2). */
+  readonly structureDamage?: number;
 }
 
 const denyPreview = (reason: string): OverrunPreview => ({
@@ -325,8 +327,43 @@ export const previewOverrunAttack = (
   if (overrun.step !== 'fire') return denyPreview('the overrun has not started firing yet');
   if (attackers.length === 0) return denyPreview('nothing is firing');
 
+  // "Buildings may be attacked during an overrun" (11.04.2): the attackers
+  // in the hex may spend their fire on the structure instead of the garrison.
+  if (target.kind === 'building') {
+    const building = state.buildings[target.building];
+    if (!building || building.destroyed) return denyPreview('that building is gone');
+    if (!eq(building.pos, overrun.hex)) return denyPreview('that building is not in this hex');
+    if (overrun.firing !== 'attacker') return denyPreview('only the attackers fire on the building');
+    let total = 0;
+    for (const ref of attackers) {
+      const u = state.units[ref.unit];
+      if (!u || !onBoard(u)) return denyPreview('an attacker is gone');
+      const p = participantOf(overrun, u.id);
+      if (!p || p.side !== 'attacker') return denyPreview(`${unitName(u)} is not attacking here`);
+      if (isOgre(u)) {
+        const w = u.weapons.find((x) => x.id === ref.weapon);
+        if (!w || !isFireable(u, w)) return denyPreview('no such weapon');
+        if (p.weaponsFired.includes(w.id)) return denyPreview('that weapon has fired this round');
+        if (OGRE_WEAPONS[w.kind].antipersonnelOnly) return denyPreview('AP weapons cannot hurt a building');
+      } else if (p.fired) return denyPreview(`${unitName(u)} has fired this round`);
+      total += overrunStrength(u, ref);
+    }
+    if (total <= 0) return denyPreview('that has no attack strength');
+    const terrain = baseTerrain(terrainAt(map, building.pos, state.terrainOverrides));
+    const damage = terrain === 'town' || terrain === 'forest' ? total : total * 2;
+    return {
+      ok: true,
+      attackStrength: total,
+      defenseStrength: building.structurePoints,
+      odds: { kind: 'auto' },
+      treadAttack: false,
+      summary: `${damage} structure points off ${building.structurePoints}`,
+      structureDamage: damage,
+    };
+  }
+
   const targetUnit =
-    target.kind === 'terrain' || target.kind === 'building' ? undefined : state.units[target.unit];
+    target.kind === 'terrain' ? undefined : state.units[target.unit];
   if (!targetUnit || !onBoard(targetUnit)) return denyPreview('no such target');
 
   const victim = participantOf(overrun, targetUnit.id);
@@ -414,6 +451,30 @@ export const resolveOverrunAttack = (
   const overrun = state.overrun!;
   const shooter = state.units[attackers[0]!.unit]!;
   let next = markFired(state, attackers);
+
+  // A building takes flat damage and never rolls (11.04.1, 11.04.2).
+  if (target.kind === 'building') {
+    const building = next.buildings[target.building]!;
+    const damage = preview.structureDamage ?? 0;
+    const remaining = Math.max(0, building.structurePoints - damage);
+    next = {
+      ...next,
+      buildings: {
+        ...next.buildings,
+        [building.id]: { ...building, structurePoints: remaining, destroyed: remaining <= 0 },
+      },
+    };
+    if (remaining <= 0) next = addPointsFor(next, shooter.owner, building.maxStructurePoints);
+    next = log(
+      next,
+      remaining <= 0 ? 'good' : 'info',
+      remaining <= 0
+        ? `Point-blank fire brings the ${building.kind} down.`
+        : `The ${building.kind} takes ${damage} structure points at point-blank range; ${remaining} left.`,
+      [overrun.hex],
+    );
+    return { state: reapOverrun(next, map), ok: true };
+  }
 
   const die = rollDie(next.rng);
   next = { ...next, rng: die.state };

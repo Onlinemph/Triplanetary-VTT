@@ -38,7 +38,15 @@ import { type GameState, type VictoryState, onBoard, surviving } from '../engine
 import { createGame, log, makeOgre, makePlayer, withUnit } from '../engine/state.js';
 import { type OrderOfBattle, ORDER_KEY, orderOf } from '@campaign/orders.js';
 import type { ScenarioBuildOptions, ScenarioDef } from './types.js';
-import { type Deployer, attackStrengthOf, infantryCounters, isFree, place } from './helpers.js';
+import {
+  type Deployer,
+  attackStrengthOf,
+  infantryCounters,
+  isFree,
+  place,
+  withSetup,
+  zone,
+} from './helpers.js';
 
 const TURN_LIMIT = 15;
 
@@ -192,12 +200,16 @@ const build = (map: GameMap, opts: ScenarioBuildOptions): GameState => {
     },
   };
 
-  return log(
+  const built = log(
     d.state,
     'info',
     `The landing force is down on the western strip. It has ${turnLimit} turns to take ` +
       `the command dome; after that the beachhead is contained.`,
   );
+  return withSetup(built, opts.setup, [garrison.player, invader.player], {
+    [garrison.player]: zone(defenceGround(map), 'the eastern two thirds'),
+    [invader.player]: zone(dropZone(map), 'the western strip'),
+  });
 };
 
 // ---------------------------------------------------------------------------

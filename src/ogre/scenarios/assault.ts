@@ -42,7 +42,15 @@ import { createGame, log, makeOgre, makePlayer, makeUnit, withUnit } from '../en
 import { type OrderOfBattle, ORDER_KEY, orderOf } from '@campaign/orders.js';
 import { key } from '../engine/hex.js';
 import type { ScenarioBuildOptions, ScenarioDef } from './types.js';
-import { type Deployer, infantryCounters, isFree, place } from './helpers.js';
+import {
+  type Deployer,
+  infantryCounters,
+  isFree,
+  limit,
+  place,
+  withSetup,
+  zone,
+} from './helpers.js';
 
 export type AssaultProfile = 'dead' | 'living' | 'volcanic' | 'asteroid';
 export type Edge = 'north' | 'south' | 'east' | 'west';
@@ -287,12 +295,30 @@ const build = (map: GameMap, opts: ScenarioBuildOptions, scenarioId: string): Ga
     strikes.length > 0
       ? ` ${strikes.length} warship${strikes.length === 1 ? '' : 's'} overhead each owe one strike.`
       : '';
-  return log(
+  const built = log(
     d.state,
     'info',
     `The drop is down on the ${entryEdge}ern edge. The garrison holds the base;` +
       ` the reaction force arrives from turn ${reactionTurn}.${strikeNote}`,
   );
+
+  // §6: "Defender sets up first ... The attacker chooses which edge before
+  // the defender sets up — the defender knows where the drop is coming
+  // from, not what's in it." The defender owns the half with the base, with
+  // the central-third ceiling; the attacker rearranges inside the drop zone.
+  const defenderGround = allHexes(map).filter(
+    (h) => open(h) && depthFrom(map, h, entryEdge) > 1 / 3,
+  );
+  const centralThird = defenderGround.filter((h) => depthFrom(map, h, entryEdge) < 2 / 3);
+  const dropStrip = allHexes(map).filter(
+    (h) => open(h) && depthFrom(map, h, entryEdge) <= 0.15,
+  );
+  return withSetup(built, opts.setup, [defender.player, attacker.player], {
+    [defender.player]: zone(defenderGround, 'the base’s half of the map', [
+      limit(centralThird, 20, 'the central third'),
+    ]),
+    [attacker.player]: zone(dropStrip, `the ${entryEdge}ern edge`),
+  });
 };
 
 /**
