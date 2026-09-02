@@ -398,6 +398,14 @@ export const createOgreBattle = (opts: OgreBattleOptions): OgreBattle => {
     { passive: false },
   );
 
+  /** Zoom about the middle of the board, for the topbar buttons. */
+  const zoomBy = (factor: number): void => {
+    if (!renderer) return;
+    const rect = canvas.getBoundingClientRect();
+    renderer.zoomAt(rect.width / 2, rect.height / 2, factor);
+    draw();
+  };
+
   const onClickHex = (h: Hex): void => {
     const s = session;
     if (!s) return;
@@ -408,7 +416,6 @@ export const createOgreBattle = (opts: OgreBattleOptions): OgreBattle => {
     }
     const here = unitsAt(s.state, h);
     const mine = here.filter((u) => u.owner === me());
-    const theirs = here.filter((u) => u.owner !== me());
     const phase = s.state.phase;
 
     // --- Deployment: pick up a counter, put it down --------------------
@@ -447,24 +454,32 @@ export const createOgreBattle = (opts: OgreBattleOptions): OgreBattle => {
     if (s.state.overrun) return;
 
     if (phase === 'fire') {
-      if (mine.length > 0 && (!ui.selected || !mine.some((u) => u.id === ui.selected))) {
-        ui.selected = mine[0]!.id;
+      const held = mine.find((u) => u.id === ui.selected);
+      if (mine.length > 0 && !held) {
+        // Of a stack, pick up the counter that still has a shot in it.
+        const shooter = mine.find((u) => canStillFire(s.state, u)) ?? mine[0]!;
+        ui.selected = shooter.id;
         ui.target = null;
-        ui.attackers = defaultAttackers(mine[0]!);
+        ui.attackers = defaultAttackers(shooter);
         draw();
         return;
       }
-      if (theirs.length > 0) {
-        const t = theirs[0]!;
-        ui.target = isOgre(t) ? { kind: 'ogreTreads', unit: t.id } : { kind: 'unit', unit: t.id };
-        draw();
+      if (held && !isOgre(held) && canStillFire(s.state, held)) {
+        // The counter was picked up to move; clicking it again in the fire
+        // phase puts it in the attack, as picking it up fresh would have.
+        if (!ui.attackers.some((a) => a.unit === held.id)) {
+          ui.attackers = [...ui.attackers, { unit: held.id }];
+          draw();
+        }
         return;
       }
-      const building = buildingAt(h);
-      if (building && building.owner !== me()) {
-        ui.target = { kind: 'building', building: building.id };
+      const choices = targetsAt(h);
+      if (choices.length > 0) {
+        // Another click on the same hex moves on to the next thing in it:
+        // the counters in turn, then the building they stand on.
+        const current = choices.findIndex((t) => sameThing(t, ui.target));
+        ui.target = choices[(current + 1) % choices.length]!;
         draw();
-        return;
       }
       return;
     }
@@ -504,9 +519,77 @@ export const createOgreBattle = (opts: OgreBattleOptions): OgreBattle => {
     draw();
   };
 
+  /** The counter just picked up goes into the queue — if it can still shoot. */
   const defaultAttackers = (u: Unit): AttackerRef[] => {
-    if (!isOgre(u)) return [{ unit: u.id }];
-    return [];
+    if (isOgre(u) || !canStillFire(session.state, u)) return [];
+    return [{ unit: u.id }];
+  };
+
+  /**
+   * Everything in a hex the player may shoot at: each enemy counter, then
+   * the building they stand on. An Ogre is offered by its treads; the panel
+   * narrows that to a weapon.
+   */
+  const targetsAt = (h: Hex): TargetRef[] => {
+    const out: TargetRef[] = unitsAt(session.state, h)
+      .filter((u) => u.owner !== me())
+      .map((t) =>
+        isOgre(t)
+          ? ({ kind: 'ogreTreads', unit: t.id } as const)
+          : ({ kind: 'unit', unit: t.id } as const),
+      );
+    const building = buildingAt(h);
+    if (building && building.owner !== me()) out.push({ kind: 'building', building: building.id });
+    return out;
+  };
+
+  /** True when two target references point at the same counter or building. */
+  const sameThing = (a: TargetRef, b: TargetRef | null): boolean => {
+    if (!b || a.kind === 'terrain' || b.kind === 'terrain') return false;
+    if (a.kind === 'building' || b.kind === 'building') {
+      return a.kind === 'building' && b.kind === 'building' && a.building === b.building;
+    }
+    return a.unit === b.unit;
+  };
+
+  /** Where the current target stands, so the panel can list its neighbours. */
+  const targetHex = (state: GameState, t: TargetRef): Hex | null => {
+    if (t.kind === 'terrain') return t.hex;
+    if (t.kind === 'building') return state.buildings[t.building]?.pos ?? null;
+    const u = state.units[t.unit];
+    return u ? u.pos : null;
+  };
+
+  /**
+   * When the target's hex holds more than one thing to shoot at — a counter
+   * on a building, a stack — a row of chips lets the player choose, since a
+   * click can only land on the top of the pile.
+   */
+  const hexTargetChips = (state: GameState): HTMLElement | null => {
+    const t = ui.target;
+    if (!t) return null;
+    const h = targetHex(state, t);
+    if (!h) return null;
+    const choices = targetsAt(h);
+    if (choices.length < 2) return null;
+    return el(
+      'div',
+      { class: 'chips targets' },
+      ...choices.map((c) =>
+        button(
+          c.kind === 'building'
+            ? `the ${state.buildings[c.building]?.kind ?? 'building'}`
+            : c.kind === 'terrain'
+              ? hexLabel(c.hex)
+              : unitName(state.units[c.unit]!),
+          () => {
+            ui.target = c;
+            draw();
+          },
+          { class: sameThing(c, t) ? 'chip on' : 'chip' },
+        ),
+      ),
+    );
   };
 
   const dispatch = (cmd: Command): boolean => {
@@ -737,6 +820,8 @@ export const createOgreBattle = (opts: OgreBattleOptions): OgreBattle => {
           title: computerTurn() ? 'The computer is playing this seat' : 'Advance (space)',
         }),
         button('Undo', undo, { disabled: !session?.canUndo, title: 'Local games only' }),
+        button('+', () => zoomBy(1.25), { class: 'zoom', title: 'Zoom in' }),
+        button('−', () => zoomBy(1 / 1.25), { class: 'zoom', title: 'Zoom out' }),
         button('Fit', () => {
           renderer?.fitMap();
           draw();
@@ -966,6 +1051,8 @@ export const createOgreBattle = (opts: OgreBattleOptions): OgreBattle => {
         ui.target.kind === 'ogreTreads'
           ? state.units[ui.target.unit]
           : undefined;
+      const chips = hexTargetChips(state);
+      if (chips) kids.push(chips);
       if (targetUnit && isOgre(targetUnit)) kids.push(targetChoice(targetUnit));
       if (!preview.ok) {
         kids.push(el('p', { class: 'empty bad' }, preview.reason ?? 'not a legal strike'));
@@ -1300,6 +1387,8 @@ export const createOgreBattle = (opts: OgreBattleOptions): OgreBattle => {
     if (target && ui.attackers.length > 0) {
       const targetUnit =
         target.kind === 'terrain' || target.kind === 'building' ? null : state.units[target.unit];
+      const chips = hexTargetChips(state);
+      if (chips) kids.push(el('h3', {}, 'Target'), chips);
       if (targetUnit && isOgre(targetUnit)) {
         kids.push(el('h3', {}, `Aim at ${unitName(targetUnit)}`));
         kids.push(targetChoice(targetUnit));
@@ -1964,7 +2053,12 @@ export const createOgreBattle = (opts: OgreBattleOptions): OgreBattle => {
   });
   // The same console hook the standalone app offers, under its own name:
   // `ogreBattle.session.serialise()` is a complete, replayable bug report.
-  (window as unknown as { ogreBattle?: unknown }).ogreBattle = { session, scenario };
+  (window as unknown as { ogreBattle?: unknown }).ogreBattle = {
+    session,
+    scenario,
+    // For scripted play-tests: where a hex sits on screen right now.
+    hexToScreen: (h: Hex) => renderer.hexToScreen(h),
+  };
   resize();
   draw();
 

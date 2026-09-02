@@ -152,6 +152,7 @@ export const TERRAIN_COLORS = {
   road: '#a89b7d',
   rail: '#8d8577',
   ridge: '#241d16',
+  ridgeCrest: '#d9c9a3',
   stream: '#4f7f9a',
 } as const;
 

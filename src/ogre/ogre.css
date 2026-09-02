@@ -120,6 +120,14 @@
   gap: 8px;
 }
 
+.ogre-app .btn.zoom {
+  min-width: 30px;
+  padding-left: 0;
+  padding-right: 0;
+  font-size: 15px;
+  line-height: 1;
+}
+
 /* ---------------------------------------------------------------- panels */
 
 .ogre-app .panel {
