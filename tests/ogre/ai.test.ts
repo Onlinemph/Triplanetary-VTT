@@ -100,12 +100,13 @@ describe('the computer opponent', () => {
     const def = scenarioById('crossing')!;
     const s = def.build({ seed: 2, setup: true });
     // The defence sets up first in The Crossing: the Ogre, who moves first,
-    // has nothing to say yet, and the defence has exactly one thing.
+    // has nothing to say yet, and the defence rearranges its counters and
+    // then says it is ready.
     expect(setupActor(s)).toBe(s.playerOrder[1]);
     expect(aiPlan(s, def.map, s.playerOrder[0]!)).toEqual([]);
-    expect(aiPlan(s, def.map, s.playerOrder[1]!)).toEqual([
-      { type: 'finishSetup', by: s.playerOrder[1] },
-    ]);
+    const plan = aiPlan(s, def.map, s.playerOrder[1]!);
+    expect(plan[plan.length - 1]).toEqual({ type: 'finishSetup', by: s.playerOrder[1] });
+    for (const cmd of plan.slice(0, -1)) expect(cmd.type).toBe('placeUnit');
   });
 });
 

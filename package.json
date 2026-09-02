@@ -12,6 +12,7 @@
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.functions.json --noEmit",
     "map:build": "tsx tools/build-map.ts",
+    "tune:ai": "tsx scripts/tune-ai.ts",
     "lint": "eslint . --ext .ts",
     "format": "prettier --write \"**/*.{ts,html,css,json,md}\"",
     "server": "tsx server/index.ts",

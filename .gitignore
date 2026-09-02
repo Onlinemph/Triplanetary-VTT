@@ -19,3 +19,6 @@ supabase/functions/_shared/engine.js
 # Scratch written by the Supabase CLI (`supabase link`, `db push`, and friends).
 # Machine-local state about which project a working copy is pointed at.
 supabase/.temp/
+
+# The AI tuner's checkpoints
+.tune/

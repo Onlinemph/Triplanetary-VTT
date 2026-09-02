@@ -991,21 +991,14 @@ export const previewOrbitalStrike = (
   if (target.kind === 'ogreTreads') return denyStrike('orbital fire cannot pick out treads');
   if (target.kind === 'terrain') return denyStrike('orbital fire wants a target, not a hex');
 
+  // The fleet is there to take the base, not to flatten it: orbital fire
+  // supports the force on the ground, and the base — a post or the Admin
+  // building — falls to that force or not at all. (An interpretation: the
+  // supplement says "any target", and read literally that ends an asteroid
+  // assault on turn 1 with one shot at a D0 post.)
   if (target.kind === 'building') {
-    const building = state.buildings[target.building];
-    if (!building || building.destroyed) return denyStrike('that target is gone');
-    const terrain = baseTerrain(terrainAt(map, building.pos, state.terrainOverrides));
-    const damage = terrain === 'town' || terrain === 'forest' ? strength : strength * 2;
-    return {
-      ok: true,
-      strength,
-      defense: building.structurePoints,
-      odds: { kind: 'auto' },
-      structureDamage: damage,
-      summary: `${damage} structure points off ${building.structurePoints}`,
-    };
+    return denyStrike('the base is what the drop is for; the fleet does not bombard it');
   }
-
   const targetUnit = state.units[target.unit];
   if (!targetUnit || !onBoard(targetUnit)) return denyStrike('that target is gone');
   let defense: number;
@@ -1016,6 +1009,9 @@ export const previewOrbitalStrike = (
     defense = ogreWeaponDefense(state, map, targetUnit, weapon);
   } else {
     if (isOgre(targetUnit)) return denyStrike('name a weapon — an Ogre is not one target (7.13)');
+    if (targetUnit.classId === 'CP') {
+      return denyStrike('the base is what the drop is for; the fleet does not bombard it');
+    }
     defense = defenseOf(state, map, targetUnit);
   }
   const odds = oddsFor(strength, defense);
