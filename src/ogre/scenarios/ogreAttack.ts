@@ -19,10 +19,10 @@
  *    safer it is!"
  */
 
-import { toOffset } from '../engine/hex.js';
+import { distance, toOffset } from '../engine/hex.js';
 import { type GameMap, areaOf } from '../engine/map.js';
 import { OGRE_MAP } from '../engine/mapdata.js';
-import { type OgreTypeId, ogreType } from '../engine/ogres.js';
+import { OGRE_WEAPONS, type OgreTypeId, ogreType } from '../engine/ogres.js';
 import { createRng, nextInt, shuffle } from '../engine/rng.js';
 import { unitClass } from '../engine/units.js';
 import { type GameState, type VictoryState, onBoard, surviving, isOgre } from '../engine/types.js';
@@ -234,6 +234,37 @@ const checkVictory =
         level: 'complete',
         reason: 'Every defending unit is gone. Complete Ogre victory.',
       };
+    }
+
+    // An Ogre with no treads left is going nowhere. With the post already
+    // gone it cannot make the edge, which is the marginal result; with the
+    // post standing and no gun aboard able to reach it, the defence has
+    // stopped it short. (An interpretation: the printed conditions assume
+    // the game is played out, and two immobile pieces out of each other's
+    // range would play out forever.)
+    if (!ogreGone && ogre.treads <= 0) {
+      if (!cpAlive) {
+        return {
+          winners: [OGRE_PLAYER],
+          level: 'marginal',
+          reason:
+            'The command post is destroyed, but the Ogre has no treads left to make the edge. ' +
+            'Marginal Ogre victory.',
+        };
+      }
+      const reach = Math.max(
+        0,
+        ...ogre.weapons.filter((w) => !w.destroyed).map((w) => OGRE_WEAPONS[w.kind].range),
+      );
+      if (cp && distance(ogre.pos, cp.pos) > reach) {
+        return {
+          winners: [DEFENSE_PLAYER],
+          level: 'standard',
+          reason:
+            'The Ogre is immobilised short of the post, and no gun aboard can reach it. ' +
+            'Defence victory.',
+        };
+      }
     }
 
     if (!ogreGone) return null;

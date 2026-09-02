@@ -149,6 +149,8 @@ const runJobs = async (
 
 interface Checkpoint {
   generation: number;
+  /** The weight keys `mu` and `sigma` are indexed by, so a changed table can be picked up. */
+  keys?: string[];
   mu: number[];
   sigma: number[];
   history: {
@@ -164,17 +166,40 @@ interface Checkpoint {
 
 const fresh = (): Checkpoint => ({
   generation: 0,
+  keys: [...WEIGHT_KEYS],
   mu: normalise(DEFAULT_WEIGHTS),
   sigma: Array.from({ length: N }, () => SIGMA0),
   history: [],
   games: 0,
 });
 
+/**
+ * A checkpoint written against an older table is remapped by key: weights
+ * it knew keep their mean and spread, new ones start from the shipped
+ * default at the starting spread.
+ */
 const load = (): Checkpoint => {
   if (RESUME && existsSync(STATE_FILE)) {
     const cp = JSON.parse(readFileSync(STATE_FILE, 'utf8')) as Checkpoint;
-    if (cp.mu.length === N) return cp;
-    console.log('checkpoint has a different weight table; starting over');
+    if (!cp.keys && cp.mu.length === N) return { ...cp, keys: [...WEIGHT_KEYS] };
+    if (cp.keys) {
+      const start = fresh();
+      const index = new Map(cp.keys.map((k, i) => [k, i]));
+      let kept = 0;
+      const mu = WEIGHT_KEYS.map((k, i) => {
+        const j = index.get(k);
+        if (j === undefined) return start.mu[i]!;
+        kept++;
+        return cp.mu[j]!;
+      });
+      const sigma = WEIGHT_KEYS.map((k, i) => {
+        const j = index.get(k);
+        return j === undefined ? start.sigma[i]! : cp.sigma[j]!;
+      });
+      if (kept < N) console.log(`checkpoint remapped: ${kept} weights kept, ${N - kept} new`);
+      return { ...cp, keys: [...WEIGHT_KEYS], mu, sigma };
+    }
+    console.log('checkpoint has a different weight table and no keys; starting over');
   }
   return fresh();
 };

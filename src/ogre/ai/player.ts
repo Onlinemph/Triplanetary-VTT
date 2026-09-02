@@ -246,6 +246,7 @@ const threatAt = (ctx: Ctx, h: Hex): number => {
   let total = 0;
   const { state } = ctx;
   const mobile = ctx.w['move.mobileThreat'];
+  const missile = ctx.w['move.missileThreat'];
   for (const e of ctx.enemies) {
     if (!canAct(e) || isInertOgre(e, state.turn + 1)) continue;
     const move = moveOf(state, e);
@@ -254,8 +255,11 @@ const threatAt = (ctx: Ctx, h: Hex): number => {
       for (const w of e.weapons) {
         if (!isFireable(e, w) || OGRE_WEAPONS[w.kind].antipersonnelOnly) continue;
         const range = OGRE_WEAPONS[w.kind].range;
-        if (d <= range) total += OGRE_WEAPONS[w.kind].attack;
-        else if (d <= range + move) total += OGRE_WEAPONS[w.kind].attack * mobile;
+        // A missile is fired once; a cybertank that keeps them for what
+        // matters is less of a threat to what does not.
+        const oneShot = w.kind === 'missile' || w.kind === 'missileRack' ? missile : 1;
+        if (d <= range) total += OGRE_WEAPONS[w.kind].attack * oneShot;
+        else if (d <= range + move) total += OGRE_WEAPONS[w.kind].attack * mobile * oneShot;
       }
     } else {
       const range = reachOf(e);
@@ -767,7 +771,25 @@ const ramFor = (ctx: Ctx, u: Unit, options: readonly { hex: Hex }[]): Command | 
   return best && best.value >= w['ram.min'] ? best.cmd : null;
 };
 
-/** GEVs that shot this turn get away; anything else with a second move sits tight. */
+/**
+ * What standing in a hex is likely to cost: the odds the enemy fire that can
+ * reach it would get against this unit, as the CRT reads them, times what
+ * the unit is worth. Sharper than a sum of attack strengths: a hex the
+ * enemy can only reach at one to two is a different place from one he
+ * reaches at five to one.
+ */
+const expectedLossAt = (ctx: Ctx, u: Unit, h: Hex): number => {
+  const threat = threatAt(ctx, h);
+  if (threat <= 0) return 0;
+  const chance = chanceOf(oddsFor(threat, ownDefense(ctx, u)));
+  return ((chance.x + chance.d * disableWorth(ctx, u)) / 6) * worth(ctx, u);
+};
+
+/**
+ * GEVs that shot this turn get away: out of the batteries that can reach
+ * them where they stand, to where their own guns still have something to
+ * do next turn. Anything else with a second move sits tight.
+ */
 const planSecondMovement = (ctx0: Ctx): Command[] => {
   const out: Command[] = [];
   let ctx = ctx0;
@@ -776,15 +798,18 @@ const planSecondMovement = (ctx0: Ctx): Command[] => {
     if (u.kind !== 'unit' || unitClass(u.classId).secondMove == null) continue;
     if (!canAct(u) || u.movementEnded || u.ridingOn) continue;
     const reach = reachOf(u);
-    const defense = ownDefense(ctx, u);
+    const allowance = movementAllowance(u, ctx.state.phase, ctx.state.options);
+    const near = enemiesNear(ctx, u.pos, allowance + reach);
+    const fresh: Unit = { ...u, firedThisPhase: false };
     const score = (h: Hex, cost: number): number => {
       let inReach = 0;
-      for (const e of ctx.enemies) if (distance(e.pos, h) <= reach) inReach += worth(ctx, e);
+      for (const e of near) if (distance(e.pos, h) <= reach) inReach += worth(ctx, e);
       const terrain = terrainAt(map, h, ctx.state.terrainOverrides);
       return (
-        -(threatAt(ctx, h) / defense) * w['second.threat'] -
+        -expectedLossAt(ctx, u, h) * w['second.threat'] -
         cost * w['second.cost'] +
         Math.min(inReach, w['move.inReachCap']) * w['second.reach'] +
+        killValueFrom(ctx, fresh, h, near) * w['second.kill'] +
         (defenseMultiplier(terrain, false) - 1) * w['second.cover'] -
         (unitsAt(ctx.state, h).some((o) => o.owner === player && o.id !== u.id)
           ? w['move.crowd']

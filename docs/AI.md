@@ -59,8 +59,13 @@ missile carries its own cost, so it is kept for something worth it.
 treads can spare it; and whatever corks the only lane through the craters,
 because there is no way round it.
 
-**The second movement.** A GEV that has fired gets away: out of reach,
-into cover, keeping targets in range for next turn if that is cheap.
+**The second movement.** A GEV that has fired gets away. Each hex it can
+reach is scored by the *expected loss* of standing there — the odds the
+enemy fire that can reach it would get against the GEV, read off the CRT,
+times what the GEV is worth — and by what its own guns could kill from
+there next turn. A cybertank's one-shot missiles count in that fire at a
+weight the tuner sets, because a cybertank that keeps its missiles for a
+howitzer or the post is not much of a threat to a GEV at range five.
 
 **Deployment, reserves, strikes, cruise missiles.** A counter looks for the
 setup hex it would rather start in; a reserve for the entry hex nearest the
@@ -81,10 +86,12 @@ where they agree. A yardstick game against the hand-set baseline is played
 each generation so progress is measured against something that does not
 move. Games run in parallel across the cores.
 
-The only teacher is the verdict: a win counts +1 (complete), +0.85
-(standard) or +0.7 (marginal), a loss the same below zero, with the
-victory-point margin as a tie-breaker. Nothing tells the tuner to missile
-a howitzer at range five; it finds that the tables that do so win.
+The only teacher is the score: a win counts +1 (complete), +0.85
+(standard) or +0.7 (marginal), a loss the same below zero, plus the points
+margin at up to ±0.5, so a table that keeps its counters alive is told
+apart from one that reaches the same verdict without them. Nothing tells
+the tuner to missile a howitzer at range five; it finds that the tables
+that do so win.
 
 The run writes `src/ogre/ai/tuned.ts` and `docs/ai-tuning-report.md`, and
 checkpoints in `.tune/` so `--resume` picks a run back up.
