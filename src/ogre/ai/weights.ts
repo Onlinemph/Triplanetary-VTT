@@ -88,6 +88,12 @@ export const WEIGHT_SPEC = {
     1,
     'How much of a gun that must move first to reach the hex counts',
   ),
+  'move.missileThreat': spec(
+    1,
+    0,
+    1,
+    'How much of a cybertank’s one-shot missiles count as threat',
+  ),
   'move.threatDefender': spec(4, 0, 10, 'Enemy fire reaching the hex next phase, defending'),
   ...perRole('move.goal', 1, 0, 3, 'Appetite for progress toward the goal'),
   ...perRole('move.threat', 1, 0, 3, 'Fear of enemy fire, per point per point of own defence'),
@@ -111,9 +117,19 @@ export const WEIGHT_SPEC = {
   ...perRole('move.block', 0, 0, 20, 'For standing on the enemy cybertank’s shortest road'),
 
   // --- The second (GEV) movement phase -----------------------------------
-  'second.threat': spec(1, 0, 4, 'Enemy fire reaching the hex, when getting away'),
+  'second.threat': spec(
+    1,
+    0,
+    4,
+    'Per point of expected loss where the GEV ends: odds of being killed, times own worth',
+  ),
   'second.cost': spec(0.1, 0, 1, 'Per movement point spent getting away'),
-  'second.reach': spec(0, 0, 1, 'Per point of target worth still in reach after getting away'),
+  'second.kill': spec(
+    0.3,
+    0,
+    2,
+    'Per point of expected kill value from where the GEV ends, next turn',
+  ),
   'second.cover': spec(0, 0, 10, 'Per point of cover where the GEV ends'),
 
   // --- Ramming and overrunning --------------------------------------------

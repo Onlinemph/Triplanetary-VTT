@@ -108,7 +108,7 @@ const victoryValueOf = (u: GameState['units'][string]): number => {
 };
 
 /**
- * One game from one seat's point of view, in about [-1.3, 1.3]: the verdict
+ * One game from one seat's point of view, in about [-1.5, 1.5]: the verdict
  * and its level, with the points margin as a tie-breaker so a candidate that
  * loses less, or wins bigger, is told apart from one that does not.
  */
@@ -118,7 +118,9 @@ export const scoreFor = (r: GameResult, player: PlayerId): number => {
   const others = Object.keys(r.points).filter((p) => p !== player);
   const theirs = others.length ? Math.max(...others.map((p) => r.points[p] ?? 0)) : 0;
   const margin = (r.points[player] ?? 0) - theirs;
-  const marginTerm = Math.max(-0.3, Math.min(0.3, margin / 200));
+  // A GEV kept alive is six points the other side did not score: enough to
+  // tell two tables apart that reach the same verdict.
+  const marginTerm = Math.max(-0.5, Math.min(0.5, margin / 80));
   if (r.winners.includes(player)) return level + marginTerm;
   if (r.winners.length > 0) return -level + marginTerm;
   return marginTerm;

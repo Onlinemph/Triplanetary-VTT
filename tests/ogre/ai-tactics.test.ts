@@ -128,3 +128,31 @@ describe('the missile tank and the cybertank', () => {
     expect(shot).toBeDefined();
   });
 });
+
+describe('the GEV and the cybertank', () => {
+  /**
+   * Hit and run: a GEV that has fired at close range uses its second move
+   * to leave the batteries that could reach it without the cybertank
+   * moving, so that killing it costs the cybertank its own move — which,
+   * with a post to reach, it will usually not pay.
+   */
+  it('having fired at close range, uses its second move to get out of the batteries', () => {
+    const [near, far] = openPair(2);
+    // A cybertank that has shot its missiles: the mid-game case. With
+    // missiles aboard nothing within five hexes is safe from it, and the
+    // table knows that too.
+    const fresh = makeOgre('mk3', OGRE_PLAYER, 'MK3', far);
+    const ogre = {
+      ...fresh,
+      weapons: fresh.weapons.map((w) => (w.kind === 'missile' ? { ...w, fired: true } : w)),
+    };
+    const gev = { ...makeUnit('gev', DEFENSE_PLAYER, 'GEV', near), firedThisPhase: true };
+    const start = boardWith([ogre, gev], { active: DEFENSE_PLAYER, phase: 'gevMovement' });
+
+    const away = playPhase(start);
+    const end = away.state.units['gev']!.pos;
+    // Outside the main battery's three: only the missiles reach without a
+    // move, and a cybertank keeps those for a howitzer or the post.
+    expect(distance(end, far)).toBeGreaterThan(3);
+  });
+});
