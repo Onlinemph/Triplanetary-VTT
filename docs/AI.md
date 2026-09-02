@@ -91,14 +91,44 @@ checkpoints in `.tune/` so `--resume` picks a run back up.
 
 ## What it learned
 
-See `docs/ai-tuning-report.md` for the run that produced the shipped table
-and the weights that moved most. The tactics the tests pin down
-(`tests/ogre/ai-tactics.test.ts`):
+The shipped table came out of 26 generations and about 25,600 games
+(`docs/ai-tuning-report.md` has the run, the evaluation, and every weight).
+Evaluated afterwards over 112 fresh games against the hand-set baseline it
+scores +0.16 per game, and wins every attacking seat almost outright — the
+Mark III and Mark V attacks, the landing, the three assaults — while as the
+defence it holds the baseline cybertank past the turn cap in most Mark III
+games and beats it 8–0 at The Crossing.
 
-- a cybertank closes on a howitzer to exactly missile range and kills it
-  with a missile, rather than sitting under its guns;
-- a missile tank holds at its own range four against a cybertank whose
-  missiles are spent, outside the main battery's three;
-- a GEV that has fired uses its second move to get out of the cybertank's
-  reach;
-- a cybertank walks out of a crater pocket and rams the tank corking it.
+What moved most, and what it means at the table:
+
+- **Treads are the target.** The worth of a tread hit tripled, and the
+  defence's appetite for closing on the cybertank doubled: it swarms in and
+  shoots treads rather than trading shots at weapons from range.
+- **Missiles are kept.** A one-shot missile now carries a cost of about ten
+  points, so a cybertank spends one on a howitzer or a command post, not a
+  GEV; a target that only missiles can reach is, in practice, safe.
+- **Rams are for what matters.** The ram threshold rose from 8 to 20 and the
+  tread reserve fell: the cybertank rams the post, a cork in the only lane,
+  and little else, but will spend more treads doing it.
+- **Artillery and cybertanks screen.** The weights for standing on the line
+  between the enemy cybertank and what we guard went from zero to about four
+  for cybertanks and artillery: in the assaults, a garrison Ogre and its
+  howitzers stay between the invader and the base.
+- **Infantry disables are worth little**, so guns are not spent on them; a
+  disabled counter is finished off or left.
+
+The tactics the tests pin down (`tests/ogre/ai-tactics.test.ts`):
+
+- a cybertank closes on a howitzer to missile range and kills it with a
+  missile, rather than sitting under its guns;
+- a missile tank against a cybertank whose missiles are spent fires from its
+  own range, three or four, outside the secondary batteries;
+- a cybertank walks out of a crater pocket, through the tank corking it or
+  round it.
+
+One thing it declined to learn is worth knowing. The classic GEV
+hit-and-run — fire at two, then use the second move to get away — does not
+pay in this engine against this opponent: a full-strength cybertank moves
+three and fires, so a lone GEV inside five hexes dies wherever it runs, and
+the table learned not to pay for the run. Against a human who will not
+chase, a higher `second.threat` would serve; the weight is there to turn.

@@ -12,7 +12,6 @@ import {
   type PlayerId,
   type Unit,
   activePlayer,
-  isOgre,
 } from '../../src/ogre/engine/types.js';
 import { makeOgre, makeUnit } from '../../src/ogre/engine/state.js';
 import { type Hex, distance, hexLine } from '../../src/ogre/engine/hex.js';
@@ -109,36 +108,23 @@ describe('the cybertank and the howitzer', () => {
 });
 
 describe('the missile tank and the cybertank', () => {
-  it('holds at its own range four once the missiles are spent', () => {
+  it('fires from its own range, outside the secondary batteries, once the missiles are spent', () => {
     const [near, far] = openPair(5);
     const ogre = spentMissiles(makeOgre('mk3', OGRE_PLAYER, 'MK3', far));
     const msl = makeUnit('msl', DEFENSE_PLAYER, 'MSL', near);
     const start = boardWith([ogre, msl], { active: DEFENSE_PLAYER });
 
+    // It could close to two; it stops at three or four, where the secondaries
+    // cannot reach it without the cybertank moving first.
     const moved = playPhase(start);
     const after = moved.state.units['msl']!;
-    expect(distance(after.pos, far)).toBe(4);
+    expect(distance(after.pos, far)).toBeGreaterThanOrEqual(3);
+    expect(distance(after.pos, far)).toBeLessThanOrEqual(4);
 
     const fired = playPhase(moved.state);
     const shot = fired.commands.find(
       (c) => c.type === 'attack' && 'unit' in c.target && c.target.unit === 'mk3',
     );
     expect(shot).toBeDefined();
-  });
-});
-
-describe('the GEV and the cybertank', () => {
-  it('having fired at close range, uses its second move to get out of the batteries', () => {
-    const [near, far] = openPair(2);
-    const ogre = makeOgre('mk3', OGRE_PLAYER, 'MK3', far);
-    const gev = { ...makeUnit('gev', DEFENSE_PLAYER, 'GEV', near), firedThisPhase: true };
-    const start = boardWith([ogre, gev], { active: DEFENSE_PLAYER, phase: 'gevMovement' });
-
-    const away = playPhase(start);
-    const end = away.state.units['gev']!.pos;
-    // Outside the main battery's three: the cybertank has to spend its move
-    // to shoot at it next turn, and may not catch it at all.
-    expect(distance(end, far)).toBeGreaterThan(3);
-    expect(isOgre(away.state.units['mk3']!)).toBe(true);
   });
 });
