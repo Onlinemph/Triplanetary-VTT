@@ -124,7 +124,6 @@ export const WEIGHT_SPEC = {
     'Per point of expected loss where the GEV ends: odds of being killed, times own worth',
   ),
   'second.cost': spec(0.1, 0, 1, 'Per movement point spent getting away'),
-  'second.reach': spec(0, 0, 1, 'Per point of target worth still in reach after getting away'),
   'second.kill': spec(
     0.3,
     0,

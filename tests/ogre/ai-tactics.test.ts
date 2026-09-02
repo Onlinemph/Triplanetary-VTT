@@ -138,7 +138,14 @@ describe('the GEV and the cybertank', () => {
    */
   it('having fired at close range, uses its second move to get out of the batteries', () => {
     const [near, far] = openPair(2);
-    const ogre = makeOgre('mk3', OGRE_PLAYER, 'MK3', far);
+    // A cybertank that has shot its missiles: the mid-game case. With
+    // missiles aboard nothing within five hexes is safe from it, and the
+    // table knows that too.
+    const fresh = makeOgre('mk3', OGRE_PLAYER, 'MK3', far);
+    const ogre = {
+      ...fresh,
+      weapons: fresh.weapons.map((w) => (w.kind === 'missile' ? { ...w, fired: true } : w)),
+    };
     const gev = { ...makeUnit('gev', DEFENSE_PLAYER, 'GEV', near), firedThisPhase: true };
     const start = boardWith([ogre, gev], { active: DEFENSE_PLAYER, phase: 'gevMovement' });
 

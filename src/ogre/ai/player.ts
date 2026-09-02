@@ -801,14 +801,14 @@ const planSecondMovement = (ctx0: Ctx): Command[] => {
     const allowance = movementAllowance(u, ctx.state.phase, ctx.state.options);
     const near = enemiesNear(ctx, u.pos, allowance + reach);
     const fresh: Unit = { ...u, firedThisPhase: false };
+    // What a target is worth is no reason to stand beside it: only what the
+    // GEV's own guns could do to it from here counts (a cybertank is worth
+    // sixty points and a GEV can scratch its treads).
     const score = (h: Hex, cost: number): number => {
-      let inReach = 0;
-      for (const e of near) if (distance(e.pos, h) <= reach) inReach += worth(ctx, e);
       const terrain = terrainAt(map, h, ctx.state.terrainOverrides);
       return (
         -expectedLossAt(ctx, u, h) * w['second.threat'] -
         cost * w['second.cost'] +
-        Math.min(inReach, w['move.inReachCap']) * w['second.reach'] +
         killValueFrom(ctx, fresh, h, near) * w['second.kill'] +
         (defenseMultiplier(terrain, false) - 1) * w['second.cover'] -
         (unitsAt(ctx.state, h).some((o) => o.owner === player && o.id !== u.id)
