@@ -39,6 +39,7 @@ import {
 import type { PlotOption, PlotPreview } from '@engine/movement.js';
 import { phaseIsIdle } from '@engine/reducer.js';
 import { createInitialState } from '@engine/state.js';
+import type { Command } from '@engine/commands.js';
 import { button, el, fill } from './components/dom.js';
 import { icon } from './components/glyphs.js';
 import { type Overlay, openModal } from './components/modal.js';
@@ -533,9 +534,25 @@ export const createApp = (deps: AppDeps): App => {
 
     newGame() {
       if (menuOverlay || pickerOverlay || ogrePickerOverlay) return;
+      const savedGame = session === null ? readGameSave() : null;
+      const savedBattle = groundBattle === null ? readBattleSave() : null;
       menuOverlay = openStartMenu(overlays, {
         campaignRunning: deps.campaign.current() !== null,
         dismissible: session !== null || table !== null,
+        resumeGame: savedGame
+          ? {
+              label: `${savedGame.name}, day ${savedGame.turn}`,
+              onResume: () => resumeGame(savedGame),
+              onDiscard: () => clearGameSave(),
+            }
+          : null,
+        resumeBattle: savedBattle
+          ? {
+              label: `${savedBattle.name}, turn ${savedBattle.turn}`,
+              onResume: () => resumeBattle(savedBattle),
+              onDiscard: () => clearBattleSave(),
+            }
+          : null,
         onClose: () => {
           menuOverlay = null;
         },
@@ -1577,13 +1594,160 @@ export const createApp = (deps: AppDeps): App => {
     groundBattle = null;
   };
 
+  // --- Battle autosave -------------------------------------------------------
+
+  /**
+   * An unfinished Ogre battle is saved in this browser after every accepted
+   * order, as what built it plus its command log — the same replayable shape
+   * the campaign uses. One at a time: a new battle replaces the save, and a
+   * finished one clears it.
+   */
+  const BATTLE_KEY = 'triplanetary-ogre-battle-v1';
+  interface BattleSave {
+    readonly v: 1;
+    readonly source:
+      | { readonly kind: 'scenario'; readonly id: string; readonly seed: number }
+      | { readonly kind: 'order'; readonly order: OrderOfBattle };
+    readonly ai: readonly string[];
+    readonly setup: boolean;
+    readonly log: readonly unknown[];
+    readonly name: string;
+    readonly turn: number;
+  }
+
+  const readBattleSave = (): BattleSave | null => {
+    try {
+      const raw = localStorage.getItem(BATTLE_KEY);
+      if (raw === null) return null;
+      const parsed = JSON.parse(raw) as BattleSave;
+      return parsed && parsed.v === 1 && Array.isArray(parsed.log) ? parsed : null;
+    } catch {
+      return null;
+    }
+  };
+  const writeBattleSave = (save: BattleSave): void => {
+    try {
+      localStorage.setItem(BATTLE_KEY, JSON.stringify(save));
+    } catch {
+      // Storage blocked: the battle simply is not saved.
+    }
+  };
+  const clearBattleSave = (): void => {
+    try {
+      localStorage.removeItem(BATTLE_KEY);
+    } catch {
+      // Nothing to clear.
+    }
+  };
+
+  /** The autosave hook every mounted battle gets. */
+  const battleProgress =
+    (source: BattleSave['source'], ai: readonly string[], setup: boolean) =>
+    (log: readonly unknown[], info: { scenarioName: string; turn: number; finished: boolean }) => {
+      if (info.finished) {
+        clearBattleSave();
+        return;
+      }
+      writeBattleSave({ v: 1, source, ai, setup, log, name: info.scenarioName, turn: info.turn });
+    };
+
+  // --- Game autosave ---------------------------------------------------------
+
+  /**
+   * A Triplanetary game played at this keyboard is saved the same way: the
+   * scenario, its seed and options, who the computer plays, and the log. A
+   * table played online is the server's to remember, not the browser's.
+   */
+  const GAME_KEY = 'triplanetary-game-v1';
+  interface GameSave {
+    readonly v: 1;
+    readonly scenarioId: string;
+    readonly seed: number;
+    readonly options: GameOptions;
+    readonly fleets?: Readonly<Record<string, readonly string[]>>;
+    readonly computerSeats: readonly string[];
+    readonly history: readonly unknown[];
+    readonly name: string;
+    readonly turn: number;
+  }
+  /** The fleets the current game was built with, for its save. */
+  let lastFleets: Readonly<Record<string, readonly string[]>> | undefined;
+
+  const readGameSave = (): GameSave | null => {
+    try {
+      const raw = localStorage.getItem(GAME_KEY);
+      if (raw === null) return null;
+      const parsed = JSON.parse(raw) as GameSave;
+      return parsed && parsed.v === 1 && Array.isArray(parsed.history) ? parsed : null;
+    } catch {
+      return null;
+    }
+  };
+  const persistGame = (): void => {
+    if (!session || table !== null) return;
+    if (session.state.victory !== null) {
+      try {
+        localStorage.removeItem(GAME_KEY);
+      } catch {
+        // Nothing to clear.
+      }
+      return;
+    }
+    const name = deps.scenarios.find((s) => s.id === scenarioId)?.name ?? scenarioId;
+    const save: GameSave = {
+      v: 1,
+      scenarioId,
+      seed,
+      options: gameOptions,
+      ...(lastFleets ? { fleets: lastFleets } : {}),
+      computerSeats: [...computerSeats],
+      history: session.history,
+      name,
+      turn: session.state.turn,
+    };
+    try {
+      localStorage.setItem(GAME_KEY, JSON.stringify(save));
+    } catch {
+      // Storage blocked: the game simply is not saved.
+    }
+  };
+  const clearGameSave = (): void => {
+    try {
+      localStorage.removeItem(GAME_KEY);
+    } catch {
+      // Nothing to clear.
+    }
+  };
+
+  /** Rebuild a saved game and replay its log onto it. */
+  const resumeGame = (save: GameSave): void => {
+    closeTable(true);
+    scenarioId = save.scenarioId;
+    seed = save.seed;
+    gameOptions = { ...DEFAULT_OPTIONS, ...save.options };
+    lastFleets = save.fleets;
+    const state = deps.buildScenario(save.scenarioId, {
+      seed: save.seed,
+      options: gameOptions,
+      ...(save.fleets ? { fleets: save.fleets } : {}),
+    });
+    computerSeats = new Set(save.computerSeats);
+    const next = deps.createSession(state);
+    for (const cmd of save.history) next.dispatch(cmd as Command);
+    installSession(next);
+    canvas.focus();
+  };
+
   /**
    * Fight a landing right here: the companion game's whole shell, ported and
    * mounted over this one. Loaded on demand — a player who never reaches a
    * ground battle never downloads the Ogre engine — the way the Supabase
    * client is.
    */
-  const openGroundBattle = async (order: OrderOfBattle): Promise<void> => {
+  const openGroundBattle = async (
+    order: OrderOfBattle,
+    resume: BattleSave | null = null,
+  ): Promise<void> => {
     if (groundBattle) return;
     const make = await import('../ogre/ui/battle.js').catch(() => null);
     if (make === null) {
@@ -1598,6 +1762,9 @@ export const createApp = (deps: AppDeps): App => {
     // a report button straight back, or a token for a campaign elsewhere.
     const pendingId = deps.campaign.current()?.state.pending?.order?.battleId ?? null;
     const reportable = order.battleId === pendingId;
+    const source = { kind: 'order', order } as const;
+    const setup = resume ? resume.setup : true;
+    const ai = resume ? resume.ai : [];
     groundBattle = make.createOgreBattle({
       host: overlays,
       battle: {
@@ -1610,11 +1777,16 @@ export const createApp = (deps: AppDeps): App => {
             act.notify(outcome?.reason ?? 'The campaign refused the result.', 'bad');
             return;
           }
+          clearBattleSave();
           closeGroundBattle();
           openCampaign();
         },
         resultToken: (result) => deps.campaign.resultToken(result),
       },
+      ai,
+      setup,
+      ...(resume ? { resume: resume.log as never } : {}),
+      onProgress: battleProgress(source, ai, setup),
       onExit: () => {
         closeGroundBattle();
         if (deps.campaign.current()?.state.pending) openCampaign();
@@ -1624,7 +1796,12 @@ export const createApp = (deps: AppDeps): App => {
   };
 
   /** A printed Ogre scenario, fought for its own sake: verdict, then home. */
-  const openOgreScenario = async (id: string, battleSeed: number): Promise<void> => {
+  const openOgreScenario = async (
+    id: string,
+    battleSeed: number,
+    ai: readonly string[] = [],
+    resume: BattleSave | null = null,
+  ): Promise<void> => {
     if (groundBattle) return;
     const make = await import('../ogre/ui/battle.js').catch(() => null);
     if (make === null) {
@@ -1632,14 +1809,35 @@ export const createApp = (deps: AppDeps): App => {
       act.newGame();
       return;
     }
+    const source = { kind: 'scenario', id, seed: battleSeed } as const;
+    const setup = resume ? resume.setup : true;
     groundBattle = make.createOgreBattle({
       host: overlays,
-      battle: { kind: 'scenario', id, seed: battleSeed },
+      battle: source,
+      ai,
+      setup,
+      ...(resume ? { resume: resume.log as never } : {}),
+      onProgress: battleProgress(source, ai, setup),
       onExit: () => {
         closeGroundBattle();
         if (!session && table === null) act.newGame();
       },
     });
+  };
+
+  /** Pick a saved battle back up, whatever it was. */
+  const resumeBattle = (save: BattleSave): void => {
+    if (save.source.kind === 'scenario') {
+      void openOgreScenario(save.source.id, save.source.seed, save.ai, save);
+      return;
+    }
+    // An Orbital Drop assault resumes with the war it belongs to; a campaign
+    // landing resumes on its own, reporting to whichever war room is open.
+    if (orbitalPending()?.battleId === save.source.order.battleId) {
+      void mountOrbitalBattle(save.source.order);
+    } else {
+      void openGroundBattle(save.source.order, save);
+    }
   };
 
   // --- Orbital Drop: the frozen sky --------------------------------------
@@ -1655,7 +1853,14 @@ export const createApp = (deps: AppDeps): App => {
     return data?.pendingGround ?? null;
   };
 
-  /** Mount the assault the freeze minted; its result resumes the day. */
+  /**
+   * Mount the assault the freeze minted; its result resumes the day.
+   *
+   * The seats follow the war: a power the computer plays above the sky has
+   * its ground battle played for it too, and a base's militia — nobody's
+   * seat — is always the computer's. A save for this very battle is picked
+   * back up where it was left.
+   */
   const mountOrbitalBattle = async (order: OrderOfBattle): Promise<void> => {
     if (groundBattle) return;
     frozenPrompt?.close();
@@ -1664,6 +1869,16 @@ export const createApp = (deps: AppDeps): App => {
       act.notify('The ground battle view could not be loaded.', 'bad');
       return;
     }
+    const saved = readBattleSave();
+    const resume =
+      saved && saved.source.kind === 'order' && saved.source.order.battleId === order.battleId
+        ? saved
+        : null;
+    const ai = resume
+      ? resume.ai
+      : order.sides.map((s) => s.player).filter((p) => computerSeats.has(p) || p === 'militia');
+    const source = { kind: 'order', order } as const;
+    const setup = resume ? resume.setup : true;
     groundBattle = make.createOgreBattle({
       host: overlays,
       battle: {
@@ -1682,10 +1897,15 @@ export const createApp = (deps: AppDeps): App => {
             act.notify(outcome.reason ?? 'The war refused the result.', 'bad');
             return;
           }
+          clearBattleSave();
           closeGroundBattle();
         },
         resultToken: (result) => deps.campaign.resultToken(result),
       },
+      ai,
+      setup,
+      ...(resume ? { resume: resume.log as never } : {}),
+      onProgress: battleProgress(source, ai, setup),
       onExit: () => {
         closeGroundBattle();
         openFrozenPrompt(order);
@@ -1745,8 +1965,16 @@ export const createApp = (deps: AppDeps): App => {
       act.newGame();
       return;
     }
+    // The seats, read off a built board: the picker names them, and the
+    // shell turns "the computer plays seat 1" back into a player id.
+    const seats = new Map<string, readonly string[]>();
+    const scenarios = mod.SCENARIOS.map((s) => {
+      const built = s.build({ seed: 1 });
+      seats.set(s.id, built.playerOrder);
+      return { ...s, sides: built.playerOrder.map((p) => built.players[p]?.name ?? p) };
+    });
     ogrePickerOverlay = openOgrePicker(overlays, {
-      scenarios: mod.SCENARIOS,
+      scenarios,
       seed: deps.randomSeed(),
       newSeed: () => deps.randomSeed(),
       dismissible: session !== null || table !== null,
@@ -1754,7 +1982,11 @@ export const createApp = (deps: AppDeps): App => {
         ogrePickerOverlay = null;
       },
       onBack: () => act.newGame(),
-      onStart: (id, battleSeed) => void openOgreScenario(id, battleSeed),
+      onStart: (id, battleSeed, computer) => {
+        const ids = seats.get(id) ?? [];
+        const ai = computer !== null && ids[computer] !== undefined ? [ids[computer]!] : [];
+        void openOgreScenario(id, battleSeed, ai);
+      },
     });
   };
 
@@ -2055,7 +2287,11 @@ export const createApp = (deps: AppDeps): App => {
   const installSession = (next: SessionPort): void => {
     unsubscribe?.();
     session = next;
-    unsubscribe = session.subscribe(() => render());
+    unsubscribe = session.subscribe(() => {
+      render();
+      persistGame();
+    });
+    persistGame();
 
     ui = { ...INITIAL_UI, flags: ui.flags };
     victoryShown = false;
@@ -2076,6 +2312,7 @@ export const createApp = (deps: AppDeps): App => {
     scenarioId = id;
     seed = newSeed;
     gameOptions = { ...DEFAULT_OPTIONS, ...options };
+    lastFleets = fleets;
     const state = deps.buildScenario(id, {
       seed,
       options: gameOptions,

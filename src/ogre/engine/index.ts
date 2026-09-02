@@ -23,4 +23,7 @@ export * from './movement.js';
 export * from './combat.js';
 export * from './ram.js';
 export * from './overrun.js';
+export * from './setup.js';
+export * from './reserves.js';
+export * from './missiles.js';
 export * from './reducer.js';

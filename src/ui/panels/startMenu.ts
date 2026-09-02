@@ -13,10 +13,22 @@ import { button, el, fill } from '../components/dom.js';
 import { type Overlay, openModal } from '../components/modal.js';
 import { pluralise } from '../format.js';
 
+/** Something saved in this browser that the player can pick back up. */
+export interface ResumeOffer {
+  /** What it is: "The Assault, turn 4" or "Orbital Drop, day 12". */
+  readonly label: string;
+  onResume(): void;
+  onDiscard(): void;
+}
+
 export interface StartMenuOpts {
   /** Whether a campaign is saved in this browser — it changes the wording. */
   readonly campaignRunning: boolean;
   readonly dismissible: boolean;
+  /** A Triplanetary game saved mid-play, if any. */
+  readonly resumeGame?: ResumeOffer | null;
+  /** An Ogre battle saved mid-play, if any. */
+  readonly resumeBattle?: ResumeOffer | null;
   onTriplanetary(): void;
   onOgre(): void;
   onCampaign(): void;
@@ -24,6 +36,31 @@ export interface StartMenuOpts {
 }
 
 export const openStartMenu = (host: HTMLElement, o: StartMenuOpts): Overlay => {
+  const resumeRow = (kind: string, offer: ResumeOffer): HTMLElement =>
+    el(
+      'div',
+      { class: 'start-resume' },
+      el('span', { class: 'start-resume-label', text: `${kind} in progress` }),
+      el('span', { class: 'start-resume-what mono', text: offer.label }),
+      button({
+        label: 'Resume',
+        variant: 'primary',
+        onClick: () => {
+          overlay.close();
+          offer.onResume();
+        },
+      }),
+      button({
+        label: 'Discard',
+        variant: 'quiet',
+        title: 'Forget the save',
+        onClick: () => {
+          offer.onDiscard();
+          overlay.close();
+          o.onClose?.();
+        },
+      }),
+    );
   const card = (name: string, tag: string, blurb: string, onPick: () => void): HTMLElement =>
     el(
       'button',
@@ -42,24 +79,30 @@ export const openStartMenu = (host: HTMLElement, o: StartMenuOpts): Overlay => {
 
   const body = el(
     'div',
-    { class: 'start-menu' },
-    card(
-      'Triplanetary',
-      'the space game',
-      'Vector movement in the inner system. Plot a course, spend fuel only to change it, and fight over what the orbits allow — hot seat, against the computer, or online.',
-      o.onTriplanetary,
-    ),
-    card(
-      'Ogre',
-      'the ground game',
-      'A cybernetic supertank against everything the defence can field. Attack its weapons or its treads — you never attack an Ogre — on the cratered map or the green one.',
-      o.onOgre,
-    ),
-    card(
-      'Orbital Drop',
-      'two games, one war',
-      'Triplanetary handles everything above the atmosphere; Ogre handles everything below it. Buy tanks as cargo, run convoys under the guns, and put a cybertank on somebody else’s colony.',
-      o.onCampaign,
+    { class: 'start-menu-wrap' },
+    o.resumeGame ? resumeRow('Game', o.resumeGame) : null,
+    o.resumeBattle ? resumeRow('Battle', o.resumeBattle) : null,
+    el(
+      'div',
+      { class: 'start-menu' },
+      card(
+        'Triplanetary',
+        'the space game',
+        'Vector movement in the inner system. Plot a course, spend fuel only to change it, and fight over what the orbits allow — hot seat, against the computer, or online.',
+        o.onTriplanetary,
+      ),
+      card(
+        'Ogre',
+        'the ground game',
+        'A cybernetic supertank against everything the defence can field. Attack its weapons or its treads — you never attack an Ogre — on the cratered map or the green one.',
+        o.onOgre,
+      ),
+      card(
+        'Orbital Drop',
+        'two games, one war',
+        'Triplanetary handles everything above the atmosphere; Ogre handles everything below it. Buy tanks as cargo, run convoys under the guns, and put a cybertank on somebody else’s colony.',
+        o.onCampaign,
+      ),
     ),
   );
 
@@ -87,6 +130,8 @@ export interface OgreScenarioInfo {
   readonly briefing: string;
   readonly victoryConditions: readonly string[];
   readonly players: number;
+  /** The seats, in the order they move: the shell reads them off a built board. */
+  readonly sides?: readonly string[];
 }
 
 export interface OgrePickerOpts {
@@ -94,7 +139,11 @@ export interface OgrePickerOpts {
   readonly seed: number;
   newSeed(): number;
   readonly dismissible: boolean;
-  onStart(id: string, seed: number): void;
+  /**
+   * `computer` is the index of the seat the computer plays — 0 or 1 in a
+   * two-player scenario — or null for hot seat.
+   */
+  onStart(id: string, seed: number, computer: number | null): void;
   onBack(): void;
   onClose?(): void;
 }
@@ -103,6 +152,7 @@ export interface OgrePickerOpts {
 export const openOgrePicker = (host: HTMLElement, o: OgrePickerOpts): Overlay => {
   let selected = o.scenarios[0]?.id ?? '';
   let seed = o.seed;
+  let computer: number | null = null;
 
   const list = el('div', {
     class: 'scenario-list',
@@ -124,7 +174,7 @@ export const openOgrePicker = (host: HTMLElement, o: OgrePickerOpts): Overlay =>
       {
         label: 'Take the field',
         variant: 'primary',
-        onClick: () => o.onStart(selected, seed),
+        onClick: () => o.onStart(selected, seed, computer),
       },
     ],
   });
@@ -151,7 +201,7 @@ export const openOgrePicker = (host: HTMLElement, o: OgrePickerOpts): Overlay =>
             { class: 'scenario-meta mono' },
             el('span', { text: pluralise(s.players, 'player') }),
             el('span', { class: 'dot-sep', text: '·' }),
-            el('span', { text: 'hot seat' }),
+            el('span', { text: 'hot seat or solo' }),
           ),
           el('span', { class: 'scenario-blurb', text: s.blurb }),
         ),
@@ -189,8 +239,24 @@ export const openOgrePicker = (host: HTMLElement, o: OgrePickerOpts): Overlay =>
         el('h3', { class: 'sect-title', text: 'The table' }),
         el('p', {
           class: 'hint',
-          text: 'Hot seat: pass the keyboard. The amber board takes the whole screen until the battle is decided.',
+          text: 'Pass the keyboard, or hand a seat to the computer. The amber board takes the whole screen until the battle is decided.',
         }),
+        el(
+          'div',
+          { class: 'chips seat-chips' },
+          el('span', { class: 'sel-label', text: 'Seats' }),
+          ...seatChoices(chosen?.sides ?? []).map((choice) =>
+            button({
+              label: choice.label,
+              variant: computer === choice.computer ? 'primary' : 'quiet',
+              title: choice.title,
+              onClick: () => {
+                computer = choice.computer;
+                draw();
+              },
+            }),
+          ),
+        ),
         el(
           'label',
           { class: 'seed-row' },
@@ -221,6 +287,20 @@ export const openOgrePicker = (host: HTMLElement, o: OgrePickerOpts): Overlay =>
 
   draw();
   return overlay;
+};
+
+/** Who sits where: hot seat, or you in one seat and the computer in the other. */
+const seatChoices = (
+  sides: readonly string[],
+): { label: string; title: string; computer: number | null }[] => {
+  const [first, second] = sides;
+  const a = first ?? 'the first seat';
+  const b = second ?? 'the second seat';
+  return [
+    { label: 'Hot seat', title: 'Both seats at this keyboard', computer: null },
+    { label: `Play ${a}`, title: `The computer plays ${b}`, computer: 1 },
+    { label: `Play ${b}`, title: `The computer plays ${a}`, computer: 0 },
+  ];
 };
 
 /**

@@ -41,6 +41,22 @@ export interface OrderOfBattle {
   readonly terms: Readonly<Record<string, unknown>>;
 }
 
+/**
+ * A cybertank's record sheet between battles (Orbital Drop §7, "Damage
+ * carries over"): what it has lost, in the engine's own vocabulary, so the
+ * next battle can build it worn and the base can price its repair.
+ */
+export interface OgreRecord {
+  /** An `OgreTypeId`: 'MK3', 'MK5'… */
+  readonly type: string;
+  readonly treads: number;
+  /** Components destroyed, by weapon kind: `{ main: 1, ap: 3 }`. */
+  readonly lost: Readonly<Record<string, number>>;
+  /** External missiles fired and not replaced. */
+  readonly missilesSpent: number;
+  readonly internalMissiles: number;
+}
+
 /** What a battle hands back. */
 export interface BattleResult {
   readonly battleId: string;
@@ -49,6 +65,8 @@ export interface BattleResult {
   /** Per side: what walked away, in the same vocabulary as `forces`. */
   readonly survivors: Readonly<Record<string, Readonly<Record<string, number>>>>;
   readonly victoryPoints: Readonly<Record<string, number>>;
+  /** Per side: the record sheets of the cybertanks that survived, worn as they are. */
+  readonly ogres?: Readonly<Record<string, readonly OgreRecord[]>>;
   /** The whole battle, for replay: its seed and its command log. */
   readonly replay: { readonly seed: number; readonly log: readonly unknown[] };
 }

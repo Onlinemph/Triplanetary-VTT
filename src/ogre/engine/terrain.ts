@@ -87,7 +87,15 @@ export const baseTerrain = (t: Terrain): Terrain =>
  * it were an Ogre!" (3.01).
  */
 export type Mobility =
-  'infantry' | 'gev' | 'ogre' | 'heavyTracked' | 'lightTracked' | 'wheeled' | 'immobile';
+  | 'infantry'
+  | 'gev'
+  | 'ogre'
+  | 'heavyTracked'
+  | 'lightTracked'
+  | 'wheeled'
+  | 'immobile'
+  /** The train: "moves only along railroad hexes" (9.01). */
+  | 'rail';
 
 /** What entering a hex costs, and what it does to the unit that enters. */
 export interface EntryCost {
@@ -142,6 +150,11 @@ export const entryCost = (terrain: Terrain, mobility: Mobility): EntryCost => {
   switch (mobility) {
     case 'immobile':
       return closed('this unit cannot move');
+
+    // The train never enters a hex *as terrain*: it enters along a rail link,
+    // which the movement module prices at one point like any route (9.01).
+    case 'rail':
+      return closed('the train keeps to the rails');
 
     // 5.08.1: "Infantry have no other terrain penalties; if they can legally
     // enter a hex at all, it costs them only one movement point."
@@ -277,6 +290,14 @@ export const sideCrossing = (
           };
         case 'immobile':
           return { allowed: false, requiresPhaseStart: false, reason: 'this unit cannot move' };
+        case 'rail':
+          // Off a bridge there is no rail, and the case above already let a
+          // bridge through.
+          return {
+            allowed: false,
+            requiresPhaseStart: false,
+            reason: 'the train keeps to the rails',
+          };
       }
   }
 };

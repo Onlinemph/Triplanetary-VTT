@@ -10,8 +10,8 @@
  */
 
 import { isInfantryClass } from '../engine/units.js';
-import { type GameState, isOgre, surviving } from '../engine/types.js';
-import { type BattleResult, orderOf } from '../../campaign/orders.js';
+import { type GameState, type OgreUnit, isOgre, surviving } from '../engine/types.js';
+import { type BattleResult, type OgreRecord, orderOf } from '../../campaign/orders.js';
 
 /**
  * Count what a player still has, in the same vocabulary an `OrderOfBattle`
@@ -37,6 +37,29 @@ const survivorsOf = (state: GameState, player: string): Record<string, number> =
   return out;
 };
 
+/** A surviving cybertank's wear, for the campaign to carry (Orbital Drop §7). */
+export const ogreRecordOf = (u: OgreUnit): OgreRecord => {
+  const lost: Record<string, number> = {};
+  let missilesSpent = 0;
+  for (const w of u.weapons) {
+    if (w.destroyed) lost[w.kind] = (lost[w.kind] ?? 0) + 1;
+    else if (w.kind === 'missile' && w.fired) missilesSpent += 1;
+  }
+  return {
+    type: u.typeId,
+    treads: u.treads,
+    lost,
+    missilesSpent,
+    internalMissiles: u.internalMissiles,
+  };
+};
+
+const ogresOf = (state: GameState, player: string): OgreRecord[] =>
+  Object.values(state.units)
+    .filter((u): u is OgreUnit => isOgre(u) && u.owner === player && surviving(u))
+    .sort((a, b) => a.id.localeCompare(b.id))
+    .map(ogreRecordOf);
+
 /**
  * The battle's result, or `null` while it is still undecided.
  *
@@ -55,9 +78,12 @@ export const readBattleResult = (
 
   const survivors: Record<string, Readonly<Record<string, number>>> = {};
   const victoryPoints: Record<string, number> = {};
+  const ogres: Record<string, readonly OgreRecord[]> = {};
   for (const side of order.sides) {
     survivors[side.player] = survivorsOf(state, side.player);
     victoryPoints[side.player] = state.players[side.player]?.victoryPoints ?? 0;
+    const records = ogresOf(state, side.player);
+    if (records.length > 0) ogres[side.player] = records;
   }
 
   return {
@@ -66,6 +92,7 @@ export const readBattleResult = (
     level: state.victory.level,
     survivors,
     victoryPoints,
+    ...(Object.keys(ogres).length > 0 ? { ogres } : {}),
     replay: { seed: order.seed, log },
   };
 };

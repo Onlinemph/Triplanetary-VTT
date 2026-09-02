@@ -12,7 +12,7 @@ import type { RngState } from './rng.js';
 import type { UnitClassId } from './units.js';
 import type { OgreTypeId, OgreWeaponKind } from './ogres.js';
 import type { DamageResult, OddsColumn } from './crt.js';
-import type { Terrain } from './terrain.js';
+import type { SideFeature, Terrain } from './terrain.js';
 
 export type PlayerId = string;
 export type UnitId = string;
@@ -108,6 +108,13 @@ export interface ConventionalUnit {
   readonly ridingOn?: UnitId;
   /** Mounting costs the whole movement phase, and bars dismounting (5.11.3). */
   readonly mountedThisTurn: boolean;
+  /**
+   * The train's speed marker (9.02): the hexes of rail it runs this turn.
+   * Changed by one step per turn, before it moves. Present only on a train.
+   */
+  readonly trainSpeed?: number;
+  /** The train's speed has been set this turn; it changes once per turn. */
+  readonly trainSpeedSet?: boolean;
 
   readonly destroyed: boolean;
   readonly destroyedBy?: string;
@@ -186,6 +193,13 @@ export const isOgre = (u: Unit): u is OgreUnit => u.kind === 'ogre';
 /** An Ogre still assembling: a stationary target that cannot yet act. */
 export const isInertOgre = (u: Unit, turn: number): boolean =>
   isOgre(u) && u.activatesOn !== undefined && turn < u.activatesOn;
+
+/** Whose turn it is to place counters, while the setup lasts. */
+export const setupActor = (state: { readonly setup?: SetupState | null }): PlayerId | null => {
+  const setup = state.setup;
+  if (!setup) return null;
+  return setup.order[setup.index] ?? null;
+};
 
 // ---------------------------------------------------------------------------
 // Buildings
@@ -337,6 +351,62 @@ export interface OverrunState {
 }
 
 // ---------------------------------------------------------------------------
+// Deployment (the setup step every scenario opens with)
+// ---------------------------------------------------------------------------
+
+/**
+ * "No more than 20 attack strength points may be set up in this area." A
+ * sub-zone with a ceiling on the printed attack strength placed inside it.
+ */
+export interface SetupLimit {
+  readonly hexes: readonly string[];
+  readonly maxAttack: number;
+  readonly label: string;
+}
+
+/** Where one side may set up: hex keys, a name for the panel, and any ceilings. */
+export interface SetupZone {
+  readonly hexes: readonly string[];
+  readonly label: string;
+  readonly limits?: readonly SetupLimit[];
+}
+
+/**
+ * Deployment in progress.
+ *
+ * A scenario builds a *legal* board from its seed, and this is the window in
+ * which the players rearrange it: "The defender sets up first", then the
+ * attacker chooses where to come on. While it is set, nothing else happens —
+ * no phase advances, no unit moves — and only the side whose turn it is to
+ * set up may act. `index` walks `order`; when it runs off the end the setup
+ * is over and the state's `setup` is cleared.
+ */
+export interface SetupState {
+  readonly order: readonly PlayerId[];
+  readonly index: number;
+  readonly zones: Readonly<Record<PlayerId, SetupZone>>;
+}
+
+// ---------------------------------------------------------------------------
+// Cruise missiles in flight (Section 10)
+// ---------------------------------------------------------------------------
+
+/**
+ * A cruise missile between launch and detonation. It lives outside `units`
+ * because it is not a counter anybody moves or shoots at with ordinary fire:
+ * it flies its own leg each of its owner's fire phases, lasers in line of
+ * sight take their interception shots as it passes, and it either arrives or
+ * is knocked down.
+ */
+export interface CruiseMissile {
+  readonly id: string;
+  readonly owner: PlayerId;
+  readonly pos: Hex;
+  readonly target: Hex;
+  readonly launchedTurn: number;
+}
+
+// ---------------------------------------------------------------------------
 // Options and victory
 // ---------------------------------------------------------------------------
 
@@ -358,6 +428,16 @@ export interface GameOptions {
   readonly superheavyRecordSheet: boolean;
   /** Warn before a move that would strand or expose a unit. Interface only. */
   readonly confirmRiskyMoves: boolean;
+  /**
+   * Orbital Drop §5, asteroid bases: "Low gravity: all other units get +1
+   * movement point." Everything that moves at all gets one more.
+   */
+  readonly lowGravity?: boolean;
+  /**
+   * Orbital Drop §5, asteroid bases: "No GEV-type units function (nothing to
+   * hover on) ... they sit immobile as D2 targets."
+   */
+  readonly noHover?: boolean;
 }
 
 export const DEFAULT_OPTIONS: GameOptions = {
@@ -399,6 +479,12 @@ export interface GameState {
   readonly terrainOverrides: Readonly<Record<string, Terrain>>;
   /** Hexes whose road and rail have been cut (13.01.3). */
   readonly routesCut: readonly string[];
+  /**
+   * Hexside features the game has laid over the map — the ridge overlays an
+   * Orbital Drop attacker places on a dead world (its §5). Keyed by canonical
+   * hexside, like `GameMap.sides`, and read in preference to it.
+   */
+  readonly sideOverrides?: Readonly<Record<string, SideFeature>>;
 
   readonly options: GameOptions;
   readonly rng: RngState;
@@ -408,6 +494,10 @@ export interface GameState {
 
   /** Set while an overrun is being fought; the movement phase is suspended. */
   readonly overrun: OverrunState | null;
+  /** Set while the sides are still placing their counters; nothing else moves. */
+  readonly setup?: SetupState | null;
+  /** Cruise missiles in flight, by id. */
+  readonly missiles?: Readonly<Record<string, CruiseMissile>>;
 
   readonly victory: VictoryState | null;
   /** Free-form per-scenario bookkeeping (entry edges, objectives, timers). */

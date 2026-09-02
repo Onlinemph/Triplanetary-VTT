@@ -54,10 +54,25 @@ export interface RamCheck {
   /** Movement points the ram costs — the cost of entering the target hex. */
   readonly cost: number;
   readonly victim?: Unit;
-  readonly kind?: 'ogreVsArmor' | 'ogreVsOgre' | 'ogreVsCP' | 'armorVsOgre' | 'gevVsUnit';
+  /** The structure rammed, when the target hex holds a building and nothing else. */
+  readonly building?: string;
+  readonly kind?:
+    | 'ogreVsArmor'
+    | 'ogreVsOgre'
+    | 'ogreVsCP'
+    | 'armorVsOgre'
+    | 'gevVsUnit'
+    | 'ogreVsTrain'
+    | 'unitVsTrain'
+    | 'ogreVsBuilding';
 }
 
 const no = (reason: string): RamCheck => ({ ok: false, reason, cost: 0 });
+
+const entryCostFor = (state: GameState, map: GameMap, u: Unit, target: Hex): number | null => {
+  const t = terrainAt(map, target, state.terrainOverrides);
+  return entryCost(t, mobilityOf(u)).cost;
+};
 
 const isGev = (u: Unit): boolean =>
   u.kind === 'unit' && (u.classId === 'GEV' || u.classId === 'LGEV' || u.classId === 'GEVPC');
@@ -105,6 +120,20 @@ export const canRam = (state: GameState, map: GameMap, rammer: Unit, target: Hex
     (u) => !(u.kind === 'unit' && unitClass(u.classId).kind === 'infantry'),
   );
   if (!victim) {
+    // "Ogres and Superheavies may ram buildings" (11.04.3): an empty hex with
+    // an enemy structure in it is a ram on the structure.
+    const building = Object.values(state.buildings).find(
+      (b) => !b.destroyed && eq(b.pos, target) && b.owner !== rammer.owner,
+    );
+    if (building && victims.length === 0 && ramsLikeAnOgre(rammer)) {
+      if (isOgre(rammer) && rammer.ramsThisTurn >= 2) return no('two rams per turn (6.01.1)');
+      const cost = again ? 1 : entryCostFor(state, map, rammer, target);
+      if (cost === null) return no('that hex is impassable');
+      if (rammer.moveUsed + cost > movementAllowance(rammer, state.phase, state.options)) {
+        return no('not enough movement left to ram');
+      }
+      return { ok: true, cost, kind: 'ogreVsBuilding', building: building.id };
+    }
     return no(
       victims.length > 0
         ? 'infantry can never be rammed — drive over them instead'
@@ -123,8 +152,17 @@ export const canRam = (state: GameState, map: GameMap, rammer: Unit, target: Hex
     cost = entry.cost;
   }
 
-  const allowance = movementAllowance(rammer, state.phase);
+  const allowance = movementAllowance(rammer, state.phase, state.options);
   if (rammer.moveUsed + cost > allowance) return no('not enough movement left to ram');
+
+  // --- The train (9.05): the Size Table's third column ---------------------
+  if (victim.kind === 'unit' && victim.classId === 'TRAIN') {
+    if (ramsLikeAnOgre(rammer)) return { ok: true, cost, victim, kind: 'ogreVsTrain' };
+    if (rammer.kind !== 'unit') return no('this unit cannot ram the train');
+    const profile = ramProfileFor(unitClass(rammer.classId).size, rammer.classId);
+    if (!profile.train) return no('this unit cannot ram the train');
+    return { ok: true, cost, victim, kind: 'unitVsTrain' };
+  }
 
   // --- Who may ram what --------------------------------------------------
   if (ramsLikeAnOgre(rammer)) {
@@ -165,7 +203,13 @@ export const resolveRam = (
   if (!rammer) return { state, ok: false, reason: 'no such unit' };
 
   const check = canRam(state, map, rammer, target);
-  if (!check.ok || !check.victim) return { state, ok: false, reason: check.reason };
+  if (!check.ok) return { state, ok: false, reason: check.reason };
+
+  if (check.kind === 'ogreVsBuilding' && check.building) {
+    const spent = updateAnyUnit(state, rammerId, (u) => ({ moveUsed: u.moveUsed + check.cost }));
+    return { state: ramBuilding(spent, map, rammerId, check.building, target), ok: true };
+  }
+  if (!check.victim) return { state, ok: false, reason: check.reason ?? 'nothing there to ram' };
 
   const victim = check.victim;
   let next = updateAnyUnit(state, rammerId, (u) => ({ moveUsed: u.moveUsed + check.cost }));
@@ -186,11 +230,114 @@ export const resolveRam = (
     case 'gevVsUnit':
       next = ramUnitWithGev(next, map, rammerId, victim.id);
       break;
+    case 'ogreVsTrain':
+    case 'unitVsTrain':
+      next = ramTrain(next, rammerId, victim.id, target, check.kind);
+      break;
     default:
       return { state, ok: false, reason: 'that ram is not legal' };
   }
 
   return { state: next, ok: true };
+};
+
+// ---------------------------------------------------------------------------
+// Ramming a building (11.04.3)
+// ---------------------------------------------------------------------------
+
+/**
+ * The Size Table's building column: roll that many dice and the total comes
+ * off the structure. The rammer pays a tread unit for the collision, as it
+ * does for any armour it drives into, and moves into the hex — or through
+ * the rubble, once the structure is down.
+ */
+const ramBuilding = (
+  state: GameState,
+  map: GameMap,
+  rammerId: UnitId,
+  buildingId: string,
+  target: Hex,
+): GameState => {
+  const rammer = state.units[rammerId]!;
+  const building = state.buildings[buildingId]!;
+  const size = ramSize(rammer);
+  // A Superheavy rams "as if it were an Ogre Mark I" (6.07.1): Size 5.
+  const dice = ramProfileFor(isOgre(rammer) ? size : 5).diceToBuilding ?? 1;
+  const roll = rollDice(state.rng, dice);
+  let next: GameState = { ...state, rng: roll.state };
+  const damage = roll.values.reduce((a, b) => a + b, 0);
+  const remaining = Math.max(0, building.structurePoints - damage);
+
+  next = {
+    ...next,
+    buildings: {
+      ...next.buildings,
+      [buildingId]: { ...building, structurePoints: remaining, destroyed: remaining <= 0 },
+    },
+  };
+  next = spendTreads(next, rammerId, 1, building.owner ?? undefined);
+  if (remaining <= 0 && building.owner !== rammer.owner) {
+    next = addPoints(next, rammer.owner, building.maxStructurePoints);
+  }
+  next = log(
+    next,
+    remaining <= 0 ? 'good' : 'warn',
+    `${unitName(rammer)} rams the ${building.kind}: ${dice} dice for ${damage} structure points` +
+      (remaining <= 0 ? ' — it comes down.' : `; ${remaining} left.`),
+    [target],
+  );
+  void map;
+  return isOgre(rammer)
+    ? updateAnyUnit(next, rammerId, (u) => ({
+        pos: target,
+        ramsThisTurn: (u as OgreUnit).ramsThisTurn + 1,
+      }))
+    : updateAnyUnit(next, rammerId, () => ({ pos: target }));
+};
+
+// ---------------------------------------------------------------------------
+// Ramming the train (9.05)
+// ---------------------------------------------------------------------------
+
+/**
+ * The Size Table's train column: an Ogre or Superheavy simply wrecks it
+ * ('X'); a lighter unit makes an attack at the listed odds — 1-2 for most,
+ * 1-1 for a GEV — and, ramming being "a suicide attack" for anything that is
+ * not an Ogre (6.01), is destroyed doing it.
+ */
+const ramTrain = (
+  state: GameState,
+  rammerId: UnitId,
+  victimId: UnitId,
+  target: Hex,
+  kind: 'ogreVsTrain' | 'unitVsTrain',
+): GameState => {
+  const rammer = state.units[rammerId]!;
+  const victim = state.units[victimId]!;
+  let next = state;
+
+  if (kind === 'ogreVsTrain') {
+    next = spendTreads(next, rammerId, 1, victim.owner);
+    next = destroyUnit(next, victimId, 'rammed off the rails', rammer.owner);
+    next = log(next, 'good', `${unitName(rammer)} rams the train off the rails.`, [target]);
+    return isOgre(rammer) ? afterOgreRam(next, rammerId, target, victimId) : next;
+  }
+
+  if (rammer.kind !== 'unit') return next;
+  const profile = ramProfileFor(unitClass(rammer.classId).size, rammer.classId);
+  const column = profile.train === '1-1' ? '1-1' : '1-2';
+  const die = rollDie(next.rng);
+  next = { ...next, rng: die.state };
+  const result = resolve({ kind: 'column', column }, die.value, 'normal');
+  next = log(
+    next,
+    result === 'X' ? 'good' : 'warn',
+    `${unitName(rammer)} throws itself at the train — ${column.replace('-', ' to ')}, rolled ${die.value}: ` +
+      (result === 'X' ? 'derailed.' : 'the train shrugs it off.'),
+    [target],
+  );
+  if (result === 'X') next = destroyUnit(next, victimId, 'derailed', rammer.owner);
+  return destroyUnit(next, rammerId, 'destroyed ramming the train', victim.owner);
 };
 
 // ---------------------------------------------------------------------------

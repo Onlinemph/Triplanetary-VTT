@@ -16,30 +16,44 @@
  * battle ends with a `BattleResult` handed to whoever is waiting for it — the
  * war room in this browser, or a token for one running somewhere else — and a
  * printed scenario ends with the verdict alone.
+ *
+ * A seat may be the computer's: the view asks the AI for its plan whenever
+ * the decision is the computer's and dispatches it an order at a time, so a
+ * human watching sees the moves land. Every accepted order is also reported
+ * out through `onProgress`, which is how the shell autosaves a battle.
  */
 
 import { type Hex, eq, label as hexLabel } from '../engine/hex.js';
 import { terrainAt } from '../engine/map.js';
 import { TERRAIN_LABELS } from '../engine/terrain.js';
 import { OGRE_WEAPONS, movementForTreads, ogreType } from '../engine/ogres.js';
-import { unitClass } from '../engine/units.js';
+import { TRAIN_MAX_SPEED, unitClass } from '../engine/units.js';
 import { describeOdds, oddsChance } from '../engine/crt.js';
 import {
   type AttackerRef,
+  type Building,
   type GameState,
   type OgreUnit,
+  type PlayerId,
   type TargetRef,
   type Unit,
   type UnitId,
   PHASE_LABELS,
   activePlayer,
+  isInertOgre,
   isOgre,
   onBoard,
+  setupActor,
   unitsAt,
 } from '../engine/types.js';
 import { isFireable, movementAllowance, unitName } from '../engine/state.js';
 import { reachable } from '../engine/movement.js';
-import { canStillFire, previewAttack } from '../engine/combat.js';
+import {
+  canStillFire,
+  orbitalStrikesLeft,
+  previewAttack,
+  previewOrbitalStrike,
+} from '../engine/combat.js';
 import { canRam } from '../engine/ram.js';
 import {
   canOverrun,
@@ -48,11 +62,16 @@ import {
   overrunUnits,
   previewOverrunAttack,
 } from '../engine/overrun.js';
+import { legalSetupHexes, limitStatus, zoneOf } from '../engine/setup.js';
+import { reactionTurn, reserveEntryHexes, reservesOf } from '../engine/reserves.js';
+import { CRUISE_MISSILE, launchCheck } from '../engine/missiles.js';
+import type { Command } from '../engine/commands.js';
 import type { BattleResult, OrderOfBattle } from '../../campaign/orders.js';
 import { type ReachHint, type RenderView, EMPTY_VIEW, MapRenderer } from '../render/renderer.js';
 import { GameSession } from '../net/session.js';
 import { LANDING, scenarioById } from '../scenarios/index.js';
 import { readBattleResult } from '../campaign/result.js';
+import { aiPlan, decisionKey } from '../ai/player.js';
 import { button, el, row, setChildren } from './dom.js';
 import '../ogre.css';
 
@@ -87,12 +106,32 @@ export interface OgreBattleOptions {
   /** Where to mount. The view covers it while the battle is open. */
   readonly host: HTMLElement;
   readonly battle: OgreBattleSource;
+  /** Seats the computer plays, by player id. */
+  readonly ai?: readonly PlayerId[];
+  /**
+   * Open with the deployment step (default true). A resumed battle must be
+   * built the way it was first built, so the flag travels with the save.
+   */
+  readonly setup?: boolean;
+  /** A saved command log to replay onto the freshly built board. */
+  readonly resume?: readonly Command[];
+  /** Called with the accepted log after every change; the shell autosaves it. */
+  onProgress?(log: readonly Command[], info: BattleProgress): void;
   /** Leave without a result. The battle can be fought again from the start. */
   onExit(): void;
 }
 
+/** What the shell needs to know about a battle to describe its save. */
+export interface BattleProgress {
+  readonly scenarioName: string;
+  readonly turn: number;
+  readonly finished: boolean;
+}
+
 export interface OgreBattle {
   destroy(): void;
+  /** The seats the computer holds, for the shell's save. */
+  readonly ai: readonly PlayerId[];
 }
 
 interface UiState {
@@ -100,6 +139,12 @@ interface UiState {
   hover: Hex | null;
   attackers: AttackerRef[];
   target: TargetRef | null;
+  /** A reserve being brought on: the next click on the entry edge places it. */
+  placing: UnitId | null;
+  /** An orbital strike chosen: the next enemy clicked is its target. */
+  strike: number | null;
+  /** A loaded crawler aiming: the next hex clicked is where the missile goes. */
+  aiming: UnitId | null;
   showHexNumbers: boolean;
   helpOpen: boolean;
 }
@@ -116,21 +161,28 @@ export const createOgreBattle = (opts: OgreBattleOptions): OgreBattle => {
     battle.kind === 'order'
       ? (scenarioById(battle.order.scenarioId) ?? LANDING)
       : (scenarioById(battle.id) ?? LANDING);
+  const withSetup = opts.setup ?? true;
   const session = new GameSession(
     battle.kind === 'order'
-      ? scenario.build({ seed: battle.order.seed, order: battle.order })
-      : scenario.build({ seed: battle.seed }),
+      ? scenario.build({ seed: battle.order.seed, order: battle.order, setup: withSetup })
+      : scenario.build({ seed: battle.seed, setup: withSetup }),
     scenario.map,
     {
       victoryCheck: scenario.checkVictory,
     },
   );
+  if (opts.resume && opts.resume.length > 0) session.replay(opts.resume);
+
+  const aiSeats = new Set<PlayerId>(opts.ai ?? []);
 
   const ui: UiState = {
     selected: null,
     hover: null,
     attackers: [],
     target: null,
+    placing: null,
+    strike: null,
+    aiming: null,
     showHexNumbers: false,
     helpOpen: false,
   };
@@ -174,12 +226,16 @@ export const createOgreBattle = (opts: OgreBattleOptions): OgreBattle => {
   /**
    * Whose decision it is right now.
    *
-   * Almost always the phasing player — but an overrun hands initiative to the
-   * side that is firing, and "The defender has the first fire round" (8.04).
-   * That is the one moment in Ogre when the non-phasing player acts, and the
-   * whole shell has to follow it or the panels offer the wrong units.
+   * Almost always the phasing player — but deployment goes side by side
+   * before the first turn, and an overrun hands initiative to the side that
+   * is firing: "The defender has the first fire round" (8.04). The whole
+   * shell has to follow it or the panels offer the wrong units.
    */
-  const me = (): string => overrunActor(session.state) ?? activePlayer(session.state);
+  const me = (): string =>
+    setupActor(session.state) ?? overrunActor(session.state) ?? activePlayer(session.state);
+
+  /** The computer holds this seat; the panels watch rather than offer. */
+  const computerTurn = (): boolean => aiSeats.has(me());
 
   const selectedUnit = (): Unit | null => {
     if (!session || !ui.selected) return null;
@@ -190,7 +246,7 @@ export const createOgreBattle = (opts: OgreBattleOptions): OgreBattle => {
   const reachHints = (): ReachHint[] => {
     const s = session;
     const u = selectedUnit();
-    if (!s || !u || u.owner !== me()) return [];
+    if (!s || !u || u.owner !== me() || s.state.setup) return [];
     if (s.state.phase !== 'movement' && s.state.phase !== 'gevMovement') return [];
     return reachable(s.state, s.map, u).map((r) => ({
       hex: r.hex,
@@ -202,21 +258,31 @@ export const createOgreBattle = (opts: OgreBattleOptions): OgreBattle => {
   /**
    * Hexes the selection can charge into — rammed or overrun, whichever set of
    * rules this game is using. The two are alternatives, never both (6.00).
+   * A building alone in a hex is a ram target too (11.04.3).
    */
   const ramHints = (): Hex[] => {
     const s = session;
     const u = selectedUnit();
-    if (!s || !u || u.owner !== me()) return [];
+    if (!s || !u || u.owner !== me() || s.state.setup) return [];
     if (s.state.phase !== 'movement' && s.state.phase !== 'gevMovement') return [];
     if (s.state.overrun) return [];
     const out: Hex[] = [];
+    const candidates: Hex[] = [];
     for (const other of Object.values(s.state.units)) {
       if (!onBoard(other) || other.owner === u.owner) continue;
-      if (out.some((h) => eq(h, other.pos))) continue;
+      candidates.push(other.pos);
+    }
+    if (!s.state.options.overrunCombat) {
+      for (const b of Object.values(s.state.buildings)) {
+        if (!b.destroyed && b.owner !== u.owner) candidates.push(b.pos);
+      }
+    }
+    for (const h of candidates) {
+      if (out.some((x) => eq(x, h))) continue;
       const allowed = s.state.options.overrunCombat
-        ? canOverrun(s.state, s.map, u, other.pos).ok
-        : canRam(s.state, s.map, u, other.pos).ok;
-      if (allowed) out.push(other.pos);
+        ? canOverrun(s.state, s.map, u, h).ok
+        : canRam(s.state, s.map, u, h).ok;
+      if (allowed) out.push(h);
     }
     return out;
   };
@@ -228,6 +294,43 @@ export const createOgreBattle = (opts: OgreBattleOptions): OgreBattle => {
     const found = reachable(s.state, s.map, u).find((r) => eq(r.hex, h));
     return found ? [...found.path] : null;
   };
+
+  /** Hexes to light up as somewhere to put something down. */
+  const zoneHints = (): { zone: Hex[]; limit: Hex[] } => {
+    const s = session.state;
+    if (s.setup) {
+      const u = selectedUnit();
+      if (u && u.owner === me()) {
+        const legal = legalSetupHexes(s, session.map, u);
+        const z = zoneOf(s, u.owner);
+        const limited = new Set((z?.limits ?? []).flatMap((l) => l.hexes));
+        return {
+          zone: legal,
+          limit: legal.filter((h) => limited.has(`${h.q},${h.r}`)),
+        };
+      }
+      const z = zoneOf(s, me());
+      if (!z) return { zone: [], limit: [] };
+      const all = z.hexes.map(parseHexKey);
+      const limited = new Set((z.limits ?? []).flatMap((l) => l.hexes));
+      return { zone: all, limit: all.filter((h) => limited.has(`${h.q},${h.r}`)) };
+    }
+    if (ui.placing) {
+      const u = s.units[ui.placing];
+      return u
+        ? { zone: reserveEntryHexes(s, session.map, u), limit: [] }
+        : { zone: [], limit: [] };
+    }
+    return { zone: [], limit: [] };
+  };
+
+  const parseHexKey = (k: string): Hex => {
+    const comma = k.indexOf(',');
+    return { q: Number(k.slice(0, comma)), r: Number(k.slice(comma + 1)) };
+  };
+
+  const buildingAt = (h: Hex): Building | undefined =>
+    Object.values(session.state.buildings).find((b) => !b.destroyed && eq(b.pos, h));
 
   // ---------------------------------------------------------------------
   // Pointer
@@ -298,13 +401,50 @@ export const createOgreBattle = (opts: OgreBattleOptions): OgreBattle => {
   const onClickHex = (h: Hex): void => {
     const s = session;
     if (!s) return;
-    // Everything in an overrun happens in one hex, so the panel lists the
-    // combatants rather than asking the player to click a stack of counters.
-    if (s.state.overrun) return;
+    if (computerTurn()) {
+      // Looking is fine; the decision is the computer's.
+      selectAt(h);
+      return;
+    }
     const here = unitsAt(s.state, h);
     const mine = here.filter((u) => u.owner === me());
     const theirs = here.filter((u) => u.owner !== me());
     const phase = s.state.phase;
+
+    // --- Deployment: pick up a counter, put it down --------------------
+    if (s.state.setup) {
+      const selected = selectedUnit();
+      if (selected && selected.owner === me() && mine.every((u) => u.id !== selected.id)) {
+        if (zoneOf(s.state, me())?.hexes.includes(`${h.q},${h.r}`)) {
+          dispatch({ type: 'placeUnit', by: me(), unit: selected.id, at: h });
+          return;
+        }
+      }
+      selectAt(h);
+      return;
+    }
+
+    // --- A reserve coming on --------------------------------------------
+    if (ui.placing) {
+      const unit = s.state.units[ui.placing];
+      if (unit) dispatch({ type: 'deployReserve', by: me(), unit: unit.id, at: h });
+      ui.placing = null;
+      draw();
+      return;
+    }
+
+    // --- A cruise missile being aimed ------------------------------------
+    if (ui.aiming) {
+      const unit = s.state.units[ui.aiming];
+      if (unit) dispatch({ type: 'launchCruiseMissile', by: me(), unit: unit.id, target: h });
+      ui.aiming = null;
+      draw();
+      return;
+    }
+
+    // Everything in an overrun happens in one hex, so the panel lists the
+    // combatants rather than asking the player to click a stack of counters.
+    if (s.state.overrun) return;
 
     if (phase === 'fire') {
       if (mine.length > 0 && (!ui.selected || !mine.some((u) => u.id === ui.selected))) {
@@ -317,6 +457,12 @@ export const createOgreBattle = (opts: OgreBattleOptions): OgreBattle => {
       if (theirs.length > 0) {
         const t = theirs[0]!;
         ui.target = isOgre(t) ? { kind: 'ogreTreads', unit: t.id } : { kind: 'unit', unit: t.id };
+        draw();
+        return;
+      }
+      const building = buildingAt(h);
+      if (building && building.owner !== me()) {
+        ui.target = { kind: 'building', building: building.id };
         draw();
         return;
       }
@@ -340,9 +486,16 @@ export const createOgreBattle = (opts: OgreBattleOptions): OgreBattle => {
         return;
       }
     }
-    if (mine.length > 0) {
-      const current = mine.findIndex((u) => u.id === ui.selected);
-      ui.selected = mine[(current + 1) % mine.length]!.id;
+    selectAt(h);
+  };
+
+  /** Cycle the selection through the counters in a hex, own side first. */
+  const selectAt = (h: Hex): void => {
+    const here = unitsAt(session.state, h);
+    const own = here.filter((u) => u.owner === me());
+    if (own.length > 0) {
+      const current = own.findIndex((u) => u.id === ui.selected);
+      ui.selected = own[(current + 1) % own.length]!.id;
     } else if (here.length > 0) {
       ui.selected = here[0]!.id;
     } else {
@@ -356,10 +509,11 @@ export const createOgreBattle = (opts: OgreBattleOptions): OgreBattle => {
     return [];
   };
 
-  const dispatch = (cmd: Parameters<GameSession['dispatch']>[0]): void => {
+  const dispatch = (cmd: Command): boolean => {
     const result = session.dispatch(cmd);
     if (!result.ok) say(result.reason, true);
     draw();
+    return result.ok;
   };
 
   // ---------------------------------------------------------------------
@@ -374,8 +528,7 @@ export const createOgreBattle = (opts: OgreBattleOptions): OgreBattle => {
         endPhase();
         break;
       case 'u':
-        session.undo();
-        draw();
+        undo();
         break;
       case 'h':
         ui.helpOpen = !ui.helpOpen;
@@ -393,6 +546,9 @@ export const createOgreBattle = (opts: OgreBattleOptions): OgreBattle => {
         ui.selected = null;
         ui.target = null;
         ui.attackers = [];
+        ui.placing = null;
+        ui.strike = null;
+        ui.aiming = null;
         ui.helpOpen = false;
         draw();
         break;
@@ -402,10 +558,26 @@ export const createOgreBattle = (opts: OgreBattleOptions): OgreBattle => {
   };
   window.addEventListener('keydown', onKeyDown);
 
+  /** The one button that moves the game on, whatever it is waiting for. */
   const endPhase = (): void => {
+    if (computerTurn()) return;
     ui.attackers = [];
     ui.target = null;
-    dispatch({ type: 'endPhase', by: me() });
+    ui.placing = null;
+    ui.strike = null;
+    ui.aiming = null;
+    const s = session.state;
+    if (s.setup) dispatch({ type: 'finishSetup', by: me() });
+    else if (s.overrun) dispatch({ type: 'endFireRound', by: me() });
+    else dispatch({ type: 'endPhase', by: me() });
+  };
+
+  const undo = (): void => {
+    if (!session.canUndo) return;
+    session.undo();
+    // A take-back may hand the decision to the computer; let it think again.
+    aiPlanned = null;
+    draw();
   };
 
   const onWindowResize = (): void => {
@@ -420,20 +592,78 @@ export const createOgreBattle = (opts: OgreBattleOptions): OgreBattle => {
   };
 
   // ---------------------------------------------------------------------
+  // The computer's seats
+  // ---------------------------------------------------------------------
+
+  /** The plan being worked through, and the decision it was made for. */
+  let aiPlanned: { key: string; commands: Command[] } | null = null;
+  let aiTimer = 0;
+  let destroyed = false;
+
+  /**
+   * Whenever the decision is the computer's, take the next order from its
+   * plan a beat later — long enough to see, short enough not to wait for.
+   * A stale plan (the phase moved on, an overrun began) is thrown away and
+   * asked for afresh; a refused order is skipped; an empty plan falls back
+   * to whatever moves the game on, so a computer seat never stalls.
+   */
+  const scheduleAi = (): void => {
+    window.clearTimeout(aiTimer);
+    if (destroyed || session.state.victory || !computerTurn()) return;
+    aiTimer = window.setTimeout(stepAi, 240);
+  };
+
+  const stepAi = (): void => {
+    if (destroyed || session.state.victory || !computerTurn()) return;
+    const player = me();
+    const k = decisionKey(session.state);
+    if (!aiPlanned || aiPlanned.key !== k) {
+      aiPlanned = { key: k, commands: aiPlan(session.state, session.map, player) };
+    }
+    for (let guard = 0; guard < 400; guard++) {
+      const cmd = aiPlanned.commands.shift();
+      if (!cmd) {
+        // Nothing left to say: move the game on.
+        const s = session.state;
+        const fallback: Command = s.setup
+          ? { type: 'finishSetup', by: player }
+          : s.overrun
+            ? { type: 'endFireRound', by: player }
+            : { type: 'endPhase', by: player };
+        const result = session.dispatch(fallback);
+        if (!result.ok) aiPlanned = null;
+        draw();
+        return;
+      }
+      const result = session.dispatch(cmd);
+      if (result.ok) {
+        draw();
+        return;
+      }
+      // Refused: the board changed under the plan. Try the next order.
+    }
+  };
+
+  // ---------------------------------------------------------------------
   // Draw
   // ---------------------------------------------------------------------
 
   const draw = (): void => {
     const state = session.state;
+    const zones = zoneHints();
+    const aimAt = ui.aiming && ui.hover ? ui.hover : null;
     const view: RenderView = {
       ...EMPTY_VIEW,
       selected: ui.selected,
       hover: ui.hover,
       reachable: reachHints(),
       ramTargets: ramHints(),
-      fireTargets: state.phase === 'fire' ? fireTargets(state) : [],
+      fireTargets: state.phase === 'fire' && !state.setup ? fireTargets(state) : [],
       attackers: ui.attackers.map((a) => a.unit),
       focus: state.overrun ? [state.overrun.hex] : [],
+      zone: zones.zone,
+      zoneLimit: zones.limit,
+      aim: aimAt,
       showHexNumbers: ui.showHexNumbers,
       viewer: me(),
     };
@@ -442,6 +672,7 @@ export const createOgreBattle = (opts: OgreBattleOptions): OgreBattle => {
     renderOrders(state);
     renderLog(state);
     renderModal(state);
+    scheduleAi();
   };
 
   const fireTargets = (state: GameState): UnitId[] => {
@@ -470,7 +701,14 @@ export const createOgreBattle = (opts: OgreBattleOptions): OgreBattle => {
   // ---------------------------------------------------------------------
 
   const renderTopbar = (state: GameState): void => {
-    const player = state.players[activePlayer(state)]!;
+    const actor = me();
+    const player = state.players[actor]!;
+    const phaseText = state.setup
+      ? `Deployment — ${player.name}`
+      : state.overrun
+        ? `Overrun — ${state.overrun.firing} firing`
+        : PHASE_LABELS[state.phase];
+    const advance = state.setup ? 'Ready ␣' : state.overrun ? 'End fire round ␣' : 'End phase ␣';
     setChildren(
       topbar,
       el(
@@ -482,26 +720,23 @@ export const createOgreBattle = (opts: OgreBattleOptions): OgreBattle => {
       el(
         'div',
         { class: 'turnline' },
-        el('span', { class: 'turn' }, `Turn ${state.turn}`),
-        el('span', { class: 'player', style: `--accent:${player.color}` }, player.name),
+        el('span', { class: 'turn' }, state.setup ? 'Setup' : `Turn ${state.turn}`),
         el(
           'span',
-          { class: 'phase' },
-          state.overrun ? `Overrun — ${state.overrun.firing} firing` : PHASE_LABELS[state.phase],
+          { class: 'player', style: `--accent:${player.color}` },
+          `${player.name}${aiSeats.has(actor) ? ' · computer' : ''}`,
         ),
+        el('span', { class: 'phase' }, phaseText),
       ),
       el(
         'div',
         { class: 'controls' },
-        button('End phase ␣', endPhase, { class: 'primary' }),
-        button(
-          'Undo',
-          () => {
-            session?.undo();
-            draw();
-          },
-          { disabled: !session?.canUndo, title: 'Local games only' },
-        ),
+        button(advance, endPhase, {
+          class: 'primary',
+          disabled: computerTurn(),
+          title: computerTurn() ? 'The computer is playing this seat' : 'Advance (space)',
+        }),
+        button('Undo', undo, { disabled: !session?.canUndo, title: 'Local games only' }),
         button('Fit', () => {
           renderer?.fitMap();
           draw();
@@ -521,10 +756,10 @@ export const createOgreBattle = (opts: OgreBattleOptions): OgreBattle => {
               return;
             }
             leaveArmed = true;
-            say('Leaving discards the board. Press again to leave.', true);
+            say('Leaving keeps the save. Press again to leave.', true);
             draw();
           },
-          { title: 'The order can be fought again from the start' },
+          { title: 'An unfinished battle is saved in this browser' },
         ),
       ),
     );
@@ -535,6 +770,28 @@ export const createOgreBattle = (opts: OgreBattleOptions): OgreBattle => {
   // ---------------------------------------------------------------------
 
   const renderOrders = (state: GameState): void => {
+    if (computerTurn()) {
+      setChildren(
+        ordersPanel,
+        el(
+          'div',
+          { class: 'panel-head' },
+          el('h2', {}, 'Orders'),
+          el('span', { class: 'hint' }, 'The computer is thinking.'),
+        ),
+        el(
+          'p',
+          { class: 'empty' },
+          `${state.players[me()]?.name ?? me()} is played by the computer. Watch the log; your turn comes next.`,
+        ),
+        selectedUnit() ? unitCard(state, selectedUnit()!) : null,
+      );
+      return;
+    }
+    if (state.setup) {
+      setChildren(ordersPanel, ...setupPanel(state));
+      return;
+    }
     if (state.overrun) {
       setChildren(ordersPanel, ...overrunPanel(state));
       return;
@@ -551,12 +808,21 @@ export const createOgreBattle = (opts: OgreBattleOptions): OgreBattle => {
       ),
     );
 
+    // Orders that belong to the side rather than a counter.
+    const reserves = reservePanel(state);
+    if (reserves) blocks.push(reserves);
+    const strikes = strikePanel(state);
+    if (strikes) blocks.push(strikes);
+
     if (!u) {
       blocks.push(el('p', { class: 'empty' }, 'Click a counter to select it.'));
     } else {
       blocks.push(unitCard(state, u));
       if (isOgre(u)) blocks.push(ogreSheet(u));
-      if (state.phase === 'fire' && u.owner === me()) blocks.push(firePanel(state, u));
+      if (state.phase === 'fire' && u.owner === me()) {
+        if (u.kind === 'unit' && u.classId === 'MCRL') blocks.push(missilePanel(state, u));
+        else blocks.push(firePanel(state, u));
+      }
       if ((state.phase === 'movement' || state.phase === 'gevMovement') && u.owner === me()) {
         blocks.push(movePanel(state, u));
       }
@@ -580,6 +846,200 @@ export const createOgreBattle = (opts: OgreBattleOptions): OgreBattle => {
     }
   };
 
+  // --- Deployment ---------------------------------------------------------
+
+  const setupPanel = (state: GameState): HTMLElement[] => {
+    const actor = me();
+    const z = zoneOf(state, actor);
+    const u = selectedUnit();
+    const blocks: HTMLElement[] = [];
+    blocks.push(
+      el(
+        'div',
+        { class: 'panel-head' },
+        el('h2', {}, 'Deployment'),
+        el('span', { class: 'hint' }, `${state.players[actor]?.name ?? actor} sets up.`),
+      ),
+    );
+    blocks.push(
+      el(
+        'section',
+        { class: 'card' },
+        el(
+          'p',
+          { class: 'note' },
+          `Your counters are down in ${z?.label ?? 'your area'}, as the scenario dealt them. ` +
+            'Click one, then a lit hex to move it there; drop it on a friend to swap. ' +
+            'Press Ready when the line is set.',
+        ),
+        ...limitStatus(state, actor).map((l) =>
+          row(
+            `In ${l.label}`,
+            `${l.used} of ${l.max} attack points`,
+            l.used > l.max ? 'bad' : l.used === l.max ? 'warn' : '',
+          ),
+        ),
+        button('Ready', endPhase, { class: 'primary' }),
+      ),
+    );
+    if (u) blocks.push(unitCard(state, u));
+    else blocks.push(el('p', { class: 'empty' }, 'Click one of your counters to pick it up.'));
+    const hexInfo = hexCard(state);
+    if (hexInfo) blocks.push(hexInfo);
+    return blocks;
+  };
+
+  // --- Reserves (Orbital Drop §3.03) ----------------------------------------
+
+  const reservePanel = (state: GameState): HTMLElement | null => {
+    const held = reservesOf(state, me());
+    if (held.length === 0) return null;
+    const turn = reactionTurn(state);
+    const may = state.phase === 'movement' && state.turn >= turn;
+    return el(
+      'section',
+      { class: 'card' },
+      el('div', { class: 'card-head' }, el('strong', {}, 'Reaction force')),
+      el(
+        'p',
+        { class: 'note' },
+        may
+          ? 'Dispersed away from the base when the alarm sounded, and racing back: pick a unit, then a lit hex on your edge. It arrives with its move spent.'
+          : `${held.length} unit${held.length === 1 ? '' : 's'} off the map, entering from your edge from turn ${turn}` +
+              (state.phase === 'movement' ? '.' : ' — during the movement phase.'),
+      ),
+      may
+        ? el(
+            'div',
+            { class: 'chips' },
+            ...held.map((r) =>
+              button(
+                unitName(r),
+                () => {
+                  ui.placing = ui.placing === r.id ? null : r.id;
+                  ui.selected = null;
+                  draw();
+                },
+                { class: ui.placing === r.id ? 'chip on' : 'chip' },
+              ),
+            ),
+          )
+        : el('p', { class: 'dim' }, held.map(unitName).join(', ')),
+    );
+  };
+
+  // --- Orbital fire support (Orbital Drop §6.01) ---------------------------
+
+  const strikePanel = (state: GameState): HTMLElement | null => {
+    if (state.scenarioData['orbitalStrikeSide'] !== me()) return null;
+    const left = orbitalStrikesLeft(state);
+    if (left.length === 0) return null;
+    const inFire = state.phase === 'fire';
+    const kids: HTMLElement[] = [
+      el(
+        'p',
+        { class: 'note' },
+        inFire
+          ? 'Each warship overhead owes one strike: its combat strength, any target, any range. Choose a strike, then click the target.'
+          : 'Warships overhead, each owing one strike in your fire phase.',
+      ),
+      el(
+        'div',
+        { class: 'chips' },
+        ...left.map((strength, i) =>
+          button(
+            `Strike ${strength}`,
+            () => {
+              ui.strike = ui.strike === i ? null : i;
+              draw();
+            },
+            { class: ui.strike === i ? 'chip on' : 'chip', disabled: !inFire },
+          ),
+        ),
+      ),
+    ];
+    if (inFire && ui.strike !== null && ui.target) {
+      const preview = previewOrbitalStrike(state, session.map, ui.strike, ui.target);
+      const targetUnit =
+        ui.target.kind === 'unit' ||
+        ui.target.kind === 'ogreWeapon' ||
+        ui.target.kind === 'ogreTreads'
+          ? state.units[ui.target.unit]
+          : undefined;
+      if (targetUnit && isOgre(targetUnit)) kids.push(targetChoice(targetUnit));
+      if (!preview.ok) {
+        kids.push(el('p', { class: 'empty bad' }, preview.reason ?? 'not a legal strike'));
+      } else {
+        const chance = oddsChance(preview.odds);
+        const strike = ui.strike;
+        const target = ui.target;
+        kids.push(
+          el(
+            'div',
+            { class: 'shot' },
+            row('Odds', describeOdds(preview.odds)),
+            preview.structureDamage !== undefined
+              ? row('Damage', `${preview.structureDamage} structure points`)
+              : row('Chance', `${chance.x}/6 destroyed · ${chance.d}/6 disabled`),
+            button(
+              'Call the strike',
+              () => {
+                dispatch({ type: 'orbitalStrike', by: me(), strike, target });
+                ui.strike = null;
+                ui.target = null;
+                draw();
+              },
+              { class: 'primary' },
+            ),
+          ),
+        );
+      }
+    } else if (inFire && ui.strike !== null) {
+      kids.push(el('p', { class: 'empty' }, 'Now click the target.'));
+    }
+    return el(
+      'section',
+      { class: 'card' },
+      el('div', { class: 'card-head' }, el('strong', {}, 'Fleet overhead')),
+      ...kids,
+    );
+  };
+
+  // --- Cruise missiles (Section 10) ------------------------------------------
+
+  const missilePanel = (state: GameState, u: Unit): HTMLElement => {
+    const why = ui.hover ? launchCheck(state, session.map, u, ui.hover) : null;
+    return el(
+      'section',
+      { class: 'card' },
+      el('div', { class: 'card-head' }, el('strong', {}, 'Cruise missile')),
+      el(
+        'p',
+        { class: 'note' },
+        `One nuclear-armed missile. It flies ${CRUISE_MISSILE.speed} hexes a turn straight at the hex ` +
+          'you name; only a laser with a line of sight can stop it. Ground zero is total, and the ' +
+          'blast reaches two hexes out — including onto your own side.',
+      ),
+      u.kind === 'unit' && u.firedThisPhase
+        ? el('p', { class: 'empty' }, 'This crawler has launched.')
+        : button(
+            ui.aiming === u.id ? 'Cancel' : 'Aim the missile',
+            () => {
+              ui.aiming = ui.aiming === u.id ? null : u.id;
+              draw();
+            },
+            { class: ui.aiming === u.id ? '' : 'primary' },
+          ),
+      ui.aiming === u.id
+        ? el(
+            'p',
+            { class: 'empty' },
+            why ? why : 'Click the hex to fire at. The rings show the blast.',
+          )
+        : null,
+    );
+  };
+
   const unitCard = (state: GameState, u: Unit): HTMLElement => {
     const owner = state.players[u.owner]!;
     const rows: HTMLElement[] = [];
@@ -588,24 +1048,32 @@ export const createOgreBattle = (opts: OgreBattleOptions): OgreBattle => {
       rows.push(row('Treads', `${u.treads} / ${type.treads}`));
       rows.push(row('Movement', `${movementForTreads(type, u.treads)} (base ${type.baseMove})`));
       rows.push(row('Size', String(type.size)));
+      if (u.activatesOn !== undefined && state.turn < u.activatesOn) {
+        rows.push(row('Assembling', `activates on turn ${u.activatesOn}`, 'warn'));
+      }
     } else {
       const cls = unitClass(u.classId);
       if (cls.attack > 0) {
         rows.push(
           row(
             'Attack / range',
-            `${cls.attack * (cls.kind === 'infantry' ? u.squads : 1)}${cls.splitAttack ? '*' : ''} / ${cls.range}`,
+            `${cls.attack * (cls.kind === 'infantry' ? u.squads : 1)}${cls.splitAttack ? '*' : ''} / ${cls.laser ? 'line of sight' : cls.range}`,
           ),
         );
       }
       rows.push(row('Defence', String(cls.defense * (cls.kind === 'infantry' ? u.squads : 1))));
-      rows.push(
-        row(
-          'Movement',
-          cls.secondMove != null ? `${cls.move}-${cls.secondMove}` : String(cls.move),
-        ),
-      );
+      if (cls.mobility === 'rail') {
+        rows.push(row('Speed', `${u.trainSpeed ?? 0} of ${TRAIN_MAX_SPEED}`));
+      } else {
+        rows.push(
+          row(
+            'Movement',
+            cls.secondMove != null ? `${cls.move}-${cls.secondMove}` : String(cls.move),
+          ),
+        );
+      }
       if (cls.kind === 'infantry') rows.push(row('Squads', String(u.squads)));
+      if (u.classId === 'MCRL') rows.push(row('Cruise missile', 'loaded', 'warn'));
       if (u.disabled !== 'none')
         rows.push(row('Status', u.disabled === 'combat' ? 'Disabled' : 'Bogged down', 'warn'));
       if (u.stuck) rows.push(row('Status', 'Stuck for the game', 'bad'));
@@ -667,19 +1135,47 @@ export const createOgreBattle = (opts: OgreBattleOptions): OgreBattle => {
   };
 
   const movePanel = (state: GameState, u: Unit): HTMLElement => {
-    const allowance = movementAllowance(u, state.phase);
+    const allowance = movementAllowance(u, state.phase, state.options);
     const spent = u.moveUsed;
     const rams = ramHints();
     const infantryHere = unitsAt(state, u.pos).filter(
       (o) => o.owner !== u.owner && o.kind === 'unit' && unitClass(o.classId).kind === 'infantry',
     );
+    const inert = isInertOgre(u, state.turn);
+    const train = u.kind === 'unit' && u.classId === 'TRAIN';
 
     return el(
       'section',
       { class: 'card' },
       el('div', { class: 'card-head' }, el('strong', {}, 'Movement')),
+      inert
+        ? el(
+            'p',
+            { class: 'note ram' },
+            `Still assembling: an inert hull until turn ${(u as OgreUnit).activatesOn}. It cannot move, ram or fire, and any D result against it is an X.`,
+          )
+        : null,
       row('Points', `${Math.max(0, allowance - spent)} of ${allowance} left`),
       u.movementEnded ? row('Stopped', 'this unit has ended its move', 'warn') : null,
+      train
+        ? el(
+            'div',
+            { class: 'chips' },
+            button(
+              'Brake',
+              () => dispatch({ type: 'setTrainSpeed', by: me(), unit: u.id, change: -1 }),
+              { class: 'chip', disabled: (u.trainSpeed ?? 0) <= 0 || !!u.trainSpeedSet },
+            ),
+            button(
+              'Open up',
+              () => dispatch({ type: 'setTrainSpeed', by: me(), unit: u.id, change: 1 }),
+              {
+                class: 'chip',
+                disabled: (u.trainSpeed ?? 0) >= TRAIN_MAX_SPEED || !!u.trainSpeedSet,
+              },
+            ),
+          )
+        : null,
       rams.length > 0
         ? el(
             'p',
@@ -703,7 +1199,15 @@ export const createOgreBattle = (opts: OgreBattleOptions): OgreBattle => {
   const firePanel = (state: GameState, u: Unit): HTMLElement => {
     const kids: HTMLElement[] = [];
 
-    if (isOgre(u)) {
+    if (isOgre(u) && isInertOgre(u, state.turn)) {
+      kids.push(
+        el(
+          'p',
+          { class: 'note ram' },
+          `Still assembling: this hull cannot fire until turn ${u.activatesOn}.`,
+        ),
+      );
+    } else if (isOgre(u)) {
       // A Mark V has twenty-six weapons. Listing them one per checkbox is
       // accurate and unusable, so the panel groups them by kind and asks how
       // many of each to commit — which is also how a player thinks about it
@@ -802,7 +1306,7 @@ export const createOgreBattle = (opts: OgreBattleOptions): OgreBattle => {
       }
       kids.push(shotCard(state, target));
     } else if (ui.attackers.length > 0) {
-      kids.push(el('p', { class: 'empty' }, 'Now click an enemy counter.'));
+      kids.push(el('p', { class: 'empty' }, 'Now click an enemy counter — or a building.'));
     }
 
     return el(
@@ -872,6 +1376,9 @@ export const createOgreBattle = (opts: OgreBattleOptions): OgreBattle => {
     return el(
       'div',
       { class: 'shot' },
+      target.kind === 'building'
+        ? row('Target', `the ${state.buildings[target.building]?.kind ?? 'building'}`)
+        : null,
       row('Odds', preview.treadAttack ? '1 to 1 (treads)' : describeOdds(preview.odds)),
       row('Strength', `${preview.attackStrength} against ${preview.defenseStrength}`),
       preview.treadAttack
@@ -879,10 +1386,12 @@ export const createOgreBattle = (opts: OgreBattleOptions): OgreBattle => {
             'On a hit',
             `${preview.attackStrength} tread units, on a ${preview.treadHitOn === 6 ? '6' : '5 or 6'}`,
           )
-        : row(
-            'Chance',
-            `${chance.x}/6 destroyed · ${chance.d}/6 disabled · ${chance.ne}/6 nothing`,
-          ),
+        : preview.structureDamage !== undefined
+          ? row('Damage', `${preview.structureDamage} structure points, no roll`)
+          : row(
+              'Chance',
+              `${chance.x}/6 destroyed · ${chance.d}/6 disabled · ${chance.ne}/6 nothing`,
+            ),
       button(
         'Fire',
         () => {
@@ -1069,6 +1578,25 @@ export const createOgreBattle = (opts: OgreBattleOptions): OgreBattle => {
         },
       ),
     );
+    // A building in the contested hex is a target for the attackers (11.04.2).
+    if (mySide === 'attacker') {
+      for (const b of Object.values(state.buildings)) {
+        if (b.destroyed || b.owner === actor || !eq(b.pos, overrun.hex)) continue;
+        targetChips.push(
+          button(
+            `the ${b.kind}`,
+            () => {
+              ui.target = { kind: 'building', building: b.id };
+              draw();
+            },
+            {
+              class:
+                ui.target?.kind === 'building' && ui.target.building === b.id ? 'chip on' : 'chip',
+            },
+          ),
+        );
+      }
+    }
 
     const targetUnit = ui.target && 'unit' in ui.target ? state.units[ui.target.unit] : undefined;
 
@@ -1135,7 +1663,9 @@ export const createOgreBattle = (opts: OgreBattleOptions): OgreBattle => {
       row('Strength', `${preview.attackStrength} against ${preview.defenseStrength}`),
       preview.treadAttack
         ? row('On a hit', `${preview.attackStrength} tread units, on a 5 or 6`)
-        : row('Chance', `${chance.x}/6 destroyed · ${chance.ne}/6 nothing`),
+        : preview.structureDamage !== undefined
+          ? row('Damage', `${preview.structureDamage} structure points, no roll`)
+          : row('Chance', `${chance.x}/6 destroyed · ${chance.ne}/6 nothing`),
       button(
         'Fire',
         () => {
@@ -1157,12 +1687,21 @@ export const createOgreBattle = (opts: OgreBattleOptions): OgreBattle => {
     if (!ui.hover || !session) return null;
     const terrain = terrainAt(session.map, ui.hover, state.terrainOverrides);
     const here = unitsAt(state, ui.hover);
+    const building = Object.values(state.buildings).find((b) => eq(b.pos, ui.hover!));
     return el(
       'section',
       { class: 'card thin' },
       row('Hex', hexLabel(ui.hover)),
       row('Terrain', TERRAIN_LABELS[terrain]),
       here.length > 0 ? row('Holds', here.map(unitName).join(', ')) : null,
+      building
+        ? row(
+            'Building',
+            building.destroyed
+              ? `${building.kind}, destroyed`
+              : `${building.kind}, ${building.structurePoints} SP`,
+          )
+        : null,
     );
   };
 
@@ -1300,6 +1839,14 @@ export const createOgreBattle = (opts: OgreBattleOptions): OgreBattle => {
         el('h3', {}, scenario.name),
         ...scenario.briefing.split('\n\n').map((p) => el('p', {}, p)),
         el('ul', {}, ...scenario.victoryConditions.map((c) => el('li', {}, c))),
+        el('h3', {}, 'Before the first turn'),
+        el(
+          'p',
+          {},
+          'The scenario deals a legal setup; the deployment step lets each side rearrange it ' +
+            'inside its printed area — the defender first, then the attacker choosing where to ' +
+            'come on. Press Ready to keep what you have.',
+        ),
         el('h3', {}, 'The turn'),
         el(
           'ol',
@@ -1314,13 +1861,13 @@ export const createOgreBattle = (opts: OgreBattleOptions): OgreBattle => {
             'li',
             {},
             el('strong', {}, 'Movement. '),
-            'Move, ram, or drive over infantry. Ramming interrupts movement and resolves at once.',
+            'Move, ram, or drive over infantry. Ramming interrupts movement and resolves at once. Reserves enter here, from the reaction turn on.',
           ),
           el(
             'li',
             {},
             el('strong', {}, 'Fire. '),
-            'Every unit and every Ogre weapon may fire once. Any number may combine on one target.',
+            'Every unit and every Ogre weapon may fire once. Any number may combine on one target. Orbital strikes and cruise missiles are called here.',
           ),
           el(
             'li',
@@ -1366,12 +1913,22 @@ export const createOgreBattle = (opts: OgreBattleOptions): OgreBattle => {
             {},
             'Ramming is how an Ogre clears a path — and it costs tread units every time.',
           ),
+          el(
+            'li',
+            {},
+            'An Ogre that shipped in modules is an inert hull until it finishes assembling: it cannot act, and any D against it is an X.',
+          ),
+          el(
+            'li',
+            {},
+            'A cruise missile flies straight at the hex you name and takes everything at ground zero with it — the blast reaches two hexes, friend or foe.',
+          ),
         ),
         el('h3', {}, 'Keys'),
         el(
           'ul',
           { class: 'keys' },
-          el('li', {}, el('kbd', {}, 'space'), ' end phase'),
+          el('li', {}, el('kbd', {}, 'space'), ' end phase / ready'),
           el('li', {}, el('kbd', {}, 'u'), ' undo'),
           el('li', {}, el('kbd', {}, 'f'), ' fit the map'),
           el('li', {}, el('kbd', {}, '#'), ' hex numbers'),
@@ -1397,7 +1954,14 @@ export const createOgreBattle = (opts: OgreBattleOptions): OgreBattle => {
   // Kick off: the board is already built, so mount, measure, subscribe, and
   // hand back the teardown. Every listener taken here is returned in
   // `destroy`, because this view is a guest in somebody else's shell.
-  const unsubscribe = session.subscribe(() => draw());
+  const unsubscribe = session.subscribe(() => {
+    opts.onProgress?.(session.log, {
+      scenarioName: scenario.name,
+      turn: session.state.turn,
+      finished: session.state.victory !== null,
+    });
+    draw();
+  });
   // The same console hook the standalone app offers, under its own name:
   // `ogreBattle.session.serialise()` is a complete, replayable bug report.
   (window as unknown as { ogreBattle?: unknown }).ogreBattle = { session, scenario };
@@ -1405,7 +1969,10 @@ export const createOgreBattle = (opts: OgreBattleOptions): OgreBattle => {
   draw();
 
   return {
+    ai: [...aiSeats],
     destroy: () => {
+      destroyed = true;
+      window.clearTimeout(aiTimer);
       unsubscribe();
       window.removeEventListener('keydown', onKeyDown);
       window.removeEventListener('resize', onWindowResize);

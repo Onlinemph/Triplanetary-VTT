@@ -9,10 +9,16 @@
  */
 
 import type { Hex } from './hex.js';
-import { key } from './hex.js';
+import { key, sideKeyBetween } from './hex.js';
 import { type GameMap, terrainAt } from './map.js';
 import { createRng } from './rng.js';
-import { type Terrain, baseTerrain, defenseMultiplier, townFloorsZeroDefense } from './terrain.js';
+import {
+  type SideFeature,
+  type Terrain,
+  baseTerrain,
+  defenseMultiplier,
+  townFloorsZeroDefense,
+} from './terrain.js';
 import {
   type UnitClassId,
   HEAVY_WEAPON,
@@ -75,12 +81,15 @@ export const createGame = (opts: NewGameOptions): GameState => {
     buildings: {},
     terrainOverrides: {},
     routesCut: [],
+    sideOverrides: {},
     options: { ...DEFAULT_OPTIONS, ...opts.options },
     rng: createRng(opts.seed),
     log: [],
     nextLogId: 1,
     nextUnitSerial: 1,
     overrun: null,
+    setup: null,
+    missiles: {},
     victory: null,
     scenarioData: opts.scenarioData ?? {},
   };
@@ -242,6 +251,13 @@ export const setTerrainOverride = (state: GameState, h: Hex, t: Terrain): GameSt
   terrainOverrides: { ...state.terrainOverrides, [key(h)]: t },
 });
 
+/** Lay a ridge (or any hexside feature) over the map between two hexes. */
+export const setSideOverride = (state: GameState, a: Hex, b: Hex, f: SideFeature): GameState => {
+  const k = sideKeyBetween(a, b);
+  if (k === '') return state;
+  return { ...state, sideOverrides: { ...(state.sideOverrides ?? {}), [k]: f } };
+};
+
 export const cutRoute = (state: GameState, h: Hex): GameState =>
   state.routesCut.includes(key(h)) ? state : { ...state, routesCut: [...state.routesCut, key(h)] };
 
@@ -300,6 +316,9 @@ export const defenseOf = (
   const cls = unitClass(u.classId);
   const infantry = cls.kind === 'infantry';
   let base = printedDefense(u);
+
+  // Orbital Drop §5, an asteroid: GEV-type units "sit immobile as D2 targets".
+  if (state.options.noHover && cls.mobility === 'gev') base = 2;
 
   // "In a town hex, and/or undergoing a spillover attack, it has a defense
   // strength of 1" — the Truck's own rule (3.03), generalised by 7.14.2's "A
@@ -396,15 +415,27 @@ export const attackerRange = (u: Unit, ref: { weapon?: string; heavyWeapon?: boo
  * An Ogre's allowance is not printed: it is read off the tread track, and it is
  * re-read *during* movement, which is why 6.04 has to say so explicitly.
  */
-export const movementAllowance = (u: Unit, phase: Phase): number => {
+export const movementAllowance = (
+  u: Unit,
+  phase: Phase,
+  options?: Pick<GameOptions, 'lowGravity' | 'noHover'>,
+): number => {
+  // Orbital Drop §5: on an asteroid, everything that moves gets one more
+  // point, and nothing that hovers moves at all.
+  const gravityBonus = options?.lowGravity ? 1 : 0;
   if (isOgre(u)) {
     if (u.stuck) return 0;
-    return phase === 'gevMovement' ? 0 : movementForTreads(ogreType(u.typeId), u.treads);
+    if (phase === 'gevMovement') return 0;
+    const base = movementForTreads(ogreType(u.typeId), u.treads);
+    return base > 0 ? base + gravityBonus : 0;
   }
   if (u.stuck || u.disabled !== 'none') return 0;
   const cls = unitClass(u.classId);
+  if (options?.noHover && cls.mobility === 'gev') return 0;
+  // The train runs at its speed marker, not a printed allowance (9.02).
+  if (cls.mobility === 'rail') return phase === 'gevMovement' ? 0 : (u.trainSpeed ?? 0);
   if (phase === 'gevMovement') return cls.secondMove ?? 0;
-  return cls.move;
+  return cls.move > 0 ? cls.move + gravityBonus : 0;
 };
 
 export const isGevClass = (u: Unit): boolean =>

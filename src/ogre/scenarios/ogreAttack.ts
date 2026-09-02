@@ -33,9 +33,13 @@ import {
   attackStrengthOf,
   buyArmor,
   infantryCounters,
+  limit,
+  openHexes,
   place,
   shuffledOpenHexes,
   southEdgeHexes,
+  withSetup,
+  zone,
 } from './helpers.js';
 
 export const OGRE_PLAYER = 'ogre';
@@ -165,7 +169,7 @@ const build = (terms: Terms, map: GameMap, opts: ScenarioBuildOptions): GameStat
     }
   }
 
-  return log(
+  const built = log(
     d.state,
     'info',
     `${ogreType(terms.ogre).name} crosses the line of departure. ` +
@@ -173,6 +177,18 @@ const build = (terms: Terms, map: GameMap, opts: ScenarioBuildOptions): GameStat
       `and ${terms.squads} squads between it and the Ogre.`,
     [entry],
   );
+
+  // The printed setup areas, for the deployment step: the defence anywhere
+  // north of the south line with the Central Area ceiling, and the Ogre
+  // "anywhere on the south end of the map". The defence sets up first.
+  const northArea = openHexes(map, 'north');
+  const centralArea = openHexes(map, 'central');
+  return withSetup(built, opts.setup, [DEFENSE_PLAYER, OGRE_PLAYER], {
+    [DEFENSE_PLAYER]: zone([...northArea, ...centralArea], 'the North and Central Areas', [
+      limit(centralArea, terms.centralLimit, 'the Central Area'),
+    ]),
+    [OGRE_PLAYER]: zone(south, 'the south edge'),
+  });
 };
 
 // ---------------------------------------------------------------------------

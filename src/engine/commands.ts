@@ -280,6 +280,18 @@ export interface DeclareInvasion extends CommandBase {
 }
 
 /**
+ * Orbital Drop §7: "Repair at the base costs MCr 1 per tread unit or AP gun,
+ * MCr 4 per secondary or missile rack, MCr 8 per main battery, and takes one
+ * day per 10 points spent." `index` names which of the base's garrison
+ * cybertanks goes into the shop.
+ */
+export interface RepairOgre extends CommandBase {
+  readonly type: 'repairOgre';
+  readonly base: string;
+  readonly index: number;
+}
+
+/**
  * Orbital Drop §7: apply the ground battle's verdict. The result is the
  * campaign boundary's `BattleResult`, declared structurally here because the
  * engine cannot import the boundary — the dependency runs the other way.
@@ -370,6 +382,7 @@ export type Command =
   | PurchaseGarrison
   | DeclareInvasion
   | ResolveGroundBattle
+  | RepairOgre
   | ChooseRepair
   | ChooseDevastatedSide
   | ConvertFleet

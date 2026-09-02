@@ -15,13 +15,14 @@ import { type GameState, activePlayer } from '@engine/types.js';
 import { withBase, withShip, cargoCount } from '@engine/state.js';
 import { sideGravityHex } from '@engine/hex.js';
 import { toOffset } from '../src/ogre/engine/hex.js';
-import { hold, inSpace, landed } from '../src/scenarios/helpers.js';
+import { atAsteroidBase, hold, inSpace, landed } from '../src/scenarios/helpers.js';
 import { buildScenario } from '../src/scenarios/index.js';
 import {
   GROUND_PRICES,
   MILITIA_SQUADS,
   OPENING_TREASURY,
   dropData,
+  repairQuote,
 } from '../src/scenarios/orbitalDrop.js';
 
 import { applyCommand as ogreApply } from '../src/ogre/engine/reducer.js';
@@ -58,6 +59,35 @@ const marsBaseId = (s: GameState): string => {
   const id = Object.keys(s.bases).find((k) => k.startsWith('mars:'));
   if (!id) throw new Error('mars has no base');
   return id;
+};
+
+const staged = (): { state: GameState; base: string } => {
+  let s = buildScenario('orbital-drop', { seed: 7 });
+  const base = marsBaseId(s);
+  const side = s.bases[base]!.side!;
+  s = withShip(
+    s,
+    landed(
+      {
+        id: 'combine-drop-1',
+        owner: 'combine',
+        shipClass: 'transport',
+        number: 90,
+        cargo: hold({ gndHVY: 2, gndINF: 9 }),
+      },
+      side,
+    ),
+  );
+  s = withShip(
+    s,
+    inSpace(
+      { id: 'combine-escort-1', owner: 'combine', shipClass: 'corvette', number: 91, cargo: [] },
+      sideGravityHex(side),
+    ),
+  );
+  // Silence the guns: the crash roll is its own test.
+  s = withBase(s, { ...s.bases[base]!, suppressed: true });
+  return { state: s, base };
 };
 
 describe('Orbital Drop: the campaign layer', () => {
@@ -184,34 +214,6 @@ describe('Orbital Drop: declare, land, freeze, fight, resume', () => {
    * Mars hexside, a corvette overhead to declare with (and to owe the
    * orbital strike), and the guns silenced so the freeze is deterministic.
    */
-  const staged = (): { state: GameState; base: string } => {
-    let s = buildScenario('orbital-drop', { seed: 7 });
-    const base = marsBaseId(s);
-    const side = s.bases[base]!.side!;
-    s = withShip(
-      s,
-      landed(
-        {
-          id: 'combine-drop-1',
-          owner: 'combine',
-          shipClass: 'transport',
-          number: 90,
-          cargo: hold({ gndHVY: 2, gndINF: 9 }),
-        },
-        side,
-      ),
-    );
-    s = withShip(
-      s,
-      inSpace(
-        { id: 'combine-escort-1', owner: 'combine', shipClass: 'corvette', number: 91, cargo: [] },
-        sideGravityHex(side),
-      ),
-    );
-    // Silence the guns: the crash roll is its own test.
-    s = withBase(s, { ...s.bases[base]!, suppressed: true });
-    return { state: s, base };
-  };
 
   it('freezes the sky over a declared invasion and mints the assault order', () => {
     const { state: s0, base } = staged();
@@ -303,6 +305,155 @@ describe('Orbital Drop: declare, land, freeze, fight, resume', () => {
     // both are legal outcomes of the 2:1 roll; what must be true is that the
     // guns spoke.
     expect(s.log.some((e) => /guns at .* fire on the lander/i.test(e.text))).toBe(true);
+  });
+});
+
+describe('Orbital Drop: rocks, record sheets and the shop (§§5, 7)', () => {
+  const ceresBaseId = (s: GameState): string => {
+    const id = Object.keys(s.bases).find((k) => k.startsWith('ceres'));
+    if (!id) throw new Error('ceres has no base');
+    return id;
+  };
+
+  it('storms an asteroid base from the rock itself, onto half a map', () => {
+    let s = buildScenario('orbital-drop', { seed: 11 });
+    const base = ceresBaseId(s);
+    const rock = s.bases[base]!.hex;
+    s = withShip(
+      s,
+      atAsteroidBase(
+        {
+          id: 'combine-rock-1',
+          owner: 'combine',
+          shipClass: 'transport',
+          number: 92,
+          cargo: hold({ gndHVY: 3, gndINF: 6 }),
+        },
+        rock,
+      ),
+    );
+    s = withShip(
+      s,
+      atAsteroidBase(
+        { id: 'combine-rock-2', owner: 'combine', shipClass: 'corvette', number: 93, cargo: [] },
+        rock,
+      ),
+    );
+    s = until(s, (x) => x.phase === 'ordnance' && activePlayer(x) === 'combine');
+    s = mustRun(s, { type: 'declareInvasion', by: 'combine', base });
+    s = until(s, (x) => dropData(x).pendingGround !== null, 200);
+    const order = dropData(s).pendingGround!;
+    expect(order.scenarioId).toBe('assault-asteroid');
+    expect(order.terms['profile']).toBe('asteroid');
+    expect(order.terms['base']).toBe('cp');
+    // No guns on a rock: the log never mentions them.
+    expect(s.log.some((e) => /guns at .* fire/.test(e.text))).toBe(false);
+    // The corvette at the rock owes its strike.
+    expect(order.terms['orbitalStrikes']).toEqual([2]);
+  });
+
+  it('keeps a Mark I or II on a rock and refuses anything bigger', () => {
+    const s0 = until(
+      buildScenario('orbital-drop', { seed: 11 }),
+      (x) => x.phase === 'resupply' && activePlayer(x) === 'combine',
+    );
+    // Hand Combine the rock so it can garrison it.
+    const base = ceresBaseId(s0);
+    const s = withBase(s0, { ...s0.bases[base]!, owner: 'combine' });
+    expect(
+      run(s, { type: 'purchaseGarrison', by: 'combine', base, unit: 'MK3', count: 1 }).ok,
+    ).toBe(false);
+    const g = mustRun(s, { type: 'purchaseGarrison', by: 'combine', base, unit: 'MK1', count: 1 });
+    expect(dropData(g).garrisons[base]!.ogres).toHaveLength(1);
+    expect(dropData(g).garrisons[base]!.ogres![0]!.treads).toBe(18);
+  });
+
+  it('carries a cybertank’s damage into the next battle and repairs it at the base', () => {
+    const { state: s0, base } = staged();
+    let s = until(s0, (x) => x.phase === 'resupply' && activePlayer(x) === 'paneuro');
+    // Paneurope garrisons Mars with a Mark III and then loses treads to a
+    // battle that never happened: write the worn sheet straight in.
+    s = mustRun(s, { type: 'purchaseGarrison', by: 'paneuro', base, unit: 'MK3', count: 1 });
+    const worn = {
+      type: 'MK3',
+      treads: 20,
+      lost: { main: 1, ap: 2 },
+      missilesSpent: 1,
+      internalMissiles: 0,
+    };
+    s = {
+      ...s,
+      scenarioData: {
+        ...s.scenarioData,
+        orbitalDrop: {
+          ...dropData(s),
+          garrisons: {
+            ...dropData(s).garrisons,
+            [base]: { ...dropData(s).garrisons[base]!, ogres: [worn] },
+          },
+        },
+      },
+    };
+
+    // The shop: MCr 25 treads + 8 main + 2 AP + 4 missile = 39, four days.
+    expect(repairQuote(worn)).toEqual({ cost: 39, days: 4 });
+    const before = s.players['paneuro']!.megacredits;
+    const shop = mustRun(s, { type: 'repairOgre', by: 'paneuro', base, index: 0 });
+    expect(shop.players['paneuro']!.megacredits).toBe(before - 39);
+    expect(dropData(shop).garrisons[base]!.ogres![0]!.repairDoneOn).toBe(shop.turn + 4);
+    expect(run(shop, { type: 'repairOgre', by: 'paneuro', base, index: 0 }).ok).toBe(false);
+
+    // Gravity has moved the escort on; put it back overhead to declare.
+    const overhead = (x: GameState): GameState =>
+      withShip(x, {
+        ...x.ships['combine-escort-1']!,
+        destroyed: false,
+        pos: sideGravityHex(x.bases[base]!.side!),
+      });
+
+    // A battle before the shop is done fights the machine as it is.
+    let sky = until(s, (x) => x.phase === 'ordnance' && activePlayer(x) === 'combine');
+    sky = mustRun(overhead(sky), { type: 'declareInvasion', by: 'combine', base });
+    sky = until(sky, (x) => dropData(x).pendingGround !== null, 200);
+    const order = dropData(sky).pendingGround!;
+    expect(order.terms['base']).toBe('admin');
+    expect((order.terms['ogreDamage'] as Record<string, unknown[]>)['paneuro']).toEqual([worn]);
+
+    // And after the repair day, the sheet is clean and nothing travels.
+    // The shop hands the machine back as its owner's day ends, so wait for the day after.
+    let done = until(shop, (x) => x.turn > shop.turn + 4 && activePlayer(x) === 'paneuro', 200);
+    expect(dropData(done).garrisons[base]!.ogres![0]!.treads).toBe(45);
+    expect(dropData(done).garrisons[base]!.ogres![0]!.lost).toEqual({});
+    done = until(done, (x) => x.phase === 'ordnance' && activePlayer(x) === 'combine');
+    done = mustRun(overhead(done), { type: 'declareInvasion', by: 'combine', base });
+    done = until(done, (x) => dropData(x).pendingGround !== null, 200);
+    expect(dropData(done).pendingGround!.terms['ogreDamage']).toBeUndefined();
+  });
+
+  it('banks the winner’s surviving cybertanks with their sheets', () => {
+    const { state: s0, base } = staged();
+    let s = until(s0, (x) => x.phase === 'ordnance' && activePlayer(x) === 'combine');
+    s = mustRun(s, { type: 'declareInvasion', by: 'combine', base });
+    s = until(s, (x) => dropData(x).pendingGround !== null, 200);
+    const order = dropData(s).pendingGround!;
+    const result = {
+      battleId: order.battleId,
+      winners: ['combine'],
+      level: 'complete' as const,
+      survivors: { combine: { HVY: 1, MK3: 1 }, paneuro: {} },
+      victoryPoints: { combine: 40, paneuro: 0 },
+      ogres: {
+        combine: [
+          { type: 'MK3', treads: 31, lost: { ap: 1 }, missilesSpent: 2, internalMissiles: 0 },
+        ],
+      },
+      replay: { seed: order.seed, log: [] },
+    };
+    s = mustRun(s, { type: 'resolveGroundBattle', by: 'combine', result });
+    const g = dropData(s).garrisons[base]!;
+    expect(g.units['MK3']).toBe(1);
+    expect(g.ogres).toHaveLength(1);
+    expect(g.ogres![0]!.treads).toBe(31);
   });
 });
 

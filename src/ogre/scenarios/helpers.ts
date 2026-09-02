@@ -12,7 +12,13 @@ import { type Hex, key, toOffset } from '../engine/hex.js';
 import { type GameMap, allHexes, areaOf, terrainAt } from '../engine/map.js';
 import { type RngState, nextInt, shuffle } from '../engine/rng.js';
 import { type UnitClassId, unitClass } from '../engine/units.js';
-import { type ConventionalUnit, type GameState, type PlayerId } from '../engine/types.js';
+import {
+  type ConventionalUnit,
+  type GameState,
+  type PlayerId,
+  type SetupLimit,
+  type SetupZone,
+} from '../engine/types.js';
 import { makeUnit, printedAttack, withUnit } from '../engine/state.js';
 
 export interface Deployer {
@@ -125,3 +131,31 @@ export const southEdgeHexes = (map: GameMap): Hex[] =>
   allHexes(map).filter((h) => toOffset(h).row === map.rows && terrainAt(map, h) !== 'crater');
 
 export const hexKeys = (hexes: readonly Hex[]): string[] => hexes.map(key);
+
+// ---------------------------------------------------------------------------
+// Deployment zones
+// ---------------------------------------------------------------------------
+
+/** A setup zone from a list of hexes, with any attack-strength ceilings. */
+export const zone = (hexes: readonly Hex[], label: string, limits?: SetupLimit[]): SetupZone => ({
+  hexes: hexKeys(hexes),
+  label,
+  ...(limits && limits.length > 0 ? { limits } : {}),
+});
+
+export const limit = (hexes: readonly Hex[], maxAttack: number, label: string): SetupLimit => ({
+  hexes: hexKeys(hexes),
+  maxAttack,
+  label,
+});
+
+/**
+ * Open the built board with a deployment step, if the caller asked for one.
+ * `order` is who sets up first — the defender, in every printed scenario.
+ */
+export const withSetup = (
+  state: GameState,
+  wanted: boolean | undefined,
+  order: readonly PlayerId[],
+  zones: Readonly<Record<PlayerId, SetupZone>>,
+): GameState => (wanted ? { ...state, setup: { order, index: 0, zones } } : state);

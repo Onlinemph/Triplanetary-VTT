@@ -103,10 +103,22 @@ export const terrainAt = (
   return overrides?.[k] ?? map.terrain[k] ?? 'clear';
 };
 
-export const sideFeatureBetween = (map: GameMap, a: Hex, b: Hex): SideFeature | undefined => {
+/**
+ * The feature on the hexside between two adjacent hexes, if any.
+ *
+ * `overrides` is `GameState.sideOverrides` — the ridges a scenario lays over
+ * the printed map — and wins over the map's own record where both speak.
+ */
+export const sideFeatureBetween = (
+  map: GameMap,
+  a: Hex,
+  b: Hex,
+  overrides?: Readonly<Record<string, SideFeature>>,
+): SideFeature | undefined => {
   const dir = directionTo(a, b);
   if (dir < 0) return undefined;
-  return map.sides[sideKey(canonicalSide(a, dir))];
+  const k = sideKey(canonicalSide(a, dir));
+  return overrides?.[k] ?? map.sides[k];
 };
 
 /**

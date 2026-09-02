@@ -117,6 +117,7 @@ const COMMAND_TYPES: Readonly<Record<CommandType, true>> = {
   purchaseGarrison: true,
   declareInvasion: true,
   resolveGroundBattle: true,
+  repairOgre: true,
   chooseRepair: true,
   chooseDevastatedSide: true,
   convertFleet: true,

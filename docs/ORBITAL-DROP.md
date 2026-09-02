@@ -201,8 +201,13 @@ Orbital Drop is playable here as a scenario — the third card on the start
 menu. The space game is the real Triplanetary engine; the ground battles are
 fought in the embedded Ogre view on a battlefield generated from §5's world
 profiles, with the reaction force (§3.03), the module-shipped Ogre's assembly
-delay (§6 step 3) and orbital fire support (§6.01) implemented in the ported
-Ogre engine. Where this implementation adapts or defers the printed text:
+delay (§6 step 3), orbital fire support (§6.01), the Admin building (§6 step
+1), ridge overlays (§5), asteroid invasions on half a map under low gravity
+(§5), and cybertank record sheets carried between battles with repairs at the
+base (§7) all implemented in the ported Ogre engine. Every ground battle opens
+with a deployment step (§6: the defender sets up first, then the attacker),
+either seat may be played by the computer, and an unfinished battle is saved
+in the browser. Where this implementation adapts or defers the printed text:
 
 - **Declaration timing.** Landing is an astrogation decision and astrogation
   precedes ordnance in this engine's turn, so the landings begin the day
@@ -210,18 +215,28 @@ Ogre engine. Where this implementation adapts or defers the printed text:
   hears the alarm a day out.
 - **Suppression** uses the engine's printed Fleet Mutiny rule — a suppressed
   hexside stays suppressed — rather than §4.02's per-turn reading.
-- **The base** is represented by the command post in the ground battle; the
-  SP-20 admin building for planetary bases is deferred. "Captured intact"
-  is read from the battle's victory level.
-- **Asteroid-base invasions** (and their no-GEV, low-gravity table) are
-  deferred; asteroid profiles stand their ridges in as a denser crater field.
-  Overlay placement is seeded rather than chosen by the players.
+- **The base** is an Admin building of 20 structure points on a planetary
+  world and a command post on a rock, as §6 step 1 says. It can be shot,
+  rammed or overrun (Ogre 11.04), and orbital strikes treat it as a
+  building. "Captured intact" is read from the battle's victory level.
+- **Overlays** are rolled and placed by the same seed that builds the battle
+  rather than by the players: on a dead world each of the 1d6 overlays is a
+  crater or a ridge hexside on the toss of a coin; a rock gets 2d6 ridges.
+- **Asteroid bases** are stormed by a ship stopped at the rock (there is no
+  hexside), fight on the upper half of the cratered map, and take §5's
+  table: GEV-type units are grounded as D2 targets and everything else moves
+  one hex further. A rock garrisons a Mark I or II at most.
 - **The garrison Ogre** consumes the whole armour allowance (§3.02's "counted
-  against the armor cap", read strictly); Mark III and Mark V are the types
-  on sale.
+  against the armor cap", read strictly). Mark I, II, III and V are on sale.
+- **Damage carries over.** The winner's surviving cybertanks keep their
+  record sheets in the garrison ledger and fight the next battle as they
+  are; the quartermaster prices a repair at the §7 rates (a fired external
+  missile is replaced at the missile-rack price, which the doc leaves
+  unpriced) and the shop hands the machine back after one day per ten
+  points, at the end of its owner's day.
 - **Aftermath**: the §7 salvage credit is paid at a quarter of list; repair
-  at half price, Ogre damage carry-over, module disassembly for re-shipping,
-  and the failed-invasion lift-off gamble are deferred — a failed invasion's
+  of captured armour at half price, module disassembly for re-shipping, and
+  the failed-invasion lift-off gamble are deferred — a failed invasion's
   landed ships are simply taken.
 - **The campaign economy** is base income (§1.01) over each power's opening
   treasury; the printed Campaign game's faction roles, delivery cycles and

@@ -68,6 +68,15 @@ export interface RenderView {
   readonly attackers: readonly UnitId[];
   /** Highlighted by hovering a log entry. */
   readonly focus: readonly Hex[];
+  /**
+   * Hexes something may be put down on: a side's setup area while the
+   * counters are going down, or the map edge a reserve may enter at.
+   */
+  readonly zone: readonly Hex[];
+  /** The part of the zone under an attack-strength ceiling, tinted apart. */
+  readonly zoneLimit: readonly Hex[];
+  /** A hex being aimed at — a cruise missile's target — with its blast rings. */
+  readonly aim: Hex | null;
   readonly showAreas: boolean;
   readonly showHexNumbers: boolean;
   /** Which player's eyes we are drawing for; their counters read brighter. */
@@ -82,6 +91,9 @@ export const EMPTY_VIEW: RenderView = {
   fireTargets: [],
   attackers: [],
   focus: [],
+  zone: [],
+  zoneLimit: [],
+  aim: null,
   showAreas: true,
   showHexNumbers: false,
   viewer: null,
@@ -163,12 +175,161 @@ export class MapRenderer {
     const hexes = allHexes(this.map);
     this.drawGround(state, hexes, size, view);
     this.drawRoutes(hexes, size, state);
-    this.drawSides(hexes, size);
+    this.drawSides(hexes, size, state);
     if (size >= LOD.gridMin) this.drawGrid(hexes, size);
     if (view.showAreas && this.map.areaLines) this.drawAreaLines(size);
+    this.drawZone(view, size);
     this.drawOverlays(state, view, size);
+    this.drawBuildings(state, view, size);
     this.drawUnits(state, view, size);
+    this.drawMissiles(state, size);
+    if (view.aim) this.drawAim(view.aim, size);
     if (view.showHexNumbers && size >= LOD.hexLabelMin) this.drawHexNumbers(hexes, size);
+  }
+
+  /**
+   * A setup area or an entry edge: a soft wash over every hex a counter may
+   * go down on, and a warmer one over the part of it under a ceiling.
+   */
+  private drawZone(view: RenderView, size: number): void {
+    if (view.zone.length === 0) return;
+    const ctx = this.ctx;
+    const limited = new Set(view.zoneLimit.map(hexKey));
+    for (const h of view.zone) {
+      this.path(ctx, h, size, size * 0.06);
+      ctx.fillStyle = rgba(limited.has(hexKey(h)) ? THEME.hazard : THEME.reach, 0.12);
+      ctx.fill();
+      ctx.strokeStyle = rgba(limited.has(hexKey(h)) ? THEME.hazard : THEME.reachEdge, 0.28);
+      ctx.lineWidth = Math.max(1, size * 0.04);
+      ctx.stroke();
+    }
+  }
+
+  /** The hex a cruise missile is aimed at, and the two rings its blast reaches. */
+  private drawAim(aim: Hex, size: number): void {
+    const ctx = this.ctx;
+    const c = toPixel(aim, size);
+    ctx.save();
+    ctx.setLineDash([size * 0.2, size * 0.14]);
+    for (const [ring, alpha] of [
+      [1, 0.7],
+      [2, 0.4],
+    ] as const) {
+      ctx.beginPath();
+      ctx.arc(c.x, c.y, size * (1.5 * ring + 0.35), 0, Math.PI * 2);
+      ctx.strokeStyle = rgba(THEME.threat, alpha);
+      ctx.lineWidth = Math.max(1.5, size * 0.06);
+      ctx.stroke();
+    }
+    ctx.setLineDash([]);
+    ctx.restore();
+    this.path(ctx, aim, size, size * 0.04);
+    ctx.strokeStyle = THEME.threat;
+    ctx.lineWidth = Math.max(2, size * 0.09);
+    ctx.stroke();
+  }
+
+  /**
+   * Buildings (Section 11): a squat block with a structure-point bar, in the
+   * owner's colour with a slate roof, so a base reads as a thing to be taken
+   * rather than a counter to be shot.
+   */
+  private drawBuildings(state: GameState, view: RenderView, size: number): void {
+    const ctx = this.ctx;
+    for (const b of Object.values(state.buildings)) {
+      const c = toPixel(b.pos, size);
+      const w = size * 1.3;
+      const h = size * 0.9;
+      const owner = b.owner ? state.players[b.owner] : undefined;
+      const color = owner?.color ?? '#7a7062';
+
+      ctx.save();
+      ctx.shadowColor = 'rgba(0,0,0,0.5)';
+      ctx.shadowBlur = size * 0.2;
+      roundRect(ctx, c.x - w / 2, c.y - h / 2, w, h, size * 0.08);
+      ctx.fillStyle = b.destroyed
+        ? mix('#3a332b', THEME.disabled, 0.4)
+        : mix(color, '#8e8677', 0.55);
+      ctx.fill();
+      ctx.restore();
+
+      roundRect(ctx, c.x - w / 2, c.y - h / 2, w, h, size * 0.08);
+      ctx.strokeStyle =
+        view.hover && hexKey(view.hover) === hexKey(b.pos) ? THEME.hover : THEME.counterEdge;
+      ctx.lineWidth = Math.max(1, size * 0.05);
+      ctx.stroke();
+
+      if (b.destroyed) {
+        ctx.strokeStyle = rgba(THEME.bad, 0.8);
+        ctx.lineWidth = Math.max(1.5, size * 0.07);
+        ctx.beginPath();
+        ctx.moveTo(c.x - w * 0.3, c.y - h * 0.3);
+        ctx.lineTo(c.x + w * 0.3, c.y + h * 0.3);
+        ctx.moveTo(c.x + w * 0.3, c.y - h * 0.3);
+        ctx.lineTo(c.x - w * 0.3, c.y + h * 0.3);
+        ctx.stroke();
+        continue;
+      }
+
+      if (size >= LOD.counterLabelMin) {
+        ctx.fillStyle = THEME.counterInk;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.font = `600 ${Math.round(size * 0.24)}px ${THEME.font}`;
+        ctx.fillText(BUILDING_TAGS[b.kind] ?? b.kind.toUpperCase(), c.x, c.y - h * 0.18);
+      }
+      const frac = b.maxStructurePoints > 0 ? b.structurePoints / b.maxStructurePoints : 0;
+      const barW = w * 0.76;
+      const barH = h * 0.18;
+      const x = c.x - barW / 2;
+      const y = c.y + h * 0.12;
+      ctx.fillStyle = rgba('#000000', 0.45);
+      ctx.fillRect(x, y, barW, barH);
+      ctx.fillStyle = frac > 0.66 ? THEME.good : frac > 0.33 ? THEME.warn : THEME.bad;
+      ctx.fillRect(x, y, barW * frac, barH);
+      if (size >= LOD.counterTextMin) {
+        ctx.fillStyle = THEME.counterInk;
+        ctx.font = `${Math.round(size * 0.17)}px ${THEME.monoFont}`;
+        ctx.textBaseline = 'top';
+        ctx.fillText(`${b.structurePoints} SP`, c.x, y + barH + size * 0.02);
+      }
+    }
+  }
+
+  /** Cruise missiles in flight: a bright dart on a dashed line to the target. */
+  private drawMissiles(state: GameState, size: number): void {
+    const ctx = this.ctx;
+    for (const m of Object.values(state.missiles ?? {})) {
+      const from = toPixel(m.pos, size);
+      const to = toPixel(m.target, size);
+      ctx.save();
+      ctx.setLineDash([size * 0.18, size * 0.18]);
+      ctx.strokeStyle = rgba(THEME.threat, 0.6);
+      ctx.lineWidth = Math.max(1, size * 0.05);
+      ctx.beginPath();
+      ctx.moveTo(from.x, from.y);
+      ctx.lineTo(to.x, to.y);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.restore();
+
+      const angle = Math.atan2(to.y - from.y, to.x - from.x);
+      ctx.save();
+      ctx.translate(from.x, from.y);
+      ctx.rotate(angle);
+      ctx.fillStyle = state.players[m.owner]?.color ?? THEME.threat;
+      ctx.strokeStyle = THEME.counterEdge;
+      ctx.lineWidth = Math.max(1, size * 0.04);
+      ctx.beginPath();
+      ctx.moveTo(size * 0.5, 0);
+      ctx.lineTo(-size * 0.3, size * 0.22);
+      ctx.lineTo(-size * 0.15, 0);
+      ctx.lineTo(-size * 0.3, -size * 0.22);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+      ctx.restore();
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -417,12 +578,14 @@ export class MapRenderer {
     }
   }
 
-  private drawSides(hexes: readonly Hex[], size: number): void {
+  private drawSides(hexes: readonly Hex[], size: number, state: GameState): void {
     const ctx = this.ctx;
+    const overrides = state.sideOverrides ?? {};
     for (const h of hexes) {
       const pts = corners(h, size);
       for (let dir = 0; dir < 3; dir++) {
-        const feature = this.map.sides[sideKey(canonicalSide(h, dir))];
+        const k = sideKey(canonicalSide(h, dir));
+        const feature = overrides[k] ?? this.map.sides[k];
         if (!feature) continue;
         const [a, b] = sideCorners(dir);
         ctx.beginPath();
@@ -632,6 +795,28 @@ export class MapRenderer {
     if (ogre) this.drawOgreBar(u, c, w, h, size, ink);
     else if (size >= LOD.counterTextMin) this.drawStats(u, c, h, size, ink);
 
+    // An Ogre still assembling: hatched over, with the turn it wakes.
+    if (ogre && u.activatesOn !== undefined && state.turn < u.activatesOn) {
+      ctx.save();
+      roundRect(ctx, c.x - w / 2, c.y - h / 2, w, h, r);
+      ctx.clip();
+      ctx.strokeStyle = rgba('#000000', 0.45);
+      ctx.lineWidth = Math.max(1, size * 0.06);
+      for (let x = -w; x < w; x += size * 0.22) {
+        ctx.beginPath();
+        ctx.moveTo(c.x + x, c.y - h / 2);
+        ctx.lineTo(c.x + x + h, c.y + h / 2);
+        ctx.stroke();
+      }
+      ctx.restore();
+      if (size >= LOD.counterLabelMin) {
+        ctx.fillStyle = THEME.warn;
+        ctx.font = `700 ${Math.round(size * 0.24)}px ${THEME.font}`;
+        ctx.textBaseline = 'middle';
+        ctx.fillText(`T${u.activatesOn}`, c.x + w * 0.34, c.y - h * 0.36);
+      }
+    }
+
     if (disabled) {
       ctx.strokeStyle = rgba('#000000', 0.7);
       ctx.lineWidth = Math.max(1.5, size * 0.07);
@@ -726,6 +911,16 @@ export class MapRenderer {
     ctx.fillText(`D${defense} M${move}`, c.x, c.y + h * 0.33);
   }
 }
+
+/** What a building's block says on it. */
+const BUILDING_TAGS: Readonly<Record<string, string>> = {
+  admin: 'ADMIN',
+  strongpoint: 'STRONG',
+  reactor: 'REACTOR',
+  radar: 'RADAR',
+  laser: 'LASER',
+  laserTower: 'TOWER',
+};
 
 /**
  * The polyline running along the south faces of one printed row, west to east.

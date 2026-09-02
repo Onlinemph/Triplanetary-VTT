@@ -174,6 +174,51 @@ export interface OrbitalStrikeCommand extends CommandBase {
   readonly target: TargetRef;
 }
 
+/**
+ * Deployment: put one of your counters down on a hex of your setup zone.
+ *
+ * Only legal while `state.setup` is set, and only for the side whose turn it
+ * is to set up. On the one-per-hex map, placing a counter on a friend swaps
+ * the two.
+ */
+export interface PlaceUnitCommand extends CommandBase {
+  readonly type: 'placeUnit';
+  readonly unit: UnitId;
+  readonly at: Hex;
+}
+
+/** "I am set." The next side sets up, or the battle begins. */
+export interface FinishSetupCommand extends CommandBase {
+  readonly type: 'finishSetup';
+}
+
+/**
+ * Fire a Missile Crawler's cruise missile at a hex (10.02).
+ *
+ * The launch is the crawler's attack for the turn. The missile flies at once
+ * — twelve hexes a turn, straight for the target, past any laser that can
+ * see it — and detonates when it arrives, or flies on next turn if the target
+ * was further than that.
+ */
+export interface LaunchCruiseMissileCommand extends CommandBase {
+  readonly type: 'launchCruiseMissile';
+  readonly unit: UnitId;
+  readonly target: Hex;
+}
+
+/**
+ * Change the train's speed by one step, before it moves (9.02).
+ *
+ * "Ahead" adds one, "back" takes one off; a train that must lose more speed
+ * than that has to brake over several turns, which is what the rails ahead
+ * being cut makes a problem.
+ */
+export interface SetTrainSpeedCommand extends CommandBase {
+  readonly type: 'setTrainSpeed';
+  readonly unit: UnitId;
+  readonly change: 1 | -1;
+}
+
 export type Command =
   | MoveUnitCommand
   | RamCommand
@@ -190,7 +235,11 @@ export type Command =
   | EndPhaseCommand
   | ResignCommand
   | DeployReserveCommand
-  | OrbitalStrikeCommand;
+  | OrbitalStrikeCommand
+  | PlaceUnitCommand
+  | FinishSetupCommand
+  | LaunchCruiseMissileCommand
+  | SetTrainSpeedCommand;
 
 export type CommandType = Command['type'];
 
