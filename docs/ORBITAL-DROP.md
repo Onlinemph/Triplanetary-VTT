@@ -141,7 +141,7 @@ House rule freely here. The profiles exist so every world plays differently and 
 
 ### 6.01 Orbital fire support
 
-Each warship in orbit over the battle hexside may deliver **one** strike during the entire battle, on any attacker fire phase: attack strength equal to its Triplanetary combat strength, any target, any range, resolved normally on the CRT with spillover. Ships that suppressed during landing may still strike. The defender's base counts as a building for these attacks.
+Each warship in orbit over the battle hexside may deliver **one** strike during the entire battle, on any attacker fire phase: attack strength equal to its Triplanetary combat strength, any target, any range, resolved normally on the CRT with spillover. Ships that suppressed during landing may still strike. The base itself may not be targeted from orbit: the fleet supports the drop, it does not do its job for it. (Earlier drafts let the base count as a building for these attacks; two warships then razed a twenty-point base in two fire phases, and a post on a rock died to one shot, without a landed unit firing.)
 
 A Triplanetary **nuke** may be committed instead of a battle: it devastates the hexside per the Triplanetary rules, destroying the base, the garrison, and the revenue stream. You can always break the thing you wanted to steal.
 
@@ -217,8 +217,10 @@ in the browser. Where this implementation adapts or defers the printed text:
   hexside stays suppressed — rather than §4.02's per-turn reading.
 - **The base** is an Admin building of 20 structure points on a planetary
   world and a command post on a rock, as §6 step 1 says. It can be shot,
-  rammed or overrun (Ogre 11.04), and orbital strikes treat it as a
-  building. "Captured intact" is read from the battle's victory level.
+  rammed or overrun (Ogre 11.04) by the landed force, but not struck from
+  orbit (§6.01). "Captured intact" is read from the battle's victory level.
+- **The computer opponent** plays either seat of a ground battle with a
+  weight table learned by self-play; `docs/AI.md` describes it.
 - **Overlays** are rolled and placed by the same seed that builds the battle
   rather than by the players: on a dead world each of the 1d6 overlays is a
   crater or a ridge hexside on the toss of a coin; a rock gets 2d6 ridges.

@@ -693,7 +693,8 @@ export const createOgreBattle = (opts: OgreBattleOptions): OgreBattle => {
   const scheduleAi = (): void => {
     window.clearTimeout(aiTimer);
     if (destroyed || session.state.victory || !computerTurn()) return;
-    aiTimer = window.setTimeout(stepAi, 240);
+    // Deployment is thirty small decisions; the turns are the ones worth watching.
+    aiTimer = window.setTimeout(stepAi, session.state.setup ? 60 : 240);
   };
 
   const stepAi = (): void => {

@@ -254,7 +254,8 @@ a cybertank keeps its record sheet between battles until the base repairs it.
 **The whole companion game is embedded** — engine, renderer, record sheets and
 seven scenarios, loaded on demand behind its own door — and it is fully
 playable here for its own sake: every battle opens with a deployment step
-inside the printed setup areas, either seat can be handed to the computer, an
+inside the printed setup areas, either seat can be handed to the computer
+(whose weight table is learned by self-play — see [docs/AI.md](docs/AI.md)), an
 unfinished battle is saved in the browser and offered on the start menu, and
 the rules now run to cruise missiles, lasers with a line of sight, the train,
 buildings under ram and overrun, and the Ninja's stealth (see
