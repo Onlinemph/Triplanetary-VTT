@@ -360,9 +360,9 @@ describe('Orbital Drop: rocks, record sheets and the shop (§§5, 7)', () => {
     // Hand Combine the rock so it can garrison it.
     const base = ceresBaseId(s0);
     const s = withBase(s0, { ...s0.bases[base]!, owner: 'combine' });
-    expect(run(s, { type: 'purchaseGarrison', by: 'combine', base, unit: 'MK3', count: 1 }).ok).toBe(
-      false,
-    );
+    expect(
+      run(s, { type: 'purchaseGarrison', by: 'combine', base, unit: 'MK3', count: 1 }).ok,
+    ).toBe(false);
     const g = mustRun(s, { type: 'purchaseGarrison', by: 'combine', base, unit: 'MK1', count: 1 });
     expect(dropData(g).garrisons[base]!.ogres).toHaveLength(1);
     expect(dropData(g).garrisons[base]!.ogres![0]!.treads).toBe(18);
@@ -443,7 +443,9 @@ describe('Orbital Drop: rocks, record sheets and the shop (§§5, 7)', () => {
       survivors: { combine: { HVY: 1, MK3: 1 }, paneuro: {} },
       victoryPoints: { combine: 40, paneuro: 0 },
       ogres: {
-        combine: [{ type: 'MK3', treads: 31, lost: { ap: 1 }, missilesSpent: 2, internalMissiles: 0 }],
+        combine: [
+          { type: 'MK3', treads: 31, lost: { ap: 1 }, missilesSpent: 2, internalMissiles: 0 },
+        ],
       },
       replay: { seed: order.seed, log: [] },
     };

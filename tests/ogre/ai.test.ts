@@ -67,7 +67,11 @@ describe('the computer opponent', () => {
       seed: 12,
       scenarioId: 'assault',
       sides: [
-        { player: 'combine', faction: 'North American Combine', forces: { HVY: 3, MSL: 2, INF: 9, MK3: 1 } },
+        {
+          player: 'combine',
+          faction: 'North American Combine',
+          forces: { HVY: 3, MSL: 2, INF: 9, MK3: 1 },
+        },
         { player: 'paneuro', faction: 'Paneuropean Federation', forces: { HVY: 2, INF: 12 } },
       ],
       terms: {

@@ -317,7 +317,9 @@ export const createOgreBattle = (opts: OgreBattleOptions): OgreBattle => {
     }
     if (ui.placing) {
       const u = s.units[ui.placing];
-      return u ? { zone: reserveEntryHexes(s, session.map, u), limit: [] } : { zone: [], limit: [] };
+      return u
+        ? { zone: reserveEntryHexes(s, session.map, u), limit: [] }
+        : { zone: [], limit: [] };
     }
     return { zone: [], limit: [] };
   };
@@ -959,7 +961,9 @@ export const createOgreBattle = (opts: OgreBattleOptions): OgreBattle => {
     if (inFire && ui.strike !== null && ui.target) {
       const preview = previewOrbitalStrike(state, session.map, ui.strike, ui.target);
       const targetUnit =
-        ui.target.kind === 'unit' || ui.target.kind === 'ogreWeapon' || ui.target.kind === 'ogreTreads'
+        ui.target.kind === 'unit' ||
+        ui.target.kind === 'ogreWeapon' ||
+        ui.target.kind === 'ogreTreads'
           ? state.units[ui.target.unit]
           : undefined;
       if (targetUnit && isOgre(targetUnit)) kids.push(targetChoice(targetUnit));

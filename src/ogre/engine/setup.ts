@@ -184,7 +184,8 @@ export const placeUnit = (
 
   const from = unit.pos;
   const moved: Unit[] = [{ ...unit, pos: at, phaseStart: at } as Unit];
-  for (const rider of passengersOf(state, unit.id)) moved.push({ ...rider, pos: at, phaseStart: at });
+  for (const rider of passengersOf(state, unit.id))
+    moved.push({ ...rider, pos: at, phaseStart: at });
   if (partner) {
     moved.push({ ...partner, pos: from, phaseStart: from } as Unit);
     for (const rider of passengersOf(state, partner.id)) {

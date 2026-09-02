@@ -247,12 +247,15 @@ export class MapRenderer {
       ctx.shadowColor = 'rgba(0,0,0,0.5)';
       ctx.shadowBlur = size * 0.2;
       roundRect(ctx, c.x - w / 2, c.y - h / 2, w, h, size * 0.08);
-      ctx.fillStyle = b.destroyed ? mix('#3a332b', THEME.disabled, 0.4) : mix(color, '#8e8677', 0.55);
+      ctx.fillStyle = b.destroyed
+        ? mix('#3a332b', THEME.disabled, 0.4)
+        : mix(color, '#8e8677', 0.55);
       ctx.fill();
       ctx.restore();
 
       roundRect(ctx, c.x - w / 2, c.y - h / 2, w, h, size * 0.08);
-      ctx.strokeStyle = view.hover && hexKey(view.hover) === hexKey(b.pos) ? THEME.hover : THEME.counterEdge;
+      ctx.strokeStyle =
+        view.hover && hexKey(view.hover) === hexKey(b.pos) ? THEME.hover : THEME.counterEdge;
       ctx.lineWidth = Math.max(1, size * 0.05);
       ctx.stroke();
 

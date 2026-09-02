@@ -76,7 +76,10 @@ export const applyCommand = (
   // nothing moves, nothing fires, and only the side setting up may act.
   if (state.setup) {
     if (!SETUP_COMMANDS.has(cmd.type)) {
-      return { state, result: fail('the counters are still going down — place them and press Ready') };
+      return {
+        state,
+        result: fail('the counters are still going down — place them and press Ready'),
+      };
     }
     const actor = setupActor(state);
     if (cmd.type !== 'resign' && cmd.by !== actor) {
@@ -217,7 +220,10 @@ const doSetTrainSpeed = (state: GameState, unitId: string, change: 1 | -1): Appl
   if (unit.trainSpeedSet) return { state, result: fail('the speed changes once a turn (9.02)') };
   const speed = Math.max(0, Math.min(TRAIN_MAX_SPEED, (unit.trainSpeed ?? 0) + change));
   if (speed === (unit.trainSpeed ?? 0)) {
-    return { state, result: fail(change > 0 ? 'the train is at full speed' : 'the train is stopped') };
+    return {
+      state,
+      result: fail(change > 0 ? 'the train is at full speed' : 'the train is stopped'),
+    };
   }
   const next = withUnit(state, { ...unit, trainSpeed: speed, trainSpeedSet: true });
   return {

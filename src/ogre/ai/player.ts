@@ -44,14 +44,14 @@ import {
 } from '../engine/types.js';
 import { isFireable, movementAllowance, printedAttack, victoryValue } from '../engine/state.js';
 import { reachable } from '../engine/movement.js';
-import { canStillFire, orbitalStrikesLeft, previewAttack, previewOrbitalStrike } from '../engine/combat.js';
-import { canRam } from '../engine/ram.js';
 import {
-  canOverrun,
-  overrunActor,
-  overrunUnits,
-  previewOverrunAttack,
-} from '../engine/overrun.js';
+  canStillFire,
+  orbitalStrikesLeft,
+  previewAttack,
+  previewOrbitalStrike,
+} from '../engine/combat.js';
+import { canRam } from '../engine/ram.js';
+import { canOverrun, overrunActor, overrunUnits, previewOverrunAttack } from '../engine/overrun.js';
 import { reactionTurn, reserveEntryHexes, reservesOf } from '../engine/reserves.js';
 import { CRUISE_MISSILE, launchCheck, loadedCrawlers } from '../engine/missiles.js';
 
@@ -101,8 +101,7 @@ const mine = (state: GameState, player: PlayerId): Unit[] =>
   Object.values(state.units).filter((u) => u.owner === player && onBoard(u));
 
 /** The attacker moves first, by the convention every scenario here keeps. */
-const isAttacker = (state: GameState, player: PlayerId): boolean =>
-  state.playerOrder[0] === player;
+const isAttacker = (state: GameState, player: PlayerId): boolean => state.playerOrder[0] === player;
 
 /** The enemy's command post or base building, if there is one to take. */
 const objectiveOf = (state: GameState, player: PlayerId): Hex | null => {
@@ -137,7 +136,10 @@ const edgeDistance = (map: GameMap, h: Hex, edge: 'north' | 'south' | 'east' | '
 /** The longest reach of a unit's guns. */
 const reachOf = (u: Unit): number => {
   if (isOgre(u)) {
-    return Math.max(0, ...u.weapons.filter((w) => isFireable(u, w)).map((w) => OGRE_WEAPONS[w.kind].range));
+    return Math.max(
+      0,
+      ...u.weapons.filter((w) => isFireable(u, w)).map((w) => OGRE_WEAPONS[w.kind].range),
+    );
   }
   const cls = unitClass(u.classId);
   return cls.laser ? 8 : cls.range;
@@ -148,11 +150,14 @@ const threatAt = (state: GameState, player: PlayerId, h: Hex): number => {
   let total = 0;
   for (const e of enemiesOf(state, player)) {
     if (!canAct(e) || isInertOgre(e, state.turn + 1)) continue;
-    const move = isOgre(e) ? movementAllowance(e, 'movement', state.options) : unitClass(e.classId).move;
+    const move = isOgre(e)
+      ? movementAllowance(e, 'movement', state.options)
+      : unitClass(e.classId).move;
     if (isOgre(e)) {
       for (const w of e.weapons) {
         if (!isFireable(e, w) || OGRE_WEAPONS[w.kind].antipersonnelOnly) continue;
-        if (distance(e.pos, h) <= OGRE_WEAPONS[w.kind].range + move) total += OGRE_WEAPONS[w.kind].attack;
+        if (distance(e.pos, h) <= OGRE_WEAPONS[w.kind].range + move)
+          total += OGRE_WEAPONS[w.kind].attack;
       }
     } else if (distance(e.pos, h) <= reachOf(e) + move) {
       total += printedAttack(e);
@@ -179,7 +184,8 @@ const planMovement = (state: GameState, map: GameMap, player: PlayerId): Command
 
   // Reserves race back the moment they may (Orbital Drop §3.03).
   if (s.turn >= reactionTurn(s)) {
-    const target = objectiveOf(s, s.playerOrder.find((p) => p !== player) ?? player) ??
+    const target =
+      objectiveOf(s, s.playerOrder.find((p) => p !== player) ?? player) ??
       myCentre(s, player) ??
       null;
     for (const r of reservesOf(s, player)) {
@@ -211,7 +217,10 @@ const planMovement = (state: GameState, map: GameMap, player: PlayerId): Command
     if (cmd.type === 'moveUnit') {
       const dest = cmd.path[cmd.path.length - 1];
       if (dest && inBounds(map, dest)) {
-        s = { ...s, units: { ...s.units, [u.id]: { ...u, pos: dest, movementEnded: true } as Unit } };
+        s = {
+          ...s,
+          units: { ...s.units, [u.id]: { ...u, pos: dest, movementEnded: true } as Unit },
+        };
       }
     }
   }
@@ -250,13 +259,25 @@ const moveFor = (
   // --- Where to go ------------------------------------------------------
   const goal = goalFor(state, map, player, u, aims);
   const options = reachable(state, map, u);
-  const here = { hex: u.pos, cost: 0, endsMovement: false, hazard: null as null | 'disable' | 'stuck', path: [] as Hex[] };
+  const here = {
+    hex: u.pos,
+    cost: 0,
+    endsMovement: false,
+    hazard: null as null | 'disable' | 'stuck',
+    path: [] as Hex[],
+  };
   let best = here;
   let bestScore = scoreHex(state, map, player, u, u.pos, goal, aims, null);
   for (const r of options) {
     const score = scoreHex(state, map, player, u, r.hex, goal, aims, r.hazard);
     if (score > bestScore + 1e-9) {
-      best = { hex: r.hex, cost: r.cost, endsMovement: r.endsMovement, hazard: r.hazard, path: [...r.path] };
+      best = {
+        hex: r.hex,
+        cost: r.cost,
+        endsMovement: r.endsMovement,
+        hazard: r.hazard,
+        path: [...r.path],
+      };
       bestScore = score;
     }
   }
@@ -341,7 +362,9 @@ const scoreHex = (
   const terrain = terrainAt(map, h, state.terrainOverrides);
   const cover = defenseMultiplier(terrain, infantry) - 1;
   const threat = threatAt(state, player, h);
-  const myDefense = isOgre(u) ? 12 : Math.max(1, unitClass(u.classId).defense * (infantry ? u.squads : 1));
+  const myDefense = isOgre(u)
+    ? 12
+    : Math.max(1, unitClass(u.classId).defense * (infantry ? u.squads : 1));
 
   // Targets this hex puts in reach, weighted by what they are worth.
   let inReach = 0;
@@ -390,7 +413,8 @@ const ramFor = (
     for (const v of unitsAt(state, e.pos).filter((x) => x.owner !== player)) {
       if (v.kind === 'unit' && v.classId === 'CP') value += 1000;
       else if (isOgre(v)) value += overrun ? 20 : 10;
-      else if (v.kind === 'unit' && unitClass(v.classId).kind === 'infantry') value += overrun ? 6 : 0;
+      else if (v.kind === 'unit' && unitClass(v.classId).kind === 'infantry')
+        value += overrun ? 6 : 0;
       else value += victoryValue(v) * 2;
     }
     // A cybertank on its last treads keeps them for the road out.
@@ -449,7 +473,8 @@ const gunsOf = (state: GameState, player: PlayerId): AttackerRef[] => {
   for (const u of mine(state, player)) {
     if (!canStillFire(state, u) || isInertOgre(u, state.turn)) continue;
     if (isOgre(u)) {
-      for (const w of u.weapons) if (isFireable(u, w) && !w.fired) refs.push({ unit: u.id, weapon: w.id });
+      for (const w of u.weapons)
+        if (isFireable(u, w) && !w.fired) refs.push({ unit: u.id, weapon: w.id });
     } else {
       refs.push({ unit: u.id });
     }
@@ -468,7 +493,10 @@ const strengthOfRef = (state: GameState, ref: AttackerRef): number => {
 };
 
 /** Every way of hurting the enemy: units, Ogre components, buildings. */
-const targetsOf = (state: GameState, player: PlayerId): { ref: TargetRef; value: number; hex: Hex }[] => {
+const targetsOf = (
+  state: GameState,
+  player: PlayerId,
+): { ref: TargetRef; value: number; hex: Hex }[] => {
   const out: { ref: TargetRef; value: number; hex: Hex }[] = [];
   for (const e of enemiesOf(state, player)) {
     if (isOgre(e)) {
@@ -509,7 +537,17 @@ const bestShot = (
   map: GameMap,
   guns: readonly AttackerRef[],
   targets: readonly { ref: TargetRef; value: number; hex: Hex }[],
-  preview: (attackers: readonly AttackerRef[], target: TargetRef) => { ok: boolean; odds: { kind: string; column?: string }; treadAttack?: boolean; attackStrength: number; structureDamage?: number; defenseStrength: number },
+  preview: (
+    attackers: readonly AttackerRef[],
+    target: TargetRef,
+  ) => {
+    ok: boolean;
+    odds: { kind: string; column?: string };
+    treadAttack?: boolean;
+    attackStrength: number;
+    structureDamage?: number;
+    defenseStrength: number;
+  },
   overrun: boolean,
 ): Shot | null => {
   let best: Shot | null = null;
@@ -536,7 +574,13 @@ const bestShot = (
 const expectedValue = (
   state: GameState,
   map: GameMap,
-  p: { odds: { kind: string; column?: string }; treadAttack?: boolean; attackStrength: number; structureDamage?: number; defenseStrength: number },
+  p: {
+    odds: { kind: string; column?: string };
+    treadAttack?: boolean;
+    attackStrength: number;
+    structureDamage?: number;
+    defenseStrength: number;
+  },
   t: { ref: TargetRef; value: number; hex: Hex },
   attackers: readonly AttackerRef[],
   overrun: boolean,
@@ -548,7 +592,8 @@ const expectedValue = (
     const chance = (7 - hitOn) / 6;
     const treadsLost = Math.min(ogre && isOgre(ogre) ? ogre.treads : 0, p.attackStrength);
     // Treads are worth more the fewer are left: slowing a cybertank is the game.
-    const scarcity = ogre && isOgre(ogre) ? 1 + (1 - ogre.treads / ogreType(ogre.typeId).treads) * 2 : 1;
+    const scarcity =
+      ogre && isOgre(ogre) ? 1 + (1 - ogre.treads / ogreType(ogre.typeId).treads) * 2 : 1;
     return chance * treadsLost * 1.6 * scarcity - attackers.length * 0.6;
   }
   if (t.ref.kind === 'building') {
@@ -561,7 +606,14 @@ const expectedValue = (
   const pd = chance.d / 6;
   const target = t.ref.kind === 'unit' ? state.units[t.ref.unit] : undefined;
   const infantry = target?.kind === 'unit' && unitClass(target.classId).kind === 'infantry';
-  const dWorth = t.ref.kind === 'unit' ? (infantry ? 0.45 : target?.kind === 'unit' && target.disabled !== 'none' ? 1 : 0.4) : 0;
+  const dWorth =
+    t.ref.kind === 'unit'
+      ? infantry
+        ? 0.45
+        : target?.kind === 'unit' && target.disabled !== 'none'
+          ? 1
+          : 0.4
+      : 0;
   return px * t.value + pd * t.value * dWorth - attackers.length * 0.8;
 };
 
@@ -583,7 +635,8 @@ const planFire = (state: GameState, map: GameMap, player: PlayerId): Command[] =
             : (oddsChance(p.odds).x / 6) * t.value;
         if (!best || ev > best.ev) best = { target: t.ref, ev };
       }
-      if (best && best.ev > 2) out.push({ type: 'orbitalStrike', by: player, strike: i, target: best.target });
+      if (best && best.ev > 2)
+        out.push({ type: 'orbitalStrike', by: player, strike: i, target: best.target });
     }
   }
 
@@ -616,7 +669,12 @@ const planFire = (state: GameState, map: GameMap, player: PlayerId): Command[] =
 };
 
 /** Where a cruise missile does the most harm to them and the least to us. */
-const bestMissileAim = (state: GameState, map: GameMap, player: PlayerId, crawler: Unit): Hex | null => {
+const bestMissileAim = (
+  state: GameState,
+  map: GameMap,
+  player: PlayerId,
+  crawler: Unit,
+): Hex | null => {
   let best: { hex: Hex; value: number } | null = null;
   for (const h of allHexes(map)) {
     if (launchCheck(state, map, crawler, h)) continue;
@@ -655,13 +713,18 @@ const planOverrun = (state: GameState, map: GameMap, player: PlayerId): Command[
     if (!p) continue;
     if (isOgre(u)) {
       for (const w of u.weapons) {
-        if (isFireable(u, w) && !p.weaponsFired.includes(w.id) && !(w.kind === 'missileRack' && w.fired)) {
+        if (
+          isFireable(u, w) &&
+          !p.weaponsFired.includes(w.id) &&
+          !(w.kind === 'missileRack' && w.fired)
+        ) {
           guns.push({ unit: u.id, weapon: w.id });
         }
       }
     } else if (!p.fired) {
       guns.push({ unit: u.id });
-      if (u.kind === 'unit' && (unitClass(u.classId).ap ?? 0) > 0) guns.push({ unit: u.id, antipersonnel: true });
+      if (u.kind === 'unit' && (unitClass(u.classId).ap ?? 0) > 0)
+        guns.push({ unit: u.id, antipersonnel: true });
     }
   }
   const targets: { ref: TargetRef; value: number; hex: Hex }[] = [];
@@ -671,9 +734,14 @@ const planOverrun = (state: GameState, map: GameMap, player: PlayerId): Command[
       for (const w of e.weapons) {
         if (w.destroyed || seen.has(w.kind)) continue;
         seen.add(w.kind);
-        targets.push({ ref: { kind: 'ogreWeapon', unit: e.id, weapon: w.id }, value: OGRE_WEAPONS[w.kind].vp + OGRE_WEAPONS[w.kind].attack * 4, hex: e.pos });
+        targets.push({
+          ref: { kind: 'ogreWeapon', unit: e.id, weapon: w.id },
+          value: OGRE_WEAPONS[w.kind].vp + OGRE_WEAPONS[w.kind].attack * 4,
+          hex: e.pos,
+        });
       }
-      if (e.treads > 0) targets.push({ ref: { kind: 'ogreTreads', unit: e.id }, value: 0, hex: e.pos });
+      if (e.treads > 0)
+        targets.push({ ref: { kind: 'ogreTreads', unit: e.id }, value: 0, hex: e.pos });
     } else {
       targets.push({ ref: { kind: 'unit', unit: e.id }, value: worth(e), hex: e.pos });
     }
@@ -688,11 +756,19 @@ const planOverrun = (state: GameState, map: GameMap, player: PlayerId): Command[
 
   const out: Command[] = [];
   const spent = new Set<string>();
-  const refKey = (r: AttackerRef): string => `${r.unit}:${r.weapon ?? ''}:${r.antipersonnel ? 'ap' : ''}`;
+  const refKey = (r: AttackerRef): string =>
+    `${r.unit}:${r.weapon ?? ''}:${r.antipersonnel ? 'ap' : ''}`;
   for (let i = 0; i < 40; i++) {
     const left = guns.filter((g) => !spent.has(refKey(g)) && !spent.has(`${g.unit}:*`));
     if (left.length === 0) break;
-    const shot = bestShot(state, map, left, targets, (a, t) => previewOverrunAttack(state, map, a, t), true);
+    const shot = bestShot(
+      state,
+      map,
+      left,
+      targets,
+      (a, t) => previewOverrunAttack(state, map, a, t),
+      true,
+    );
     if (!shot) break;
     out.push({ type: 'overrunAttack', by: player, attackers: shot.attackers, target: shot.target });
     for (const a of shot.attackers) {

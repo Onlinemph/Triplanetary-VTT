@@ -36,7 +36,15 @@ const planetary: OrderOfBattle = {
     reactionTurn: 5,
     orbitalStrikes: [],
     ogreDamage: {
-      paneuro: [{ type: 'MK5', treads: 30, lost: { main: 1, ap: 4 }, missilesSpent: 2, internalMissiles: 0 }],
+      paneuro: [
+        {
+          type: 'MK5',
+          treads: 30,
+          lost: { main: 1, ap: 4 },
+          missilesSpent: 2,
+          internalMissiles: 0,
+        },
+      ],
     },
   },
 };
@@ -175,9 +183,9 @@ describe('the asteroid (§5)', () => {
     for (const u of Object.values(state.units)) {
       if (onBoard(u)) expect(toOffset(u.pos).row).toBeLessThanOrEqual(HALF_OGRE_MAP.rows);
     }
-    expect(Object.values(state.sideOverrides ?? {}).filter((f) => f === 'ridge').length).toBeGreaterThan(
-      1,
-    );
+    expect(
+      Object.values(state.sideOverrides ?? {}).filter((f) => f === 'ridge').length,
+    ).toBeGreaterThan(1);
   });
 
   it('runs under low gravity with nothing hovering', () => {
@@ -187,7 +195,9 @@ describe('the asteroid (§5)', () => {
     expect(movementAllowance(tank, 'movement', state.options)).toBe(4);
     // The base on a rock is a command post, not a building.
     expect(state.buildings['base']).toBeUndefined();
-    expect(Object.values(state.units).some((u) => u.kind === 'unit' && u.classId === 'CP')).toBe(true);
+    expect(Object.values(state.units).some((u) => u.kind === 'unit' && u.classId === 'CP')).toBe(
+      true,
+    );
   });
 
   it('rolls a different battlefield for a dead world than for a rock', () => {

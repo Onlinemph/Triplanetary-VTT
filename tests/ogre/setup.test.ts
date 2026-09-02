@@ -78,7 +78,11 @@ describe('deployment', () => {
     for (const u of armour) {
       const free = central.find((h) => legalSetupHexes(s, map, u).some((x) => key(x) === key(h)));
       if (!free) continue;
-      const out = applyCommand(s, { type: 'placeUnit', by: DEFENSE_PLAYER, unit: u.id, at: free }, map);
+      const out = applyCommand(
+        s,
+        { type: 'placeUnit', by: DEFENSE_PLAYER, unit: u.id, at: free },
+        map,
+      );
       if (!out.result.ok) {
         expect(out.result.ok ? '' : out.result.reason).toMatch(/attack strength/);
         refusedOnce = true;

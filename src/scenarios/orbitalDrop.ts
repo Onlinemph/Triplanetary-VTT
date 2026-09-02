@@ -756,10 +756,7 @@ const runTheGunsAndFreeze = (state: GameState): GameState => {
   // at each landing ship: 2:1 ... A ship disabled during its landing turn
   // crashes with all cargo." A rock has no planetary defences to run.
   const silenced =
-    !inv.side ||
-    isSideSuppressed(next, inv.side) ||
-    !base.hasPlanetaryDefences ||
-    base.suppressed;
+    !inv.side || isSideSuppressed(next, inv.side) || !base.hasPlanetaryDefences || base.suppressed;
   if (!silenced) {
     for (const ship of landers) {
       const die = rollDie(next.rng);
@@ -805,7 +802,11 @@ const runTheGunsAndFreeze = (state: GameState): GameState => {
 
   const profile = WORLD_PROFILES[inv.world] ?? 'dead';
   const scenarioId =
-    profile === 'living' ? 'assault-green' : profile === 'asteroid' ? 'assault-asteroid' : 'assault';
+    profile === 'living'
+      ? 'assault-green'
+      : profile === 'asteroid'
+        ? 'assault-asteroid'
+        : 'assault';
   const order: OrderOfBattle = {
     battleId: `drop-${data.battleSerial}-${inv.base}`,
     seed,
@@ -876,8 +877,7 @@ const resolveGroundBattle = (
   // battle was won over a ruin.
   const baseIntact = cmd.result.level !== 'marginal';
   // §7 "Damage carries over": the winner's surviving cybertanks keep their sheets.
-  const sheets = (cmd.result as { ogres?: Readonly<Record<string, readonly OgreRecord[]>> })
-    .ogres;
+  const sheets = (cmd.result as { ogres?: Readonly<Record<string, readonly OgreRecord[]>> }).ogres;
 
   let next = state;
 

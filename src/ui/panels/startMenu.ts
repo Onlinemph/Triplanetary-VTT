@@ -83,26 +83,26 @@ export const openStartMenu = (host: HTMLElement, o: StartMenuOpts): Overlay => {
     o.resumeGame ? resumeRow('Game', o.resumeGame) : null,
     o.resumeBattle ? resumeRow('Battle', o.resumeBattle) : null,
     el(
-    'div',
-    { class: 'start-menu' },
-    card(
-      'Triplanetary',
-      'the space game',
-      'Vector movement in the inner system. Plot a course, spend fuel only to change it, and fight over what the orbits allow — hot seat, against the computer, or online.',
-      o.onTriplanetary,
-    ),
-    card(
-      'Ogre',
-      'the ground game',
-      'A cybernetic supertank against everything the defence can field. Attack its weapons or its treads — you never attack an Ogre — on the cratered map or the green one.',
-      o.onOgre,
-    ),
-    card(
-      'Orbital Drop',
-      'two games, one war',
-      'Triplanetary handles everything above the atmosphere; Ogre handles everything below it. Buy tanks as cargo, run convoys under the guns, and put a cybertank on somebody else’s colony.',
-      o.onCampaign,
-    ),
+      'div',
+      { class: 'start-menu' },
+      card(
+        'Triplanetary',
+        'the space game',
+        'Vector movement in the inner system. Plot a course, spend fuel only to change it, and fight over what the orbits allow — hot seat, against the computer, or online.',
+        o.onTriplanetary,
+      ),
+      card(
+        'Ogre',
+        'the ground game',
+        'A cybernetic supertank against everything the defence can field. Attack its weapons or its treads — you never attack an Ogre — on the cratered map or the green one.',
+        o.onOgre,
+      ),
+      card(
+        'Orbital Drop',
+        'two games, one war',
+        'Triplanetary handles everything above the atmosphere; Ogre handles everything below it. Buy tanks as cargo, run convoys under the guns, and put a cybertank on somebody else’s colony.',
+        o.onCampaign,
+      ),
     ),
   );
 

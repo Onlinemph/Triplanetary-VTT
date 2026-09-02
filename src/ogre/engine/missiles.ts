@@ -241,7 +241,12 @@ const detonate = (state: GameState, map: GameMap, id: string): GameState => {
   for (const u of Object.values(next.units)
     .filter((u) => onBoard(u) && eq(u.pos, gz))
     .sort((a, b) => (a.id < b.id ? -1 : 1))) {
-    next = destroyUnit(next, u.id, 'vaporised at ground zero', u.owner === credit ? undefined : credit);
+    next = destroyUnit(
+      next,
+      u.id,
+      'vaporised at ground zero',
+      u.owner === credit ? undefined : credit,
+    );
     next = log(next, 'good', `${unitName(u)} is gone at ground zero.`, [gz]);
   }
   for (const b of Object.values(next.buildings)) {
@@ -328,9 +333,12 @@ const blastUnit = (
           w.kind === 'missileRack' ? Math.max(0, ogre.internalMissiles - 1) : ogre.internalMissiles,
       });
       if (scorer) next = addPoints(next, scorer, ogreDamageValue(w.kind));
-      next = log(next, 'good', `The blast strips ${unitName(ogre)} of a ${OGRE_WEAPONS[w.kind].name.toLowerCase()}.`, [
-        ogre.pos,
-      ]);
+      next = log(
+        next,
+        'good',
+        `The blast strips ${unitName(ogre)} of a ${OGRE_WEAPONS[w.kind].name.toLowerCase()}.`,
+        [ogre.pos],
+      );
     }
     const ogre = next.units[id];
     if (ogre && isOgre(ogre) && ogre.treads > 0) {
@@ -340,7 +348,9 @@ const blastUnit = (
         const lost = Math.min(ogre.treads, attack);
         next = withUnit(next, { ...ogre, treads: ogre.treads - lost });
         if (scorer) next = addPoints(next, scorer, lost * ogreDamageValue('tread'));
-        next = log(next, 'good', `The blast costs ${unitName(ogre)} ${lost} tread units.`, [ogre.pos]);
+        next = log(next, 'good', `The blast costs ${unitName(ogre)} ${lost} tread units.`, [
+          ogre.pos,
+        ]);
       }
     }
     return checkOgreDeath(next, { kind: 'ogreTreads', unit: id }, credit);

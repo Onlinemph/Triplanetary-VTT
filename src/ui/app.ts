@@ -1876,9 +1876,7 @@ export const createApp = (deps: AppDeps): App => {
         : null;
     const ai = resume
       ? resume.ai
-      : order.sides
-          .map((s) => s.player)
-          .filter((p) => computerSeats.has(p) || p === 'militia');
+      : order.sides.map((s) => s.player).filter((p) => computerSeats.has(p) || p === 'militia');
     const source = { kind: 'order', order } as const;
     const setup = resume ? resume.setup : true;
     groundBattle = make.createOgreBattle({

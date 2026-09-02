@@ -93,8 +93,11 @@ describe('cruise missiles (Section 10)', () => {
     // Wind round to A's next fire phase; the missile lands on the way in.
     let s2 = out.state;
     for (let i = 0; i < 12 && s2.units[far.id] && !s2.units[far.id]!.destroyed; i++) {
-      s2 = applyCommand(s2, { type: 'endPhase', by: s2.playerOrder[s2.activePlayerIndex]! }, map)
-        .state;
+      s2 = applyCommand(
+        s2,
+        { type: 'endPhase', by: s2.playerOrder[s2.activePlayerIndex]! },
+        map,
+      ).state;
     }
     expect(s2.units[far.id]!.destroyed).toBe(true);
     expect(Object.keys(s2.missiles ?? {})).toHaveLength(0);
@@ -179,7 +182,13 @@ describe('the train (Section 9)', () => {
   it('runs on rails at its speed marker and nowhere else', () => {
     let s = newGame({ seed: 2 });
     const train = put(s, A, 'TRAIN', at(1, 3));
-    s = { ...train.state, units: { ...train.state.units, [train.id]: { ...train.state.units[train.id]!, trainSpeed: 2 } as never } };
+    s = {
+      ...train.state,
+      units: {
+        ...train.state.units,
+        [train.id]: { ...train.state.units[train.id]!, trainSpeed: 2 } as never,
+      },
+    };
     const other = put(s, B, 'INF', at(12, 6));
     s = moveFor(other.state, A);
 
@@ -194,14 +203,24 @@ describe('the train (Section 9)', () => {
   it('changes speed by one step, once a turn, before it moves', () => {
     let s = newGame({ seed: 2 });
     const train = put(s, A, 'TRAIN', at(1, 3));
-    s = { ...train.state, units: { ...train.state.units, [train.id]: { ...train.state.units[train.id]!, trainSpeed: 1 } as never } };
+    s = {
+      ...train.state,
+      units: {
+        ...train.state.units,
+        [train.id]: { ...train.state.units[train.id]!, trainSpeed: 1 } as never,
+      },
+    };
     const other = put(s, B, 'INF', at(12, 6));
     s = moveFor(other.state, A);
 
     const up = applyCommand(s, { type: 'setTrainSpeed', by: A, unit: train.id, change: 1 }, map);
     expect(up.result.ok).toBe(true);
     expect((up.state.units[train.id] as { trainSpeed?: number }).trainSpeed).toBe(2);
-    const twice = applyCommand(up.state, { type: 'setTrainSpeed', by: A, unit: train.id, change: 1 }, map);
+    const twice = applyCommand(
+      up.state,
+      { type: 'setTrainSpeed', by: A, unit: train.id, change: 1 },
+      map,
+    );
     expect(twice.result.ok).toBe(false);
   });
 
@@ -259,12 +278,20 @@ describe('buildings (11.04)', () => {
     s = tank.state;
     const other = put(s, B, 'INF', at(9, 9));
     s = fireFor(other.state, A);
-    const preview = previewAttack(s, map, [{ unit: tank.id }], { kind: 'building', building: 'hq' });
+    const preview = previewAttack(s, map, [{ unit: tank.id }], {
+      kind: 'building',
+      building: 'hq',
+    });
     expect(preview.ok).toBe(true);
     expect(preview.structureDamage).toBe(8);
     const out = applyCommand(
       s,
-      { type: 'attack', by: A, attackers: [{ unit: tank.id }], target: { kind: 'building', building: 'hq' } },
+      {
+        type: 'attack',
+        by: A,
+        attackers: [{ unit: tank.id }],
+        target: { kind: 'building', building: 'hq' },
+      },
       map,
     );
     expect(out.state.buildings['hq']!.structurePoints).toBe(12);
@@ -316,12 +343,10 @@ describe('the Ninja (14.02)', () => {
     const stealth = s.units[ninja.id]!;
     if (!isOgre(stealth)) throw new Error('not an Ogre');
     const main = stealth.weapons.find((w) => w.kind === 'main')!;
-    const mixed = previewAttack(
-      s,
-      map,
-      [{ unit: ninja.id, weapon: main.id }, { unit: tank.id }],
-      { kind: 'unit', unit: victim.id },
-    );
+    const mixed = previewAttack(s, map, [{ unit: ninja.id, weapon: main.id }, { unit: tank.id }], {
+      kind: 'unit',
+      unit: victim.id,
+    });
     expect(mixed.ok).toBe(false);
     expect(mixed.reason).toMatch(/Ninja/);
     const alone = previewAttack(s, map, [{ unit: ninja.id, weapon: main.id }], {

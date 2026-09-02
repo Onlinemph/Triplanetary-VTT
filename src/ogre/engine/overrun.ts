@@ -333,7 +333,8 @@ export const previewOverrunAttack = (
     const building = state.buildings[target.building];
     if (!building || building.destroyed) return denyPreview('that building is gone');
     if (!eq(building.pos, overrun.hex)) return denyPreview('that building is not in this hex');
-    if (overrun.firing !== 'attacker') return denyPreview('only the attackers fire on the building');
+    if (overrun.firing !== 'attacker')
+      return denyPreview('only the attackers fire on the building');
     let total = 0;
     for (const ref of attackers) {
       const u = state.units[ref.unit];
@@ -344,7 +345,8 @@ export const previewOverrunAttack = (
         const w = u.weapons.find((x) => x.id === ref.weapon);
         if (!w || !isFireable(u, w)) return denyPreview('no such weapon');
         if (p.weaponsFired.includes(w.id)) return denyPreview('that weapon has fired this round');
-        if (OGRE_WEAPONS[w.kind].antipersonnelOnly) return denyPreview('AP weapons cannot hurt a building');
+        if (OGRE_WEAPONS[w.kind].antipersonnelOnly)
+          return denyPreview('AP weapons cannot hurt a building');
       } else if (p.fired) return denyPreview(`${unitName(u)} has fired this round`);
       total += overrunStrength(u, ref);
     }
@@ -362,8 +364,7 @@ export const previewOverrunAttack = (
     };
   }
 
-  const targetUnit =
-    target.kind === 'terrain' ? undefined : state.units[target.unit];
+  const targetUnit = target.kind === 'terrain' ? undefined : state.units[target.unit];
   if (!targetUnit || !onBoard(targetUnit)) return denyPreview('no such target');
 
   const victim = participantOf(overrun, targetUnit.id);

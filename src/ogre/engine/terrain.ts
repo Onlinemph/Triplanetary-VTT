@@ -293,7 +293,11 @@ export const sideCrossing = (
         case 'rail':
           // Off a bridge there is no rail, and the case above already let a
           // bridge through.
-          return { allowed: false, requiresPhaseStart: false, reason: 'the train keeps to the rails' };
+          return {
+            allowed: false,
+            requiresPhaseStart: false,
+            reason: 'the train keeps to the rails',
+          };
       }
   }
 };

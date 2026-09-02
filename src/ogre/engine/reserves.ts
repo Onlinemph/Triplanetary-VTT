@@ -64,7 +64,8 @@ export const deployReserveCheck = (
   const terrain = terrainAt(map, at, state.terrainOverrides);
   if (terrain === 'crater' || terrain === 'water') return 'nothing enters there';
   if (entryCost(terrain, mobilityOf(unit)).cost === null) return 'this unit cannot enter there';
-  if (unitsAt(state, at).some((u) => u.owner !== unit.owner)) return 'that hex is held by the enemy';
+  if (unitsAt(state, at).some((u) => u.owner !== unit.owner))
+    return 'that hex is held by the enemy';
   if (wouldOverstack(state, at, unit)) return 'that hex is full';
   return null;
 };

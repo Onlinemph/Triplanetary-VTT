@@ -442,9 +442,7 @@ const build = (map: GameMap, opts: ScenarioBuildOptions, scenarioId: string): Ga
     (h) => open(h) && depthFrom(map, h, entryEdge) > 1 / 3,
   );
   const centralThird = defenderGround.filter((h) => depthFrom(map, h, entryEdge) < 2 / 3);
-  const dropStrip = allHexes(map).filter(
-    (h) => open(h) && depthFrom(map, h, entryEdge) <= 0.15,
-  );
+  const dropStrip = allHexes(map).filter((h) => open(h) && depthFrom(map, h, entryEdge) <= 0.15);
   return withSetup(built, opts.setup, [defender.player, attacker.player], {
     [defender.player]: zone(defenderGround, 'the base’s half of the map', [
       limit(centralThird, 20, 'the central third'),
@@ -476,7 +474,12 @@ const deployForces = (
         while (hexes.length > 0 && !isFree(d.state, hexes[0]!)) hexes.shift();
         const at = hexes.shift();
         if (!at) throw new Error('the drop zone is out of ground');
-        let ogre = makeOgre(`${owner}-${id.toLowerCase()}-${d.serial++}`, owner, id as OgreTypeId, at);
+        let ogre = makeOgre(
+          `${owner}-${id.toLowerCase()}-${d.serial++}`,
+          owner,
+          id as OgreTypeId,
+          at,
+        );
         const worn = records.findIndex((r) => r.type === id);
         if (worn >= 0) ogre = applyOgreRecord(ogre, records.splice(worn, 1)[0]!);
         const activatesOn = opts.ogreActivatesOn?.(id as OgreTypeId);
@@ -519,7 +522,12 @@ const deployScreened = (
         while (rear.length > 0 && !isFree(d.state, rear[0]!)) rear.shift();
         const at = rear.shift();
         if (!at) throw new Error('the base has no ground left');
-        let ogre = makeOgre(`${owner}-${id.toLowerCase()}-${d.serial++}`, owner, id as OgreTypeId, at);
+        let ogre = makeOgre(
+          `${owner}-${id.toLowerCase()}-${d.serial++}`,
+          owner,
+          id as OgreTypeId,
+          at,
+        );
         const worn = records.findIndex((r) => r.type === id);
         if (worn >= 0) ogre = applyOgreRecord(ogre, records.splice(worn, 1)[0]!);
         d.state = withUnit(d.state, ogre);
