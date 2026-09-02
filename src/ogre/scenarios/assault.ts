@@ -349,9 +349,9 @@ const build = (map: GameMap, opts: ScenarioBuildOptions, scenarioId: string): Ga
   const baseSites = [...rear.items].sort(
     (a, b) => depthFrom(map, b, entryEdge) - depthFrom(map, a, entryEdge),
   );
+  const site = baseSites[0];
+  if (!site) throw new Error('the base has no ground');
   if (baseKind === 'admin') {
-    const site = baseSites[0];
-    if (!site) throw new Error('the base has no ground');
     const building: Building = {
       id: 'base',
       kind: 'admin',
@@ -365,6 +365,9 @@ const build = (map: GameMap, opts: ScenarioBuildOptions, scenarioId: string): Ga
   } else {
     place(d, defender.player, 'CP', baseSites);
   }
+  // Nobody sets up on the base itself: a building is a target, and a garrison
+  // standing on it would hide it from the player who has to take it.
+  const ground = rear.items.filter((h) => key(h) !== key(site));
 
   // "No more than 20 attack strength points may set up in the central third"
   // — a screen forward, the rest of the force back with the base.
@@ -373,13 +376,13 @@ const build = (map: GameMap, opts: ScenarioBuildOptions, scenarioId: string): Ga
     defender.player,
     defender.forces,
     central.items,
-    rear.items,
+    ground,
     damage[defender.player] ?? [],
   );
   void screen;
 
   // --- The reaction force waits off the map (§3.03) ------------------------
-  const parkRow = rear.items[0] ?? baseSites[0];
+  const parkRow = ground[0] ?? site;
   if (parkRow) {
     for (const [id, count] of Object.entries(reaction)) {
       if (count <= 0) continue;

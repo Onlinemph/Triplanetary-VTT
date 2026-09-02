@@ -535,13 +535,22 @@ export const createApp = (deps: AppDeps): App => {
     newGame() {
       if (menuOverlay || pickerOverlay || ogrePickerOverlay) return;
       const savedGame = session === null ? readGameSave() : null;
-      const savedBattle = groundBattle === null ? readBattleSave() : null;
+      const anyBattle = groundBattle === null ? readBattleSave() : null;
+      // An Orbital Drop assault belongs to its war: resuming the war mounts
+      // the battle where it was left, so the menu offers the war once.
+      const battleInWar =
+        savedGame?.scenarioId === 'orbital-drop' &&
+        anyBattle?.source.kind === 'order' &&
+        anyBattle.source.order.battleId.startsWith('drop-');
+      const savedBattle = battleInWar ? null : anyBattle;
       menuOverlay = openStartMenu(overlays, {
         campaignRunning: deps.campaign.current() !== null,
         dismissible: session !== null || table !== null,
         resumeGame: savedGame
           ? {
-              label: `${savedGame.name}, day ${savedGame.turn}`,
+              label: `${savedGame.name}, day ${savedGame.turn}${
+                battleInWar ? ` — ${anyBattle.name} under way` : ''
+              }`,
               onResume: () => resumeGame(savedGame),
               onDiscard: () => clearGameSave(),
             }

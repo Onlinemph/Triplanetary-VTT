@@ -230,68 +230,81 @@ export class MapRenderer {
   }
 
   /**
-   * Buildings (Section 11): a squat block with a structure-point bar, in the
-   * owner's colour with a slate roof, so a base reads as a thing to be taken
-   * rather than a counter to be shot.
+   * Buildings (Section 11): a plinth that fills the hex, with the name across
+   * its top and the structure-point bar along its bottom, so a base still
+   * reads — and still shows its damage — when a counter stands on it. The
+   * block in the middle is the building itself, and a counter may hide it.
    */
   private drawBuildings(state: GameState, view: RenderView, size: number): void {
     const ctx = this.ctx;
     for (const b of Object.values(state.buildings)) {
       const c = toPixel(b.pos, size);
-      const w = size * 1.3;
-      const h = size * 0.9;
       const owner = b.owner ? state.players[b.owner] : undefined;
       const color = owner?.color ?? '#7a7062';
+      const hovered = view.hover !== null && hexKey(view.hover) === hexKey(b.pos);
 
+      // The plinth: a hex inset from the grid, in the owner's colour dulled.
       ctx.save();
       ctx.shadowColor = 'rgba(0,0,0,0.5)';
       ctx.shadowBlur = size * 0.2;
-      roundRect(ctx, c.x - w / 2, c.y - h / 2, w, h, size * 0.08);
+      this.path(ctx, b.pos, size, size * 0.1);
       ctx.fillStyle = b.destroyed
         ? mix('#3a332b', THEME.disabled, 0.4)
-        : mix(color, '#8e8677', 0.55);
+        : mix(color, '#8e8677', 0.62);
       ctx.fill();
       ctx.restore();
+      this.path(ctx, b.pos, size, size * 0.1);
+      ctx.strokeStyle = hovered ? THEME.hover : THEME.counterEdge;
+      ctx.lineWidth = Math.max(1, size * 0.06);
+      ctx.stroke();
 
-      roundRect(ctx, c.x - w / 2, c.y - h / 2, w, h, size * 0.08);
-      ctx.strokeStyle =
-        view.hover && hexKey(view.hover) === hexKey(b.pos) ? THEME.hover : THEME.counterEdge;
-      ctx.lineWidth = Math.max(1, size * 0.05);
+      // The block in the middle, where a counter would stand.
+      const w = size * 0.95;
+      const h = size * 0.62;
+      roundRect(ctx, c.x - w / 2, c.y - h / 2, w, h, size * 0.06);
+      ctx.fillStyle = b.destroyed ? rgba('#000000', 0.35) : mix(color, '#8e8677', 0.4);
+      ctx.fill();
+      ctx.strokeStyle = rgba(THEME.counterEdge, 0.7);
+      ctx.lineWidth = Math.max(1, size * 0.04);
       ctx.stroke();
 
       if (b.destroyed) {
         ctx.strokeStyle = rgba(THEME.bad, 0.8);
         ctx.lineWidth = Math.max(1.5, size * 0.07);
         ctx.beginPath();
-        ctx.moveTo(c.x - w * 0.3, c.y - h * 0.3);
-        ctx.lineTo(c.x + w * 0.3, c.y + h * 0.3);
-        ctx.moveTo(c.x + w * 0.3, c.y - h * 0.3);
-        ctx.lineTo(c.x - w * 0.3, c.y + h * 0.3);
+        ctx.moveTo(c.x - w * 0.4, c.y - h * 0.4);
+        ctx.lineTo(c.x + w * 0.4, c.y + h * 0.4);
+        ctx.moveTo(c.x + w * 0.4, c.y - h * 0.4);
+        ctx.lineTo(c.x - w * 0.4, c.y + h * 0.4);
         ctx.stroke();
-        continue;
       }
 
+      // The name across the top of the plinth, above any counter.
       if (size >= LOD.counterLabelMin) {
         ctx.fillStyle = THEME.counterInk;
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        ctx.font = `600 ${Math.round(size * 0.24)}px ${THEME.font}`;
-        ctx.fillText(BUILDING_TAGS[b.kind] ?? b.kind.toUpperCase(), c.x, c.y - h * 0.18);
+        ctx.font = `600 ${Math.round(size * 0.22)}px ${THEME.font}`;
+        ctx.fillText(BUILDING_TAGS[b.kind] ?? b.kind.toUpperCase(), c.x, c.y - size * 0.7);
       }
+      if (b.destroyed) continue;
+
+      // The structure-point bar along the bottom, below any counter.
       const frac = b.maxStructurePoints > 0 ? b.structurePoints / b.maxStructurePoints : 0;
-      const barW = w * 0.76;
-      const barH = h * 0.18;
+      const barW = size * 1.15;
+      const barH = size * 0.15;
       const x = c.x - barW / 2;
-      const y = c.y + h * 0.12;
-      ctx.fillStyle = rgba('#000000', 0.45);
+      const y = c.y + size * 0.6;
+      ctx.fillStyle = rgba('#000000', 0.5);
       ctx.fillRect(x, y, barW, barH);
       ctx.fillStyle = frac > 0.66 ? THEME.good : frac > 0.33 ? THEME.warn : THEME.bad;
       ctx.fillRect(x, y, barW * frac, barH);
       if (size >= LOD.counterTextMin) {
         ctx.fillStyle = THEME.counterInk;
-        ctx.font = `${Math.round(size * 0.17)}px ${THEME.monoFont}`;
-        ctx.textBaseline = 'top';
-        ctx.fillText(`${b.structurePoints} SP`, c.x, y + barH + size * 0.02);
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.font = `600 ${Math.round(size * 0.13)}px ${THEME.monoFont}`;
+        ctx.fillText(`${b.structurePoints} SP`, c.x, y + barH / 2);
       }
     }
   }
@@ -592,8 +605,17 @@ export class MapRenderer {
         ctx.moveTo(pts[a]!.x, pts[a]!.y);
         ctx.lineTo(pts[b]!.x, pts[b]!.y);
         if (feature === 'ridge') {
+          // A ridge is a wall: a dark bank with a lit crest along it, drawn
+          // heavy enough to read at any zoom against any ground.
+          ctx.lineCap = 'round';
           ctx.strokeStyle = TERRAIN_COLORS.ridge;
-          ctx.lineWidth = Math.max(2, size * 0.18);
+          ctx.lineWidth = Math.max(4, size * 0.3);
+          ctx.stroke();
+          ctx.strokeStyle = TERRAIN_COLORS.ridgeCrest;
+          ctx.lineWidth = Math.max(1.5, size * 0.12);
+          ctx.stroke();
+          ctx.lineCap = 'butt';
+          continue;
         } else if (feature === 'stream') {
           ctx.strokeStyle = rgba(TERRAIN_COLORS.stream, 0.9);
           ctx.lineWidth = Math.max(1.5, size * 0.1);

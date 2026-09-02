@@ -23,7 +23,8 @@ import { type Hex, distance, eq, key, neighbors, toOffset, withinRadius } from '
 import { type GameMap, allHexes, inBounds, terrainAt } from '../engine/map.js';
 import { oddsChance } from '../engine/crt.js';
 import { OGRE_WEAPONS, ogreType } from '../engine/ogres.js';
-import { baseTerrain, defenseMultiplier } from '../engine/terrain.js';
+import { baseTerrain, defenseMultiplier, entryCost } from '../engine/terrain.js';
+import { mobilityOf } from '../engine/mobility.js';
 import { unitClass } from '../engine/units.js';
 import type { Command } from '../engine/commands.js';
 import {
@@ -203,6 +204,7 @@ const planMovement = (state: GameState, map: GameMap, player: PlayerId): Command
   const attacker = isAttacker(s, player);
   const objective = objectiveOf(s, player);
   const edge = escapeEdge(s);
+  const fields = new Map<string, ReadonlyMap<string, number>>();
 
   const movers = mine(s, player)
     .filter((u) => canAct(u) && !isInertOgre(u, s.turn) && !(u.kind === 'unit' && u.ridingOn))
@@ -210,7 +212,7 @@ const planMovement = (state: GameState, map: GameMap, player: PlayerId): Command
     .sort((a, b) => (isOgre(b) ? 1 : 0) - (isOgre(a) ? 1 : 0) || a.id.localeCompare(b.id));
 
   for (const u of movers) {
-    const cmd = moveFor(s, map, player, u, { attacker, objective, edge });
+    const cmd = moveFor(s, map, player, u, { attacker, objective, edge, fields });
     if (!cmd) continue;
     out.push(cmd);
     // Pencil the move in so the next unit does not plan into the same hex.
@@ -239,7 +241,50 @@ interface Aims {
   readonly attacker: boolean;
   readonly objective: Hex | null;
   readonly edge: 'north' | 'south' | 'east' | 'west' | null;
+  /** Walking distances to each goal asked about this phase, by mobility. */
+  readonly fields: Map<string, ReadonlyMap<string, number>>;
 }
+
+/**
+ * How many hexes of ground lie between `h` and the goal for a unit that
+ * moves like `u`. Craters, water and whatever else it may never enter are
+ * not ground. The straight-line count is no use here: it walks an Ogre into
+ * a crater pocket and keeps it there, because every way out looks like a
+ * step back. Where no ground connects the two at all, the crow's count
+ * stands in.
+ */
+const groundDistance = (
+  state: GameState,
+  map: GameMap,
+  u: Unit,
+  h: Hex,
+  goal: Hex,
+  fields: Map<string, ReadonlyMap<string, number>>,
+): number => {
+  const mobility = mobilityOf(u);
+  const id = `${mobility}:${key(goal)}`;
+  let field = fields.get(id);
+  if (!field) {
+    const open = (x: Hex): boolean =>
+      entryCost(terrainAt(map, x, state.terrainOverrides), mobility).cost !== null;
+    const dist = new Map<string, number>();
+    dist.set(key(goal), 0);
+    const queue: Hex[] = [goal];
+    for (let i = 0; i < queue.length; i++) {
+      const at = queue[i]!;
+      const d = dist.get(key(at))!;
+      for (const n of neighbors(at)) {
+        const k = key(n);
+        if (dist.has(k) || !inBounds(map, n) || !open(n)) continue;
+        dist.set(k, d + 1);
+        queue.push(n);
+      }
+    }
+    field = dist;
+    fields.set(id, field);
+  }
+  return field.get(key(h)) ?? distance(h, goal);
+};
 
 const moveFor = (
   state: GameState,
@@ -374,10 +419,11 @@ const scoreHex = (
 
   let score = 0;
   if (goal.kind === 'hex') {
-    const d = distance(h, goal.hex);
+    const d = groundDistance(state, map, u, h, goal.hex, aims.fields);
     score -= d * (aims.attacker ? 10 : 4);
     // A defender that outranges the threat holds at its own range.
-    if (!aims.attacker && reach >= 3 && d < reach) score -= (reach - d) * 6;
+    const range = distance(h, goal.hex);
+    if (!aims.attacker && reach >= 3 && range < reach) score -= (reach - range) * 6;
   } else if (goal.kind === 'edge') {
     score -= edgeDistance(map, h, goal.edge) * 12;
   }
@@ -423,8 +469,22 @@ const ramFor = (
       if (u.treads < type.treads * 0.3 && value < 500) continue;
     }
     if (value <= 0) continue;
-    // Prefer the ram that also carries the Ogre toward its goal.
-    if (aims.objective) value -= distance(e.pos, aims.objective);
+    // Prefer the ram that carries the Ogre toward its goal over one that
+    // takes it away — and a tank corking the only lane through the craters
+    // is worth ramming whatever it is, because there is no way round it.
+    if (aims.objective) {
+      const here = groundDistance(state, map, u, u.pos, aims.objective, aims.fields);
+      const there = groundDistance(state, map, u, e.pos, aims.objective, aims.fields);
+      if (there < here) {
+        value += 4;
+        const boxedIn = reachable(state, map, u).every(
+          (r) => groundDistance(state, map, u, r.hex, aims.objective!, aims.fields) >= here,
+        );
+        if (boxedIn) value += 30;
+      } else {
+        value -= (there - here + 1) * 6;
+      }
+    }
     if (!best || value > best.value) {
       best = {
         value,
