@@ -28,7 +28,7 @@
  * (§4.03).
  */
 
-import { type HexSide, eq, sideGravityHex } from '@engine/hex.js';
+import { type Hex, type HexSide, eq, sideGravityHex } from '@engine/hex.js';
 import { DEFAULT_MAP, type GameMap } from '@engine/map.js';
 import { combatStrength, isSideSuppressed } from '@engine/combat.js';
 import { gunDamage } from '@engine/crt.js';
@@ -43,9 +43,11 @@ import type {
   DeclareInvasion,
   PurchaseGarrison,
   PurchaseGround,
+  RepairOgre,
   ResolveGroundBattle,
 } from '@engine/commands.js';
 import {
+  type BaseState,
   type GameState,
   type PlayerId,
   type Ship,
@@ -54,7 +56,8 @@ import {
   areAllied,
   controllerOf,
 } from '@engine/types.js';
-import type { OrderOfBattle } from '@campaign/orders.js';
+import type { OgreRecord, OrderOfBattle } from '@campaign/orders.js';
+import { OGRE_TYPES } from '../ogre/engine/ogres.js';
 import {
   type PlayerSpec,
   baseSidesOf,
@@ -135,7 +138,11 @@ const KIND_TO_UNIT: Readonly<Partial<Record<CargoKind, string>>> = {
   gndMCRL: 'MCRL',
 };
 
-/** §3.02: garrison purchase prices, in the Ogre vocabulary the garrison keeps. */
+/**
+ * §3.02: garrison purchase prices, in the Ogre vocabulary the garrison keeps.
+ * Cybertanks at MCr 5 per armour-unit equivalent (§2): a Mark I is 4, a Mark
+ * II 8, a Mark III 17, a Mark V 25.
+ */
 export const GARRISON_PRICES: Readonly<Record<string, number>> = {
   INF: 1,
   HVY: 5,
@@ -147,9 +154,15 @@ export const GARRISON_PRICES: Readonly<Record<string, number>> = {
   MHWZ: 10,
   SHVY: 10,
   MCRL: 15,
+  MK1: 20,
+  MK2: 40,
   MK3: 85,
   MK5: 125,
 };
+
+/** The cybertanks a garrison may hold, and which of them a rock may (§3.02). */
+const OGRES_ON_SALE: readonly string[] = ['MK1', 'MK2', 'MK3', 'MK5'];
+const ASTEROID_OGRES: readonly string[] = ['MK1', 'MK2'];
 
 /** Armour-unit equivalents for the garrison caps (§3.02, after Ogre 1.07). */
 const ARMOUR_UNITS: Readonly<Record<string, number>> = {
@@ -179,13 +192,37 @@ export const WORLD_PROFILES: Readonly<Record<string, 'dead' | 'living' | 'volcan
     clandestine: 'asteroid',
   };
 
+/**
+ * §7: "Repair at the base costs MCr 1 per tread unit or AP gun, MCr 4 per
+ * secondary or missile rack, MCr 8 per main battery, and takes one day per
+ * 10 points spent." A fired external missile is replaced at the rack's
+ * price — the doc does not price it, and a missile is the one thing on the
+ * sheet that is spent rather than shot off.
+ */
+export const REPAIR_PRICES: Readonly<Record<string, number>> = {
+  tread: 1,
+  ap: 1,
+  secondary: 4,
+  missileRack: 4,
+  missile: 4,
+  main: 8,
+  arm: 4,
+};
+
 // ---------------------------------------------------------------------------
 // Scenario data
 // ---------------------------------------------------------------------------
 
+/** A garrison cybertank's carried record sheet, and when its repair is done. */
+export interface OgreLedger extends OgreRecord {
+  readonly repairDoneOn?: number;
+}
+
 interface GarrisonState {
   readonly units: Force;
   readonly reaction: Force;
+  /** §7 "Damage carries over": the record sheets of the garrison's cybertanks. */
+  readonly ogres?: readonly OgreLedger[];
   /** The militia is rebuilding until this day (§3.01: back one day after a battle). */
   readonly militiaDownUntil?: number;
   /** A captured base pays no income until this day (§7). */
@@ -195,7 +232,9 @@ interface GarrisonState {
 interface Invasion {
   readonly base: string;
   readonly world: string;
-  readonly side: HexSide;
+  /** The hexside stormed, for a planetary base; a rock has only its hex. */
+  readonly side: HexSide | null;
+  readonly hex: Hex;
   readonly attacker: PlayerId;
   readonly declaredTurn: number;
 }
@@ -247,7 +286,7 @@ const forceTotal = (f: Force): number => Object.values(f).reduce((n, c) => n + c
 
 const squadsOf = (f: Force): number => f['INF'] ?? 0;
 
-const hasOgre = (f: Force): boolean => (f['MK3'] ?? 0) + (f['MK5'] ?? 0) > 0;
+const hasOgre = (f: Force): boolean => OGRES_ON_SALE.some((t) => (f[t] ?? 0) > 0);
 
 const armourUnitsOf = (f: Force): number =>
   Object.entries(f).reduce((n, [unit, count]) => n + (ARMOUR_UNITS[unit] ?? 0) * count, 0);
@@ -264,6 +303,47 @@ const forceSubtract = (a: Force, b: Force): Force => {
   }
   return out;
 };
+
+// ---------------------------------------------------------------------------
+// Record sheets between battles (§7)
+// ---------------------------------------------------------------------------
+
+/** The §7 price of putting a record sheet right, and the days it takes. */
+export const repairQuote = (ledger: OgreRecord): { cost: number; days: number } => {
+  const type = OGRE_TYPES[ledger.type as keyof typeof OGRE_TYPES];
+  const full = type?.treads ?? ledger.treads;
+  let cost = Math.max(0, full - ledger.treads) * REPAIR_PRICES['tread']!;
+  for (const [kind, n] of Object.entries(ledger.lost)) cost += (REPAIR_PRICES[kind] ?? 4) * n;
+  cost += ledger.missilesSpent * REPAIR_PRICES['missile']!;
+  return { cost, days: Math.max(1, Math.ceil(cost / 10)) };
+};
+
+/** A record sheet with nothing on it: the cybertank as it left the factory. */
+const cleanSheet = (type: string): OgreLedger => {
+  const spec = OGRE_TYPES[type as keyof typeof OGRE_TYPES];
+  return {
+    type,
+    treads: spec?.treads ?? 0,
+    lost: {},
+    missilesSpent: 0,
+    internalMissiles: spec?.internalMissiles ?? 0,
+  };
+};
+
+/** Repairs whose day has come are done; the sheet is clean again. */
+const settleRepairs = (g: GarrisonState, turn: number): GarrisonState => {
+  if (!g.ogres || g.ogres.length === 0) return g;
+  const ogres = g.ogres.map((o) =>
+    o.repairDoneOn !== undefined && o.repairDoneOn <= turn ? cleanSheet(o.type) : o,
+  );
+  return { ...g, ogres };
+};
+
+/** Only worn sheets travel to the battle; a clean one builds a fresh Ogre anyway. */
+const wornSheets = (g: GarrisonState): OgreRecord[] =>
+  (g.ogres ?? [])
+    .filter((o) => repairQuote(o).cost > 0)
+    .map(({ repairDoneOn: _shop, ...record }) => record);
 
 // ---------------------------------------------------------------------------
 // Build
@@ -420,6 +500,9 @@ const purchaseGarrison = (
   if (base.owner === null || !areAllied(state, cmd.by, base.owner)) {
     return refuse(state, 'garrisons are bought for a base you hold');
   }
+  if (base.kind === 'orbital') {
+    return refuse(state, 'orbital bases fight by Triplanetary rules only (§3.02)');
+  }
   const price = GARRISON_PRICES[cmd.unit];
   if (price === undefined) return refuse(state, `"${cmd.unit}" is not a garrison unit`);
   if (!Number.isInteger(cmd.count) || cmd.count <= 0) return refuse(state, 'count must be whole');
@@ -433,10 +516,13 @@ const purchaseGarrison = (
   const armourCap = planetary ? 12 : 6;
   const squadCap = planetary ? 20 : 10;
 
-  if (cmd.unit === 'MK3' || cmd.unit === 'MK5') {
-    // §3.02: one Ogre, planetary bases only, counted against the armour cap —
-    // read here as consuming it: a garrison cybertank IS the armour garrison.
-    if (!planetary) return refuse(state, 'an asteroid base cannot garrison a cybertank that size');
+  if (OGRES_ON_SALE.includes(cmd.unit)) {
+    // §3.02: one Ogre, counted against the armour cap — read here as
+    // consuming it: a garrison cybertank IS the armour garrison. A rock
+    // takes "Mark I or II only".
+    if (!planetary && !ASTEROID_OGRES.includes(cmd.unit)) {
+      return refuse(state, 'an asteroid base garrisons a Mark I or Mark II at most (§3.02)');
+    }
     if (cmd.count !== 1 || hasOgre(all)) return refuse(state, 'one garrison Ogre, no more');
     if (armourUnitsOf(all) > 0) {
       return refuse(
@@ -444,6 +530,7 @@ const purchaseGarrison = (
         'the Ogre takes the whole armour allowance — the garrison already has armour',
       );
     }
+    if (cmd.reaction) return refuse(state, 'a garrison cybertank stands with the base');
   } else if (cmd.unit === 'INF') {
     if (squadsOf(all) + cmd.count > squadCap) {
       return refuse(state, `the squad cap here is ${squadCap}`);
@@ -469,8 +556,17 @@ const purchaseGarrison = (
       return refuse(state, 'no more than half the garrison may stand off as the reaction force');
     }
   }
+  // A new cybertank arrives with a clean sheet.
+  const ogres = OGRES_ON_SALE.includes(cmd.unit)
+    ? [...(g.ogres ?? []), cleanSheet(cmd.unit)]
+    : g.ogres;
 
-  let next = withGarrison(state, cmd.base, { ...g, units, reaction });
+  let next = withGarrison(state, cmd.base, {
+    ...g,
+    units,
+    reaction,
+    ...(ogres ? { ogres } : {}),
+  });
   next = {
     ...next,
     players: {
@@ -481,6 +577,60 @@ const purchaseGarrison = (
   // §3.02 wants the composition secret; the ledger says only that money moved.
   next = log(next, `Garrison stores arrive at ${cmd.base} (MCr ${cost}).`);
   return accept(next);
+};
+
+/**
+ * §7: put a garrison cybertank in the shop. The money goes now; the sheet is
+ * clean again on the day the work is done, and a battle before then fights
+ * the machine as it is.
+ */
+const repairOgre = (
+  state: GameState,
+  cmd: RepairOgre,
+): { state: GameState; result: CommandResult } => {
+  if (cmd.by !== activePlayer(state)) return refuse(state, 'it is not your turn');
+  const base = state.bases[cmd.base];
+  if (!base || base.destroyed) return refuse(state, 'no such base');
+  if (base.owner === null || !areAllied(state, cmd.by, base.owner)) {
+    return refuse(state, 'repairs are made at a base you hold');
+  }
+  const g = settleRepairs(garrisonOf(state, cmd.base), state.turn);
+  const ledger = g.ogres?.[cmd.index];
+  if (!ledger) return refuse(state, 'no such cybertank in the garrison');
+  if (ledger.repairDoneOn !== undefined && ledger.repairDoneOn > state.turn) {
+    return refuse(state, `that cybertank is in the shop until day ${ledger.repairDoneOn}`);
+  }
+  const quote = repairQuote(ledger);
+  if (quote.cost <= 0) return refuse(state, 'that record sheet is clean');
+  const purse = state.players[cmd.by];
+  if (!purse || purse.megacredits < quote.cost) {
+    return refuse(state, `the repair costs MCr ${quote.cost}`);
+  }
+
+  const ogres = g.ogres!.map((o, i) =>
+    i === cmd.index ? { ...o, repairDoneOn: state.turn + quote.days } : o,
+  );
+  let next = withGarrison(state, cmd.base, { ...g, ogres });
+  next = {
+    ...next,
+    players: {
+      ...next.players,
+      [cmd.by]: { ...purse, megacredits: round3(purse.megacredits - quote.cost) },
+    },
+  };
+  next = log(
+    next,
+    `${ledger.type} goes into the shop at ${cmd.base}: MCr ${quote.cost}, ready on day ${state.turn + quote.days}.`,
+  );
+  return accept(next);
+};
+
+/** Ships in position to storm this base: over the hexside, or at the rock. */
+const overheadOf = (state: GameState, player: PlayerId, base: BaseState): Ship[] => {
+  const above = base.kind === 'planetary' && base.side ? sideGravityHex(base.side) : base.hex;
+  return Object.values(state.ships).filter(
+    (s) => !s.destroyed && areAllied(state, player, controllerOf(s)) && eq(s.pos, above),
+  );
 };
 
 const declareInvasion = (
@@ -498,23 +648,27 @@ const declareInvasion = (
   if (base.owner !== null && areAllied(state, cmd.by, base.owner)) {
     return refuse(state, 'that base is already yours');
   }
-  if (base.kind !== 'planetary' || !base.side) {
-    return refuse(state, 'only a planetary base can be stormed from orbit — for now');
+  if (base.kind === 'orbital') {
+    return refuse(state, 'orbital bases fight by Triplanetary rules only (§3.02)');
+  }
+  if (base.kind === 'planetary' && !base.side) return refuse(state, 'that base has no hexside');
+
+  if (overheadOf(state, cmd.by, base).length === 0) {
+    return refuse(
+      state,
+      base.kind === 'planetary'
+        ? 'declaring an invasion takes a ship in orbit over the hexside'
+        : 'declaring an invasion takes a ship at the rock',
+    );
   }
 
-  const above = sideGravityHex(base.side);
-  const overhead = Object.values(state.ships).some(
-    (s) => !s.destroyed && areAllied(state, cmd.by, controllerOf(s)) && eq(s.pos, above),
-  );
-  if (!overhead)
-    return refuse(state, 'declaring an invasion takes a ship in orbit over the hexside');
-
-  const world = map.bodyAt(base.side.hex)?.id ?? cmd.base;
+  const world = map.bodyAt(base.hex)?.id ?? cmd.base;
   const next = withDropData(state, {
     invasion: {
       base: cmd.base,
       world,
-      side: base.side,
+      side: base.side ?? null,
+      hex: base.hex,
       attacker: cmd.by,
       declaredTurn: state.turn,
     },
@@ -522,7 +676,7 @@ const declareInvasion = (
   return accept(
     log(next, `INVASION DECLARED against ${cmd.base}. The landings begin tomorrow.`, {
       severity: 'warn',
-      focus: [base.side.hex],
+      focus: [base.hex],
     }),
   );
 };
@@ -533,14 +687,13 @@ const declareInvasion = (
 
 const round3 = (n: number): number => Math.round(n * 1000) / 1000;
 
-const landersAt = (state: GameState, attacker: PlayerId, side: HexSide): Ship[] =>
-  Object.values(state.ships).filter(
-    (s) =>
-      !s.destroyed &&
-      areAllied(state, attacker, controllerOf(s)) &&
-      s.location.kind === 'landed' &&
-      sideEq(s.location.side, side),
-  );
+/** The attacker's ships down at the base: landed at its hexside, or stopped at the rock. */
+const landersAt = (state: GameState, attacker: PlayerId, inv: Invasion): Ship[] =>
+  Object.values(state.ships).filter((s) => {
+    if (s.destroyed || !areAllied(state, attacker, controllerOf(s))) return false;
+    if (inv.side) return s.location.kind === 'landed' && sideEq(s.location.side, inv.side);
+    return s.location.kind === 'asteroidBase' && eq(s.pos, inv.hex);
+  });
 
 /** The landed force, read off the surviving landers' manifests. */
 const groundForceOf = (ships: readonly Ship[]): Force => {
@@ -587,7 +740,7 @@ const runTheGunsAndFreeze = (state: GameState): GameState => {
   }
 
   let next = state;
-  let landers = landersAt(next, inv.attacker, inv.side);
+  let landers = landersAt(next, inv.attacker, inv);
   if (landers.length === 0) {
     // Nobody down yet: the window stays open for two days, then closes.
     if (state.turn > inv.declaredTurn + 2) {
@@ -601,9 +754,12 @@ const runTheGunsAndFreeze = (state: GameState): GameState => {
 
   // §4.03: "If the hexside is not suppressed, its planetary defenses fire once
   // at each landing ship: 2:1 ... A ship disabled during its landing turn
-  // crashes with all cargo."
+  // crashes with all cargo." A rock has no planetary defences to run.
   const silenced =
-    isSideSuppressed(next, inv.side) || !base.hasPlanetaryDefences || base.suppressed;
+    !inv.side ||
+    isSideSuppressed(next, inv.side) ||
+    !base.hasPlanetaryDefences ||
+    base.suppressed;
   if (!silenced) {
     for (const ship of landers) {
       const die = rollDie(next.rng);
@@ -613,11 +769,11 @@ const runTheGunsAndFreeze = (state: GameState): GameState => {
         next,
         `The guns at ${inv.base} fire on the lander (2:1, rolled ${die.value}): ` +
           (hit ? 'it crashes with all cargo.' : 'it gets down.'),
-        { severity: hit ? 'bad' : 'warn', focus: [inv.side.hex] },
+        { severity: hit ? 'bad' : 'warn', focus: [inv.hex] },
       );
       if (hit) next = withShip(next, { ...ship, destroyed: true });
     }
-    landers = landersAt(next, inv.attacker, inv.side);
+    landers = landersAt(next, inv.attacker, inv);
   }
 
   const force = groundForceOf(landers);
@@ -629,22 +785,17 @@ const runTheGunsAndFreeze = (state: GameState): GameState => {
     );
   }
 
-  // §§3, 6: the defence — garrison, militia unless rebuilding, reaction force.
-  const g = garrisonOf(next, inv.base);
+  // §§3, 6: the defence — garrison, militia unless rebuilding, reaction force,
+  // and the record sheets of cybertanks that have fought before.
+  const g = settleRepairs(garrisonOf(next, inv.base), next.turn);
   const militiaUp = (g.militiaDownUntil ?? 0) <= next.turn;
   const defence = militiaUp ? forceAdd(g.units, 'INF', MILITIA_SQUADS) : g.units;
   const defenderId = base.owner ?? MILITIA;
+  const worn = wornSheets(g);
 
   // §6.01: each warship overhead owes one strike at its combat strength.
-  const above = sideGravityHex(inv.side);
-  const strikes = Object.values(next.ships)
-    .filter(
-      (s) =>
-        !s.destroyed &&
-        areAllied(next, inv.attacker, controllerOf(s)) &&
-        eq(s.pos, above) &&
-        SHIP_CLASSES[s.shipClass].warship,
-    )
+  const strikes = overheadOf(next, inv.attacker, base)
+    .filter((s) => SHIP_CLASSES[s.shipClass].warship)
     .map((s) => combatStrength(s))
     .filter((n) => n > 0);
 
@@ -653,10 +804,12 @@ const runTheGunsAndFreeze = (state: GameState): GameState => {
   const seed = Math.floor(draw.value * 0x7ffffffe) + 1;
 
   const profile = WORLD_PROFILES[inv.world] ?? 'dead';
+  const scenarioId =
+    profile === 'living' ? 'assault-green' : profile === 'asteroid' ? 'assault-asteroid' : 'assault';
   const order: OrderOfBattle = {
     battleId: `drop-${data.battleSerial}-${inv.base}`,
     seed,
-    scenarioId: profile === 'living' ? 'assault-green' : 'assault',
+    scenarioId,
     sides: [
       { player: inv.attacker, faction: factionOf(inv.attacker), forces: force },
       { player: defenderId, faction: factionOf(defenderId), forces: defence },
@@ -664,18 +817,23 @@ const runTheGunsAndFreeze = (state: GameState): GameState => {
     terms: {
       world: inv.world,
       profile,
+      // §6 step 1: "a CP for asteroid bases, an Admin building with SP 20 for
+      // planetary bases".
+      base: base.kind === 'asteroid' ? 'cp' : 'admin',
       entryEdge: 'west',
       reaction: g.reaction,
       reactionTurn: REACTION_TURN,
       orbitalStrikes: strikes,
+      ...(worn.length > 0 ? { ogreDamage: { [defenderId]: worn } } : {}),
     },
   };
 
+  next = withGarrison(next, inv.base, g);
   next = withDropData(next, { pendingGround: order, battleSerial: data.battleSerial + 1 });
   return log(
     next,
     `THE SKY FREEZES over ${inv.base}. ${landers.length} lander${landers.length === 1 ? '' : 's'} down; the ground battle begins.`,
-    { severity: 'warn', focus: [inv.side.hex] },
+    { severity: 'warn', focus: [inv.hex] },
   );
 };
 
@@ -717,6 +875,9 @@ const resolveGroundBattle = (
   // stands (captured intact, or successfully defended); 'marginal' means the
   // battle was won over a ruin.
   const baseIntact = cmd.result.level !== 'marginal';
+  // §7 "Damage carries over": the winner's surviving cybertanks keep their sheets.
+  const sheets = (cmd.result as { ogres?: Readonly<Record<string, readonly OgreRecord[]>> })
+    .ogres;
 
   let next = state;
 
@@ -739,6 +900,7 @@ const resolveGroundBattle = (
   if (attackerWon) {
     // "Captured base: changes ownership immediately ... income starting the
     // day after that. Surviving attacker units become its garrison."
+    const ogres = sheets?.[attackerId] ?? [];
     next = withBase(next, {
       ...base,
       owner: attackerId === MILITIA ? null : attackerId,
@@ -747,10 +909,11 @@ const resolveGroundBattle = (
     next = withGarrison(next, inv.base, {
       units: stripUnit(aSurvivors, 'CP'),
       reaction: {},
+      ...(ogres.length > 0 ? { ogres } : {}),
       militiaDownUntil: next.turn + 1,
       incomeFrom: next.turn + 2,
     });
-    for (const ship of landersAt(next, attackerId, inv.side)) {
+    for (const ship of landersAt(next, attackerId, inv)) {
       next = withShip(next, clearGroundCargo(ship));
     }
     next = log(
@@ -758,7 +921,7 @@ const resolveGroundBattle = (
       baseIntact
         ? `${inv.base} FALLS INTACT to ${factionOf(attackerId)}. Salvage: MCr ${salvage}.`
         : `${inv.base} is TAKEN AS A RUIN by ${factionOf(attackerId)}. Salvage: MCr ${salvage}.`,
-      { severity: 'warn', focus: [inv.side.hex] },
+      { severity: 'warn', focus: [inv.hex] },
     );
   } else {
     // "Failed invasion: surviving attacker units are captured with their
@@ -768,13 +931,15 @@ const resolveGroundBattle = (
     const militia = Math.min(MILITIA_SQUADS, survivors['INF'] ?? 0);
     const units =
       militia > 0 ? { ...survivors, INF: (survivors['INF'] ?? 0) - militia } : survivors;
+    const ogres = sheets?.[defenderId] ?? [];
     next = withBase(next, { ...base, destroyed: !baseIntact });
     next = withGarrison(next, inv.base, {
       units: (units['INF'] ?? 0) > 0 ? units : stripUnit(units, 'INF'),
       reaction: {},
+      ...(ogres.length > 0 ? { ogres } : {}),
       militiaDownUntil: next.turn + 1,
     });
-    for (const ship of landersAt(next, inv.attacker, inv.side)) {
+    for (const ship of landersAt(next, inv.attacker, inv)) {
       const captured =
         defenderId === MILITIA
           ? { ...clearGroundCargo(ship), destroyed: true }
@@ -785,7 +950,7 @@ const resolveGroundBattle = (
       next,
       `The invasion of ${inv.base} FAILS. The landed ships are taken with their crews.` +
         (salvage > 0 ? ` Salvage: MCr ${salvage}.` : ''),
-      { severity: 'warn', focus: [inv.side.hex] },
+      { severity: 'warn', focus: [inv.hex] },
     );
   }
 
@@ -801,7 +966,8 @@ const endPlayerTurn = (state: GameState, _map: GameMap): GameState => {
   let next = state;
   const player = activePlayer(next);
 
-  // §1.01: income, skipping bases still standing up after capture.
+  // §1.01: income, skipping bases still standing up after capture; and the
+  // shop hands back whatever it has finished.
   const purse = next.players[player];
   if (purse) {
     const paying = Object.values(next.bases).filter((b) => {
@@ -820,6 +986,15 @@ const endPlayerTurn = (state: GameState, _map: GameMap): GameState => {
           },
         },
       };
+    }
+    for (const b of Object.values(next.bases)) {
+      if (b.owner !== player) continue;
+      const g = dropData(next).garrisons[b.id];
+      if (!g?.ogres?.some((o) => o.repairDoneOn !== undefined && o.repairDoneOn <= next.turn)) {
+        continue;
+      }
+      next = withGarrison(next, b.id, settleRepairs(g, next.turn));
+      next = log(next, `The shop at ${b.id} hands back a repaired cybertank.`);
     }
   }
 
@@ -865,6 +1040,8 @@ const handleCommand = (
       return declareInvasion(state, cmd, map);
     case 'resolveGroundBattle':
       return resolveGroundBattle(state, cmd);
+    case 'repairOgre':
+      return repairOgre(state, cmd);
     default:
       return null;
   }
@@ -896,10 +1073,10 @@ export const orbitalDrop: ScenarioDef = {
   handleCommand,
   specialRules: [
     'Ground forces are bought at any base you control, at the Orbital Drop price list, and ride as cargo: an infantry squad is MCr 1 and 2 tons, a tank MCr 5 and 10 tons, an Ogre MCr 5 and 10 tons per armour-unit equivalent, shipped in 50-ton modules that may travel on different ships. All modules must be landed before assembly begins.',
-    'Every base has a standing militia of 6 infantry squads at no cost, replenished one day after any battle. Garrisons may be bought up to 12 armour units and 20 squads at a planetary base (6 and 10 at an asteroid base); up to half may be designated the reaction force, which enters the ground battle from turn 5. One garrison Ogre is allowed, and it takes the whole armour allowance.',
-    'An invasion is declared in the ordnance phase against a base with your ship in orbit over its hexside; the landings begin the next day. An unsuppressed hexside fires once at each lander at 2:1 — any result at all crashes it with all cargo. Suppress the hexside first (a suppressing ship fires at nothing else) and the guns are silent.',
-    'When the landers are down the sky freezes: courses, ordnance and fuel hold while the ground battle is fought on a battlefield generated from the world’s profile — green and settled, cratered and dead, or volcanic with lava the fire crosses and nothing enters. Each warship overhead owes the attacker one orbital strike at its combat strength.',
-    'A captured base changes hands immediately and pays income from the day after next; surviving attackers become its garrison. The winner salvages the loser’s wrecks at a quarter of list price. A failed invasion loses its landed ships with their crews.',
+    'Every base has a standing militia of 6 infantry squads at no cost, replenished one day after any battle. Garrisons may be bought up to 12 armour units and 20 squads at a planetary base (6 and 10 at an asteroid base, which takes a Mark I or II at most); up to half may be designated the reaction force, which enters the ground battle from turn 5. One garrison Ogre is allowed, and it takes the whole armour allowance.',
+    'An invasion is declared in the ordnance phase against a base with your ship in orbit over its hexside — or at the rock, for an asteroid base; the landings begin the next day. An unsuppressed planetary hexside fires once at each lander at 2:1 — any result at all crashes it with all cargo. Suppress the hexside first (a suppressing ship fires at nothing else) and the guns are silent.',
+    'When the landers are down the sky freezes: courses, ordnance and fuel hold while the ground battle is fought on a battlefield generated from the world’s profile — green and settled, cratered and ridged and dead, volcanic with lava the fire crosses and nothing enters, or half a map of rock under low gravity where nothing hovers. A planetary base is an Admin building of 20 structure points; a rock’s is a command post. Each warship overhead owes the attacker one orbital strike at its combat strength.',
+    'A captured base changes hands immediately and pays income from the day after next; surviving attackers become its garrison. The winner salvages the loser’s wrecks at a quarter of list price. A failed invasion loses its landed ships with their crews. A cybertank keeps its record sheet between battles; the base repairs it at MCr 1 per tread unit or AP gun, 4 per secondary or missile rack, 8 per main battery, one day per 10 points spent.',
     'Victory is the campaign’s: play to an agreed end date and count net worth — or to the knife, when a power has neither a ship in space nor a base to build one.',
   ],
 };

@@ -248,10 +248,18 @@ embedded Ogre view — on a battlefield generated from the world's terrain
 profile, with the reaction force racing home from turn 5, a module-shipped
 cybertank spending its first turns as an inert hull, and every warship overhead
 owing one orbital strike. The result resumes the day: a captured base changes
-hands and pays MCr 0.5 a day. The whole companion game — engine,
-renderer, record sheets and all four of its scenarios — is embedded, loaded on
-demand behind its own door, so an Ogre attack on a command post is playable
-here for its own sake. **The campaign lives here too**: the war room docks
+hands and pays MCr 0.5 a day; a planetary base is an Admin building of 20
+structure points, a rock's a command post on half a map under low gravity, and
+a cybertank keeps its record sheet between battles until the base repairs it.
+**The whole companion game is embedded** — engine, renderer, record sheets and
+seven scenarios, loaded on demand behind its own door — and it is fully
+playable here for its own sake: every battle opens with a deployment step
+inside the printed setup areas, either seat can be handed to the computer, an
+unfinished battle is saved in the browser and offered on the start menu, and
+the rules now run to cruise missiles, lasers with a line of sight, the train,
+buildings under ram and overrun, and the Ninja's stealth (see
+[OGRE-VTT's rules mapping](https://github.com/onlinemph/OGRE-VTT/blob/main/docs/RULES-MAPPING.md)
+for what is transcribed and what is provisional). **The campaign lives here too**: the war room docks
 beside the live chart with the eight sites pinned to their planets and moons,
 is hot-seat, and saves itself in the browser after every order. A contested
 transfer is this game: fight it at this keyboard, with the computer flying

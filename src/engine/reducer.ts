@@ -332,6 +332,7 @@ const COMMAND_PHASES: Readonly<Record<CommandType, readonly Phase[] | typeof ANY
   purchaseGarrison: ['resupply'],
   declareInvasion: ['ordnance'],
   resolveGroundBattle: ANY,
+  repairOgre: ['resupply'],
   // Flow.
   endPhase: ANY,
   concede: ANY,
@@ -779,6 +780,7 @@ const dispatch = (state: GameState, cmd: Command, map: GameMap): Outcome => {
     case 'purchaseGarrison':
     case 'declareInvasion':
     case 'resolveGroundBattle':
+    case 'repairOgre':
       return scenarioCommand(state, cmd, map);
 
     // --- Flow ---
@@ -1151,6 +1153,7 @@ const feasible = (state: GameState, type: CommandType, player: PlayerId, map: Ga
     case 'purchaseGarrison':
     case 'declareInvasion':
     case 'resolveGroundBattle':
+    case 'repairOgre':
       return commandHookFor(state.scenarioId) !== null;
   }
 };

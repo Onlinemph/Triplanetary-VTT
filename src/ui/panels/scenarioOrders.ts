@@ -265,6 +265,83 @@ const forceLine = (force: Readonly<Record<string, number>>): string => {
   return parts.length > 0 ? parts.join(', ') : 'none';
 };
 
+/** A garrison cybertank's carried record sheet, as the quartermaster keeps it. */
+interface OgreLedger {
+  readonly type: string;
+  readonly treads: number;
+  readonly lost: Readonly<Record<string, number>>;
+  readonly missilesSpent: number;
+  readonly internalMissiles: number;
+  readonly repairDoneOn?: number;
+}
+
+/**
+ * §7: "A garrison Ogre that survived with damage keeps its record sheet
+ * between battles. Repair at the base costs MCr 1 per tread unit or AP gun,
+ * MCr 4 per secondary or missile rack, MCr 8 per main battery, and takes one
+ * day per 10 points spent."
+ */
+const ogreRepairRow = (ctx: Ctx, base: string, ledger: OgreLedger, index: number): Child => {
+  const { state, act } = ctx;
+  const by = activePlayer(state);
+  const quote = repairQuote(ledger);
+  const damage = describeDamage(ledger);
+  if (ledger.repairDoneOn !== undefined) {
+    return ledger.repairDoneOn > state.turn
+      ? statRow(ledger.type, `in the shop until day ${ledger.repairDoneOn}`, 'warn')
+      : statRow(ledger.type, 'repaired; handed back as the day ends', 'good');
+  }
+  if (quote.cost <= 0) return statRow(ledger.type, 'record sheet clean', 'good');
+  return el(
+    'div',
+    { class: 'row-inline' },
+    statRow(ledger.type, damage, 'warn'),
+    button({
+      label: `Repair MCr ${quote.cost} · ${quote.days} day${quote.days === 1 ? '' : 's'}`,
+      variant: 'quiet',
+      title: 'MCr 1 per tread unit or AP gun, 4 per secondary or missile rack, 8 per main battery',
+      onClick: () => act.dispatch({ type: 'repairOgre', by, base, index }),
+    }),
+  );
+};
+
+/** What a cybertank's record sheet is missing, in words. */
+const describeDamage = (ledger: OgreLedger): string => {
+  const treads = TREADS_BY_TYPE[ledger.type] ?? ledger.treads;
+  const parts: string[] = [];
+  if (ledger.treads < treads) parts.push(`${treads - ledger.treads} treads`);
+  for (const [kind, n] of Object.entries(ledger.lost)) if (n > 0) parts.push(`${n} ${kind}`);
+  if (ledger.missilesSpent > 0) parts.push(`${ledger.missilesSpent} missiles fired`);
+  return parts.length > 0 ? parts.join(', ') : 'intact';
+};
+
+/** Full tread counts, so the ledger can say how many are gone. */
+const TREADS_BY_TYPE: Readonly<Record<string, number>> = {
+  MK1: 18,
+  MK2: 30,
+  MK3: 45,
+  MK5: 60,
+};
+
+const REPAIR_PRICES: Readonly<Record<string, number>> = {
+  tread: 1,
+  ap: 1,
+  secondary: 4,
+  missileRack: 4,
+  missile: 4,
+  main: 8,
+  arm: 4,
+};
+
+/** The §7 price of a repair, and the days it takes. Mirrors the scenario's own arithmetic. */
+const repairQuote = (ledger: OgreLedger): { cost: number; days: number } => {
+  const treads = TREADS_BY_TYPE[ledger.type] ?? ledger.treads;
+  let cost = Math.max(0, treads - ledger.treads) * REPAIR_PRICES['tread']!;
+  for (const [kind, n] of Object.entries(ledger.lost)) cost += (REPAIR_PRICES[kind] ?? 4) * n;
+  cost += ledger.missilesSpent * REPAIR_PRICES['missile']!;
+  return { cost, days: Math.max(1, Math.ceil(cost / 10)) };
+};
+
 /**
  * Orbital Drop's orders, scoped the way the game plays: the ground shop and
  * the garrison quartermaster live at the base the selected ship is docked at,
@@ -340,20 +417,39 @@ const orbitalDropSection = (ctx: Ctx, ship: Ship): Child[] => {
 
       const g = (
         data['garrisons'] as
-          | Record<string, { units?: Record<string, number>; reaction?: Record<string, number> }>
+          | Record<
+              string,
+              {
+                units?: Record<string, number>;
+                reaction?: Record<string, number>;
+                ogres?: readonly OgreLedger[];
+              }
+            >
           | undefined
       )?.[base.id];
+      const asteroid = base.kind === 'asteroid';
+      // §3.02: a planetary base may garrison one cybertank of any size on
+      // sale; an asteroid base "Mark I or II only".
+      const onSale = Object.entries(GARRISON_PRICES).filter(
+        ([unit]) => !asteroid || (unit !== 'MK3' && unit !== 'MK5'),
+      );
       out.push(
         section(
           `Garrison at ${base.id}`,
           statRow('Standing', forceLine(g?.units ?? {})),
           statRow('Reaction force', forceLine(g?.reaction ?? {})),
-          note('info', 'Plus 6 squads of free militia — there is never a walkover.'),
+          note(
+            'info',
+            asteroid
+              ? 'Plus 6 squads of free militia. Caps: 6 armour units, 10 squads, a Mark I or II at most.'
+              : 'Plus 6 squads of free militia — there is never a walkover.',
+          ),
+          ...(g?.ogres ?? []).map((ledger, index) => ogreRepairRow(ctx, base.id, ledger, index)),
           el(
             'div',
             { class: 'chips' },
             el('span', { class: 'sel-label', text: 'Buy' }),
-            ...Object.entries(GARRISON_PRICES).map(([unit, price]) =>
+            ...onSale.map(([unit, price]) =>
               button({
                 label: `${unit} ${price}`,
                 variant: 'quiet',
@@ -392,7 +488,10 @@ const orbitalDropSection = (ctx: Ctx, ship: Ship): Child[] => {
   // --- Declaring the invasion ---------------------------------------------
   if (state.phase === 'ordnance' && !invasion) {
     const targets = Object.values(state.bases).filter(
-      (b) => !b.destroyed && b.kind === 'planetary' && b.side && b.owner !== by,
+      (b) =>
+        !b.destroyed &&
+        ((b.kind === 'planetary' && b.side) || b.kind === 'asteroid') &&
+        b.owner !== by,
     );
     if (targets.length > 0) {
       out.push(
@@ -400,7 +499,7 @@ const orbitalDropSection = (ctx: Ctx, ship: Ship): Child[] => {
           'Declare invasion',
           note(
             'info',
-            'Takes a ship in orbit over the hexside. The landings begin tomorrow; the garrison hears the alarm today.',
+            'Takes a ship in orbit over the hexside — or at the rock, for an asteroid base. The landings begin tomorrow; the garrison hears the alarm today.',
           ),
           el(
             'div',

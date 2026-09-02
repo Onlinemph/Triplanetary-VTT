@@ -9,13 +9,20 @@ import type { ScenarioDef } from './types.js';
 import { MARK_III_ATTACK, MARK_V_ATTACK } from './ogreAttack.js';
 import { CROSSING } from './crossing.js';
 import { LANDING } from './landing.js';
-import { ASSAULT, ASSAULT_GREEN } from './assault.js';
+import { ASSAULT, ASSAULT_ASTEROID, ASSAULT_GREEN } from './assault.js';
 
 export type { ScenarioDef, ScenarioBuildOptions } from './types.js';
 export { MARK_III_ATTACK, MARK_V_ATTACK } from './ogreAttack.js';
 export { CROSSING } from './crossing.js';
 export { LANDING, DEFAULT_LANDING } from './landing.js';
-export { ASSAULT, ASSAULT_GREEN, DEFAULT_ASSAULT, assemblyDelay } from './assault.js';
+export {
+  ASSAULT,
+  ASSAULT_ASTEROID,
+  ASSAULT_GREEN,
+  DEFAULT_ASSAULT,
+  DEFAULT_ASTEROID_ASSAULT,
+  assemblyDelay,
+} from './assault.js';
 
 export const SCENARIOS: readonly ScenarioDef[] = [
   MARK_III_ATTACK,
@@ -24,6 +31,7 @@ export const SCENARIOS: readonly ScenarioDef[] = [
   LANDING,
   ASSAULT,
   ASSAULT_GREEN,
+  ASSAULT_ASTEROID,
 ];
 
 export const scenarioById = (id: string): ScenarioDef | undefined =>
