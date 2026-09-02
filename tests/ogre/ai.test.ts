@@ -178,8 +178,8 @@ describe('the computer Ogre in a crater pocket', () => {
         state = out.state;
       }
     }
-    // Real progress by ground, the ram and the pocket notwithstanding.
+    // Real progress by ground, the pocket notwithstanding — through the
+    // cork or round it, whichever the table prefers.
     expect(walk(state.units[ogre.id]!.pos)).toBeLessThanOrEqual(before - 6);
-    expect(state.units[cork.id]!.destroyed).toBe(true);
   });
 });

@@ -54,6 +54,7 @@ const WORKERS = arg('workers', Math.max(1, cpus().length));
 const CAP_TURNS = arg('cap', 40);
 const SCENARIO_IDS = listArg('scenarios') ?? SCENARIOS.map((s) => s.id);
 const RESUME = flag('resume');
+const EVALUATE = arg('evaluate', 0);
 const DRY = flag('dry');
 
 const here = fileURLToPath(new URL('.', import.meta.url));
@@ -195,6 +196,10 @@ const main = async (): Promise<void> => {
     `tuning ${N} weights over ${scenarios.length} scenarios · population ${POPULATION}, elite ${ELITE}, ${SEEDS} seed(s) per seat · ${gamesPerTable * (POPULATION + 1)} games a generation on ${WORKERS} workers`,
   );
   if (DRY) return;
+  if (EVALUATE > 0) {
+    await evaluate(scenarios, seats, EVALUATE);
+    return;
+  }
 
   const cp = load();
   const workers = spawnWorkers();
@@ -307,6 +312,74 @@ const main = async (): Promise<void> => {
 
   if (!flag('nowrite')) writeOutputs(cp);
   else console.log('(--nowrite: leaving tuned.ts and the report alone)');
+};
+
+/**
+ * The shipped table against the hand-set baseline, every scenario from every
+ * seat, `seeds` games each: the number the report should quote, from many
+ * more games than one generation's yardstick.
+ */
+const evaluate = async (
+  scenarios: readonly (typeof SCENARIOS)[number][],
+  seats: Record<string, number>,
+  seeds: number,
+): Promise<void> => {
+  const workers = spawnWorkers();
+  try {
+    await loadTables(workers, [toVector(DEFAULT_WEIGHTS), toVector(BASE_WEIGHTS)]);
+    const jobs: Job[] = [];
+    let id = 0;
+    for (const s of scenarios) {
+      for (let seat = 0; seat < seats[s.id]!; seat++) {
+        for (let seed = 1; seed <= seeds; seed++) {
+          const seatTables = Array.from({ length: seats[s.id]! }, (_, i) => (i === seat ? 0 : 1));
+          jobs.push({
+            id: id++,
+            scenario: s.id,
+            seed: 5000 + seed,
+            seats: seatTables,
+            scored: seat,
+            maxTurns: CAP_TURNS,
+          });
+        }
+      }
+    }
+    process.stdout.write(`evaluating: 0/${jobs.length} games`);
+    const results = await runJobs(workers, jobs, (n) => {
+      process.stdout.write(`\revaluating: ${n}/${jobs.length} games`);
+    });
+    process.stdout.write('\n');
+    const byId = new Map(results.map((r) => [r.id, r]));
+    let total = 0;
+    console.log('scenario           seat   wins  losses  draws   mean');
+    for (const s of scenarios) {
+      const order = s.build({ seed: 1 }).playerOrder;
+      for (let seat = 0; seat < seats[s.id]!; seat++) {
+        const own = jobs.filter((j) => j.scenario === s.id && j.scored === seat);
+        let wins = 0;
+        let losses = 0;
+        let draws = 0;
+        let sum = 0;
+        for (const j of own) {
+          const r = byId.get(j.id);
+          const score = r?.score ?? 0;
+          sum += score;
+          if (score > 0.5) wins++;
+          else if (score < -0.5) losses++;
+          else draws++;
+        }
+        total += sum;
+        console.log(
+          `${s.id.padEnd(18)} ${order[seat]!.padEnd(8)} ${String(wins).padStart(4)} ${String(losses).padStart(7)} ${String(draws).padStart(6)}  ${fmt(sum / own.length)}`,
+        );
+      }
+    }
+    console.log(
+      `overall: ${fmt(total / jobs.length)} per game over ${jobs.length} games (learned table vs hand-set baseline)`,
+    );
+  } finally {
+    for (const w of workers) w.proc.kill();
+  }
 };
 
 const writeOutputs = (cp: Checkpoint): void => {
