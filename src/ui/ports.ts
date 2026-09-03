@@ -239,6 +239,12 @@ export interface HostOptions extends ScenarioBuildOptions {
   readonly computerSeats: ComputerSeats;
   readonly mode?: OnlineMode;
   /**
+   * Open the table under this code rather than a fresh one. Only a quick
+   * table offers it, and only for a code a browser worked out for itself —
+   * the ground battle of a war everybody at the table is already playing.
+   */
+  readonly code?: string;
+  /**
    * The table's password. A `quick` table cannot open without one; a refereed
    * table locks its seats behind it, so a player who lost their browser can
    * prove a seat is theirs.
@@ -287,6 +293,21 @@ export type OnlinePort =
         events: TableEvents,
         opts?: JoinOptions,
       ): Promise<TablePort>;
+      /**
+       * Open (or join) the table a war's ground battle is fought at, for an
+       * arrangement with no referee to mint one.
+       *
+       * The code is not chosen: it falls out of the war's code and the
+       * battle's id, so every browser at the war works out the same one. The
+       * first to arrive opens the table and the rest join it.
+       */
+      battleTable(
+        parent: { readonly code: string; readonly password: string | null },
+        order: OrderOfBattle,
+        events: TableEvents,
+      ): Promise<TablePort>;
+      /** A decided ground board's result, for handing back to the war that froze. */
+      resultOf(board: unknown): Promise<BattleResult | null>;
       /** The link a friend follows to reach a table. */
       linkFor(code: string): string;
     };

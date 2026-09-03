@@ -148,13 +148,17 @@ command line, no account, no server.
 
 Postgres orders the moves, rolls the dice and relays them; every browser runs
 the rules over the same list and lands on the same board. Share a code and a
-password and play. **[Full instructions](supabase/quick/README.md)**.
+password and play. It carries both games — Triplanetary, Ogre, a battle out of
+the builder, and an Orbital Drop war, which opens a second table for each
+ground battle at a code every browser works out for itself.
+**[Full instructions](supabase/quick/README.md)**.
 
 What it trades: the rules are enforced by each browser, so somebody who edits
 their own copy could propose a move the rules forbid — the others notice, and
-say so, but noticing is not preventing. And the two hidden-information
-scenarios, Escape and Lateral 7, are refused outright, because the move list
-rebuilds the board that the fog exists to hide.
+say so, but noticing is not preventing. The two hidden-information scenarios,
+Escape and Lateral 7, are refused outright, because the move list rebuilds the
+board that the fog exists to hide. And a seat handed to the computer needs the
+referee, which is the thing that plays it.
 
 ### The refereed table — a judge on the server
 

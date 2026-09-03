@@ -432,6 +432,9 @@ describe('what a client can reach directly', () => {
     expect(listed.length).toBe(1);
     expect(Object.keys(listed[0] ?? {}).sort()).toEqual([
       'code',
+      // Which game it is: a browser choosing a table has to know before it
+      // joins, because the two games are not the same download.
+      'kind',
       'name',
       'scenarioId',
       'seats',
@@ -480,5 +483,80 @@ describe('housekeeping', () => {
     await call('select tri_sweep(30) as n');
     const left = await asClient('select count(*) as n from tri_moves');
     expect(Number(left.rows[0]?.['n'])).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Two games, and a code a browser worked out for itself
+// ---------------------------------------------------------------------------
+
+describe('both games at a quick table', () => {
+  /** Straight at the table, as the owner rather than the browser. */
+  const rows = async (sql: string): Promise<Record<string, unknown>[]> =>
+    (await db.query<Record<string, unknown>>(sql)).rows;
+
+  const hostKind = async (kind: string, code: string | null = null): Promise<Attempt> =>
+    asClient('select tri_host($1, $2, $3::jsonb, $4, $5, $6, $7) as code', [
+      'hunter2',
+      kind === 'ogre' ? 'mark-iii-attack' : 'flight-school',
+      JSON.stringify({ seed: 7 }),
+      'a table',
+      true,
+      kind,
+      code,
+    ]);
+
+  it('opens a table of the ground game and says so when it is opened', async () => {
+    const made = await hostKind('ogre');
+    expect(made.error).toBeNull();
+    const code = String(Object.values(made.rows[0] ?? {})[0]);
+    const opened = (await call('select tri_open($1, $2) as t', [code, 'hunter2'])) as {
+      kind: string;
+      scenarioId: string;
+    };
+    expect(opened.kind).toBe('ogre');
+    expect(opened.scenarioId).toBe('mark-iii-attack');
+  });
+
+  it('calls a table opened without a kind the fleet game, as every old row is', async () => {
+    const code = await host();
+    const opened = (await call('select tri_open($1, $2) as t', [code, 'hunter2'])) as {
+      kind: string;
+    };
+    expect(opened.kind).toBe('tri');
+    expect(await rows(`select kind from tri_tables where code = '${code}'`)).toEqual([
+      { kind: 'tri' },
+    ]);
+  });
+
+  it('refuses a game it does not carry', async () => {
+    const made = await hostKind('chess');
+    expect(made.error).toMatch(/no game by that name/i);
+  });
+
+  it('opens a table under a code the caller worked out', async () => {
+    const made = await hostKind('ogre', 'FGKMNP');
+    expect(made.error).toBeNull();
+    expect(String(Object.values(made.rows[0] ?? {})[0])).toBe('FGKMNP');
+  });
+
+  it('says the code is taken rather than opening a second table on it', async () => {
+    await hostKind('ogre', 'FGKMNP');
+    const again = await hostKind('ogre', 'FGKMNP');
+    expect(again.error).toMatch(/code-taken/);
+    expect(await rows('select count(*)::int as n from tri_tables')).toEqual([{ n: 1 }]);
+  });
+
+  it('still refuses a fogged setup, whichever game asks', async () => {
+    const fogged = await asClient('select tri_host($1, $2, $3::jsonb, $4, $5, $6, $7) as code', [
+      'hunter2',
+      'escape',
+      JSON.stringify({ options: { fogOfWar: true } }),
+      '',
+      true,
+      'tri',
+      null,
+    ]);
+    expect(fogged.error).toMatch(/fog of war/i);
   });
 });

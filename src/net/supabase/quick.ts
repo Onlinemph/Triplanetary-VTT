@@ -13,6 +13,15 @@
  * scenario, its seed and an ordered list of commands — so a list plus the
  * scenario is the game, and any browser can rebuild it.
  *
+ * ## Both games, on the same table
+ *
+ * Nothing in here knows either rulebook. The table says which game it holds
+ * and this asks `KindRules` for the rest — build the opening position, apply
+ * an order with the die Postgres drew, seal the generator — exactly as the
+ * refereed client does, and from the same registry. So the fleet game and the
+ * ground game are the same code path with a different `kind`, and the ground
+ * game's engine is fetched only by a browser that sits down at a ground table.
+ *
  * ## What it does not do, said once and plainly
  *
  * It does not judge moves. `applyCommand` runs here, on the proposer's own
@@ -35,18 +44,16 @@
  * scenario, which is always possible, because the list is the game.
  */
 
-import { buildScenario } from '../../scenarios/index.js';
+import type { PlayerId } from '../../engine/index.js';
 import {
-  type Command,
-  type GameState,
-  type PlayerId,
-  DEFAULT_MAP,
-  applyCommand,
-} from '../../engine/index.js';
-import type { GameMap } from '../../engine/map.js';
-import { sealDie } from '../redact.js';
-import type { GameSession } from '../session.js';
-import type { ChannelLike } from './client.js';
+  type AnyCommand,
+  type AnyState,
+  type GameKind,
+  type KindRules,
+  type StateSummary,
+  triRules,
+} from '../kinds.js';
+import type { ChannelLike, RulesSource, SessionSink } from './client.js';
 
 // ---------------------------------------------------------------------------
 // The slice of supabase-js this needs
@@ -80,7 +87,7 @@ export interface QuickLike {
 export interface QuickMove {
   readonly idx: number;
   readonly seat: PlayerId;
-  readonly cmd: Command;
+  readonly cmd: AnyCommand;
   readonly die: number;
   readonly hash: string | null;
 }
@@ -93,6 +100,8 @@ export interface QuickSeat {
 export interface QuickTableInfo {
   readonly code: string;
   readonly name: string;
+  /** Which game is on the table. Absent on a row written before both were carried. */
+  readonly kind?: GameKind;
   readonly scenarioId: string;
   readonly setup: QuickSetup;
   readonly seats: Readonly<Record<string, QuickSeat>>;
@@ -114,6 +123,7 @@ export interface QuickSetup {
 export interface QuickListing {
   readonly code: string;
   readonly name: string;
+  readonly kind?: GameKind;
   readonly scenarioId: string;
   readonly turn: number;
   readonly seats: number;
@@ -143,7 +153,21 @@ export interface QuickEvents {
  * turn, which phase, and where every ship is with what left in it. Those are
  * the facts a wrong move actually corrupts.
  */
-export const fingerprint = (state: GameState): string => {
+export const fingerprint = (state: AnyState): string => {
+  const text = ['ships' in state ? fleetDigest(state) : groundDigest(state as GroundBoard)].join();
+
+  // FNV-1a. Not a security primitive and not used as one — this only has to
+  // notice an accident, and both sides compute it the same way.
+  let h = 0x811c9dc5;
+  for (let i = 0; i < text.length; i += 1) {
+    h ^= text.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h.toString(16).padStart(8, '0');
+};
+
+/** What the fleet game's digest reads: where every ship is, with what left in it. */
+const fleetDigest = (state: Extract<AnyState, { ships: unknown }>): string => {
   const ships = Object.keys(state.ships)
     .sort()
     .map((id) => {
@@ -160,16 +184,51 @@ export const fingerprint = (state: GameState): string => {
         s.destroyed ? 1 : 0,
       ].join(':');
     });
-  const text = [state.turn, state.phase, state.activePlayerIndex, ...ships].join('|');
+  return [state.turn, state.phase, state.activePlayerIndex, ...ships].join('|');
+};
 
-  // FNV-1a. Not a security primitive and not used as one — this only has to
-  // notice an accident, and both sides compute it the same way.
-  let h = 0x811c9dc5;
-  for (let i = 0; i < text.length; i += 1) {
-    h ^= text.charCodeAt(i);
-    h = Math.imul(h, 0x01000193) >>> 0;
-  }
-  return h.toString(16).padStart(8, '0');
+/**
+ * The same for the ground game, over the facts a wrong move corrupts there:
+ * where every counter is, what is left of it, and — for a cybertank — how much
+ * of it is still working.
+ */
+interface GroundBoard {
+  readonly turn: number;
+  readonly phase: string;
+  readonly activePlayerIndex: number;
+  readonly units: Readonly<
+    Record<
+      string,
+      {
+        readonly pos: { readonly q: number; readonly r: number };
+        readonly destroyed?: boolean;
+        readonly squads?: number;
+        readonly treads?: number;
+        readonly offMap?: string;
+        readonly weapons?: readonly { readonly destroyed?: boolean }[];
+      }
+    >
+  >;
+}
+
+const groundDigest = (state: GroundBoard): string => {
+  const units = Object.keys(state.units)
+    .sort()
+    .map((id) => {
+      const u = state.units[id];
+      if (!u) return id;
+      return [
+        id,
+        u.pos.q,
+        u.pos.r,
+        u.destroyed === true ? 1 : 0,
+        u.squads ?? '',
+        u.treads ?? '',
+        u.offMap ?? '',
+        (u.weapons ?? []).filter((w) => w.destroyed !== true).length,
+      ].join(':');
+    });
+  return [state.turn, state.phase, state.activePlayerIndex, ...units].join('|');
 };
 
 // ---------------------------------------------------------------------------
@@ -190,7 +249,14 @@ export class QuickTable {
   private channel: ChannelLike | null = null;
   private renew: ReturnType<typeof setInterval> | null = null;
   private log: QuickMove[] = [];
-  private initial: GameState | null = null;
+  private initial: AnyState | null = null;
+  /**
+   * The board as this browser has it. Kept here rather than read back off the
+   * session, because the session is only somewhere to put it — a sink, which
+   * may be a fleet game's or a ground game's and answers no questions.
+   */
+  private board: AnyState | null = null;
+  private rules: KindRules | null = null;
   private mine: PlayerId | null = null;
   private catching = false;
   private closed = false;
@@ -204,10 +270,19 @@ export class QuickTable {
 
   constructor(
     private readonly supabase: QuickLike,
-    private readonly session: GameSession,
+    private readonly session: SessionSink,
     private readonly events: QuickEvents = {},
     private readonly who: string = 'Player',
-    private readonly map: GameMap = DEFAULT_MAP,
+    /**
+     * How to find the rules for a table's game once it has said which it is.
+     * Omitted, only the fleet game is known and a ground table is refused when
+     * it is opened — which is what a build that never loads the ground engine
+     * should do.
+     */
+    private readonly rulesSource: RulesSource = (kind) => {
+      if (kind !== 'tri') throw new Error(`this client has no rules for a "${kind}" table`);
+      return triRules();
+    },
     key?: string,
   ) {
     this.key = key ?? randomKey();
@@ -223,6 +298,27 @@ export class QuickTable {
 
   get index(): number {
     return this.log[this.log.length - 1]?.idx ?? 0;
+  }
+
+  /** The password this table was opened or joined with, for a hop to its battle. */
+  get secret(): string | null {
+    return this.held?.password ?? null;
+  }
+
+  /** Which game is on the table, once one is open. */
+  get kind(): GameKind {
+    return this.held?.info.kind ?? 'tri';
+  }
+
+  /** The board this browser holds, for a caller that has to read it. */
+  get state(): AnyState | null {
+    return this.board;
+  }
+
+  /** What the board says about itself: the seats, the turn, the title. */
+  summary(): StateSummary | null {
+    const board = this.board;
+    return board === null || this.rules === null ? null : this.rules.summary(board);
   }
 
   // -------------------------------------------------------------------------
@@ -242,10 +338,17 @@ export class QuickTable {
    */
   async host(opts: {
     scenarioId: string;
+    kind?: GameKind;
     setup?: QuickSetup;
     password: string;
     name?: string;
     listed?: boolean;
+    /**
+     * The code to open the table under, when the caller has worked one out
+     * rather than wanting a fresh one — see `codeFor`. The database refuses it
+     * if somebody got there first, and `code-taken` is the reason it gives.
+     */
+    code?: string;
   }): Promise<string> {
     const code = (await this.rpc('tri_host', {
       p_password: opts.password,
@@ -253,6 +356,8 @@ export class QuickTable {
       p_setup: opts.setup ?? {},
       p_name: opts.name ?? '',
       p_listed: opts.listed ?? true,
+      p_kind: opts.kind ?? 'tri',
+      p_code: opts.code ?? null,
     })) as string;
     await this.join(code, opts.password);
     // And sit down in it. Opening a table does not seat you — the database has
@@ -270,13 +375,20 @@ export class QuickTable {
     })) as QuickTableInfo & { moves: QuickMove[] };
 
     this.held = { code: opened.code, password, info: strip(opened) };
-    this.initial = sealDie(
-      buildScenario(opened.scenarioId, {
-        ...(opened.setup.seed === undefined ? {} : { seed: opened.setup.seed }),
-        ...(opened.setup.options === undefined ? {} : { options: opened.setup.options }),
-        ...(opened.setup.fleets === undefined ? {} : { fleets: opened.setup.fleets }),
-        ...(opened.setup.order === undefined ? {} : { order: opened.setup.order }),
-      } as Parameters<typeof buildScenario>[1]),
+    // The table names its game; the rules for it are fetched before anything
+    // is built, because building is the first thing that needs them.
+    const rules = await this.rulesSource(opened.kind ?? 'tri');
+    this.rules = rules;
+    this.initial = rules.seal(
+      rules.build(opened.scenarioId, {
+        // Passed through exactly as the table froze it. A setup with no seed
+        // stays a setup with no seed: the scenario picks its own default, and
+        // it must pick the same one for everybody.
+        seed: opened.setup.seed as number,
+        options: opened.setup.options,
+        fleets: opened.setup.fleets,
+        order: opened.setup.order,
+      }),
     );
     this.log = [];
     // Adopt the opening position *before* folding in any moves. `absorb` walks
@@ -303,7 +415,7 @@ export class QuickTable {
   async sitAnywhere(): Promise<PlayerId | null> {
     const held = this.require();
     const stale = Date.now() - 5 * 60_000;
-    for (const seat of this.session.state.playerOrder) {
+    for (const seat of this.seats()) {
       const claim = held.info.seats[seat];
       const at = claim === undefined ? null : Date.parse(claim.at);
       if (claim === undefined || Number.isNaN(at) || (at ?? 0) < stale) {
@@ -352,17 +464,23 @@ export class QuickTable {
    * and being broken: the table trusts each player to run the rules, and this
    * is where running them happens.
    */
-  async send(cmd: Command): Promise<boolean> {
+  async send(cmd: AnyCommand): Promise<boolean> {
     const held = this.require();
     if (this.mine === null) {
       this.events.onRefused?.('You are not sitting at this table.');
       return false;
     }
 
-    const signed = { ...cmd, by: this.mine } as Command;
-    const applied = applyCommand({ ...this.session.state, rng: { seed: 0 } }, signed, this.map);
-    if (!applied.result.ok) {
-      this.events.onRefused?.(applied.result.reason ?? 'The rules do not allow that.');
+    const rules = this.ruleset();
+    const board = this.board;
+    if (board === null) {
+      this.events.onRefused?.('There is no board yet.');
+      return false;
+    }
+    const signed = { ...cmd, by: this.mine } as AnyCommand;
+    const applied = rules.apply(board, signed, 0);
+    if (!applied.ok) {
+      this.events.onRefused?.(applied.reason);
       return false;
     }
 
@@ -377,7 +495,7 @@ export class QuickTable {
       // this browser predicted is not the board the move produces. The
       // fingerprint that matters is written on catch-up, below.
       p_hash: null,
-      p_turn: this.session.state.turn,
+      p_turn: rules.summary(board).turn,
     })) as { ok: boolean; reason?: string; index: number; die: number };
 
     if (!answer.ok) {
@@ -442,10 +560,12 @@ export class QuickTable {
       return;
     }
 
-    let state = this.session.state;
+    const rules = this.ruleset();
+    let state = this.board;
+    if (state === null) return;
     for (const move of fresh) {
-      const out = applyCommand({ ...state, rng: { seed: move.die >>> 0 } }, move.cmd, this.map);
-      if (!out.result.ok) {
+      const out = rules.apply(state, move.cmd, move.die >>> 0);
+      if (!out.ok) {
         // The sender played something these rules refuse. Rebuilding will not
         // rescue it, but it will land this browser on the same board as
         // everyone who also refused it, which is the honest answer.
@@ -462,19 +582,38 @@ export class QuickTable {
         return;
       }
     }
-    this.session.adoptSnapshot(sealDie(state));
+    this.adopt(state);
   }
 
   /** From the scenario, through every move. Slower, and never wrong. */
   private rebuild(): void {
-    if (!this.initial) return;
+    if (!this.initial || !this.rules) return;
+    const rules = this.rules;
     let state = this.initial;
     for (const move of [...this.log].sort((a, b) => a.idx - b.idx)) {
-      const out = applyCommand({ ...state, rng: { seed: move.die >>> 0 } }, move.cmd, this.map);
-      if (!out.result.ok) break;
+      const out = rules.apply(state, move.cmd, move.die >>> 0);
+      if (!out.ok) break;
       state = out.state;
     }
-    this.session.adoptSnapshot(sealDie(state));
+    this.adopt(state);
+  }
+
+  /** Put a board in hand and in the session, with the generator sealed. */
+  private adopt(state: AnyState): void {
+    const sealed = this.ruleset().seal(state);
+    this.board = sealed;
+    this.session.adoptSnapshot(sealed);
+  }
+
+  /** The seats this game has, in the order they move. */
+  private seats(): readonly PlayerId[] {
+    const board = this.board;
+    return board === null ? [] : this.ruleset().summary(board).playerOrder;
+  }
+
+  private ruleset(): KindRules {
+    if (!this.rules) throw new Error('there is no table open');
+    return this.rules;
   }
 
   private async catchUp(): Promise<void> {
@@ -560,6 +699,7 @@ export class QuickTable {
 const strip = (t: QuickTableInfo & { moves?: unknown }): QuickTableInfo => ({
   code: t.code,
   name: t.name,
+  kind: t.kind ?? 'tri',
   scenarioId: t.scenarioId,
   setup: t.setup,
   seats: t.seats ?? {},
@@ -573,6 +713,40 @@ const strip = (t: QuickTableInfo & { moves?: unknown }): QuickTableInfo => ({
  */
 const readable = (message: string): string =>
   message.replace(/^.*?(?:ERROR|error):\s*/i, '').trim() || message;
+
+/**
+ * The code a table's own ground battle will be at.
+ *
+ * There is no referee here to mint one and announce it, so every browser works
+ * the same code out instead: it falls out of the war's code and the battle's
+ * id, both of which everybody already has. The first browser to get there
+ * opens the table; the rest are told the code is taken, which is exactly the
+ * answer they wanted — it means the table they were about to open is already
+ * standing, and they join it.
+ */
+export const codeFor = (parentCode: string, battleId: string): string => {
+  const text = `${parentCode.toUpperCase()}:${battleId}`;
+  let h = 0x811c9dc5;
+  for (let i = 0; i < text.length; i += 1) {
+    h ^= text.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  let out = '';
+  for (let i = 0; i < CODE_LENGTH; i += 1) {
+    out += QUICK_ALPHABET[h % QUICK_ALPHABET.length];
+    // Stir between characters, so six letters do not come off one number.
+    h = (Math.imul(h ^ (i + 1), 0x01000193) >>> 0) + 0x9e3779b9;
+    h >>>= 0;
+  }
+  return out;
+};
+
+/** `schema.sql`'s alphabet, character for character. A code is read aloud. */
+const QUICK_ALPHABET = 'ABCDEFGHJKMNPQRSTVWXYZ23456789';
+const CODE_LENGTH = 6;
+
+/** What `tri_host` says when the code somebody worked out is already standing. */
+export const CODE_TAKEN = 'code-taken';
 
 const randomKey = (): string => {
   const bytes = new Uint8Array(16);

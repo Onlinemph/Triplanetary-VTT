@@ -16,11 +16,17 @@ There are two arrangements, and the host picks one when opening the table:
 
 - **A refereed table** has a judge on the server. It enforces the rules,
   keeps the board, plays any seat handed to the computer, and is the only
-  kind that runs the fogged Triplanetary scenarios, Ogre, custom battles and
-  an Orbital Drop war's ground battles.
+  kind that runs the fogged Triplanetary scenarios.
 - **A quick table** is a shared list of moves with a password on the door.
   Every browser runs the rules itself. It needs nothing deployed beyond the
   database, and it is right for people who trust each other.
+
+Both play both games. Triplanetary, Ogre, a battle out of the builder and an
+Orbital Drop war all sit at either kind of table. Two things still need the
+referee: the fogged Triplanetary scenarios, Escape and Lateral 7, because a
+shared move list rebuilds the board the fog is hiding; and a seat handed to
+the computer, because the referee is what plays it. Everything else is a
+choice about how much you trust the people you sat down with.
 
 ## Sitting down
 
@@ -66,8 +72,14 @@ browser at the war hops across to it. When the battle is decided, its
 result goes back to the war as the war's own order, and leaving the
 finished battle brings you back to the frozen sky as it thaws.
 
-At a quick table there is no referee to do this; a war played at one
-keyboard fights its ground battles in the same window, as it always has.
+A quick table does the same thing without a referee. Every browser at the war
+works out the same code for the battle's table from the war's own code, the
+first to get there opens it and the rest join, and when the battle is decided
+whichever browser is quickest reports the result back to the war. You will
+see the same two hops either way.
+
+A war played at one keyboard fights its ground battles in the same window, as
+it always has.
 
 ## When something goes wrong
 
