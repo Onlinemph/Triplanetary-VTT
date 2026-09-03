@@ -31,9 +31,9 @@ you can see the scenario, who holds which seat, and take one — or watch.
 The host starts the game when every seat is filled.
 
 Your seat belongs to this browser. Close the tab and come back and it is
-still yours; the start menu lists **Your tables**, with a *Rejoin* button
+still yours; the start menu lists **Your tables**, with a _Rejoin_ button
 for each, and a `?join=` link to a table this browser knows brings the
-password along. *Leave table* gives the seat up for good and drops it from
+password along. _Leave table_ gives the seat up for good and drops it from
 the list.
 
 ## Getting a seat back
@@ -71,11 +71,11 @@ keyboard fights its ground battles in the same window, as it always has.
 
 ## When something goes wrong
 
-- *No table is waiting on that code.* The code or the password is wrong,
+- _No table is waiting on that code._ The code or the password is wrong,
   or the table was finished or abandoned. Twenty misses in ten minutes and
   the answer is the same either way for a while.
-- *Could not rejoin.* The table is gone; forget it from the start menu.
-- *The referee refused that order.* The board moved under you — somebody
+- _Could not rejoin._ The table is gone; forget it from the start menu.
+- _The referee refused that order._ The board moved under you — somebody
   else acted first — and the order no longer applies. Look again.
-- *Reconnecting.* The connection dropped; the client comes back on its own
+- _Reconnecting._ The connection dropped; the client comes back on its own
   and catches up on what it missed.
