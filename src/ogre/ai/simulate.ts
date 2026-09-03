@@ -13,7 +13,7 @@ import {
   setupActor,
 } from '../engine/types.js';
 import { overrunActor } from '../engine/overrun.js';
-import type { ScenarioDef } from '../scenarios/types.js';
+import { type ScenarioDef, mapOf } from '../scenarios/types.js';
 import { aiPlan, decisionKey } from './player.js';
 import { DEFAULT_WEIGHTS, type Weights } from './weights.js';
 
@@ -65,11 +65,11 @@ export const playGame = (
     const who = setupActor(s) ?? overrunActor(s) ?? activePlayer(s);
     const k = decisionKey(s);
     if (!plan || plan.key !== k) {
-      plan = { key: k, commands: aiPlan(s, def.map, who, weightsFor(who)) };
+      plan = { key: k, commands: aiPlan(s, mapOf(def, s), who, weightsFor(who)) };
     }
     const cmd = plan.commands.shift();
     if (!cmd) throw new Error(`the AI had nothing to say at ${k} in ${def.id}`);
-    const out = applyCommand(s, cmd, def.map, def.checkVictory);
+    const out = applyCommand(s, cmd, mapOf(def, s), def.checkVictory);
     commands++;
     if (!out.result.ok) {
       refused++;

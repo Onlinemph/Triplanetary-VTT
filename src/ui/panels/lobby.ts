@@ -56,6 +56,8 @@ export interface TableActions {
    * is the proof, so only a locked table offers it.
    */
   reclaim?(seat: PlayerId): void;
+  /** Change the setup from the lobby. The host's door, on tables that offer it. */
+  configure?(): void;
   start(): void;
   leave(): void;
   notify(text: string, tone?: Notice['tone']): void;
@@ -492,6 +494,9 @@ export const openLobby = (host: HTMLElement, act: TableActions, initial: TableVi
           el('h3', { class: 'sect-title', text: 'Scenario' }),
           el('span', { class: 'scenario-name', text: v.scenarioName }),
           table.fog ? el('span', { class: 'lobby-tag', text: 'fog of war' }) : null,
+          ...(table.brief ?? []).map((line) =>
+            el('p', { class: 'sel-hint lobby-brief', text: line }),
+          ),
         ),
         linkChip(v.link),
       ),
@@ -523,6 +528,16 @@ export const openLobby = (host: HTMLElement, act: TableActions, initial: TableVi
           'div',
           { class: 'row-inline lobby-actions' },
           button({ label: 'Leave table', variant: 'quiet', onClick: act.leave }),
+          // The host may change the setup until the table begins; a ground
+          // table's builder is the same one the scenario picker opens.
+          v.host && table.status === 'lobby' && table.kind === 'ogre' && act.configure
+            ? button({
+                label: 'Change the setup',
+                variant: 'quiet',
+                title: 'Forces, map and terms — everyone here sees the change',
+                onClick: () => act.configure?.(),
+              })
+            : null,
           v.seat === null
             ? el('span', { class: 'sel-hint', text: 'Watching — take a seat above to play.' })
             : null,

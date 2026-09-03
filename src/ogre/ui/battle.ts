@@ -69,7 +69,7 @@ import type { Command } from '../engine/commands.js';
 import type { BattleResult, OrderOfBattle } from '../../campaign/orders.js';
 import { type ReachHint, type RenderView, EMPTY_VIEW, MapRenderer } from '../render/renderer.js';
 import { GameSession } from '../net/session.js';
-import { LANDING, scenarioById } from '../scenarios/index.js';
+import { LANDING, mapOf, scenarioById } from '../scenarios/index.js';
 import { readBattleResult } from '../campaign/result.js';
 import { aiPlan, decisionKey } from '../ai/player.js';
 import { button, el, row, setChildren } from './dom.js';
@@ -100,6 +100,8 @@ export type OgreBattleSource =
       /** One of the ported scenarios' ids; an unknown id falls back to The Landing. */
       readonly id: string;
       readonly seed: number;
+      /** A custom battle's order of battle: the forces, the map and the terms. */
+      readonly order?: OrderOfBattle;
     };
 
 /**
@@ -183,17 +185,17 @@ export const createOgreBattle = (opts: OgreBattleOptions): OgreBattle => {
       : (scenarioById(battle.id) ?? LANDING);
   const withSetup = opts.setup ?? true;
   const online = opts.online ?? null;
-  const session = new GameSession(
-    online
-      ? (online.board.state as GameState)
-      : battle.kind === 'order'
-        ? scenario.build({ seed: battle.order.seed, order: battle.order, setup: withSetup })
-        : scenario.build({ seed: battle.seed, setup: withSetup }),
-    scenario.map,
-    {
-      victoryCheck: scenario.checkVictory,
-    },
-  );
+  const opening: GameState = online
+    ? (online.board.state as GameState)
+    : battle.kind === 'order'
+      ? scenario.build({ seed: battle.order.seed, order: battle.order, setup: withSetup })
+      : scenario.build({ seed: battle.seed, order: battle.order, setup: withSetup });
+  // The board this game is on: a custom battle names its own, so it is read
+  // off the opening position rather than assumed from the scenario.
+  const map = mapOf(scenario, opening);
+  const session = new GameSession(opening, map, {
+    victoryCheck: scenario.checkVictory,
+  });
   if (online) session.adoptSnapshot(online.board.state as GameState);
   else if (opts.resume && opts.resume.length > 0) session.replay(opts.resume);
   // Every snapshot the referee sends replaces the board; the session's
@@ -246,7 +248,7 @@ export const createOgreBattle = (opts: OgreBattleOptions): OgreBattle => {
 
   // The renderer is built once the canvas is in the document, so its first
   // measurement is of a real box rather than a detached one.
-  const renderer = new MapRenderer(canvas, scenario.map);
+  const renderer = new MapRenderer(canvas, map);
 
   // ---------------------------------------------------------------------
   // Derived reads
@@ -654,7 +656,7 @@ export const createOgreBattle = (opts: OgreBattleOptions): OgreBattle => {
    * result: a throwaway session on a copy of the board. Null means it passed.
    */
   const previewLocally = (cmd: Command): string | null => {
-    const probe = new GameSession(structuredClone(session.state), scenario.map, {
+    const probe = new GameSession(structuredClone(session.state), map, {
       victoryCheck: scenario.checkVictory,
     });
     const result = probe.dispatch(cmd);

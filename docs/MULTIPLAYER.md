@@ -317,6 +317,7 @@ supabase/migrations/0002_policies.sql  who may read what, and nobody may write
 supabase/migrations/0003_apply.sql     accepting an order, atomically
 supabase/migrations/0004_throttle.sql  a cost for guessing join codes
 supabase/migrations/0005_kinds.sql     two games at one table, and a password
+supabase/migrations/0006_configure.sql  changing a lobby's setup
 supabase/functions/game/index.ts       the referee on the wire
 src/net/supabase/protocol.ts           the contract between the two
 src/net/supabase/referee.ts            the rules loop, with no I/O in it
@@ -443,6 +444,30 @@ transaction. Only a locked table offers it, and never for a computer's seat.
 A quick table has no names to prove, since everyone at it knows the one
 password; its answer is the clock — a seat nobody has been heard from in a
 while is open again, and sitting there is the reclaim.
+
+### Building a battle, and changing one from the lobby
+
+The ground game's `custom` scenario builds from an `OrderOfBattle` — the
+shape a campaign hands a battle — so a table designed in the battle builder
+travels the wire as a campaign transfer does: `CreateRequest.order` is stored
+with the seed, every joiner rebuilds the same board from it, and the referee
+needs nothing new. The order names the map (the stock cratered or green
+board, or one generated from a seed and a size), both forces in the engine's
+own vocabulary, and the terms (command post, breakthrough or attrition; a
+turn limit; the cratered map's forward ceiling). `scenarioData.order` is the
+only copy of those terms, which is what lets a board name its own map:
+`mapOf(def, state)` reads it, and nothing else in the engine cares where a
+map came from.
+
+A host may change all of that until the table begins. `configure` takes the
+same choices `create` did and `reconfigure_game` rewrites the scenario, the
+secrets and the roster in one transaction, lobby only, host only. The roster
+is rebuilt from the new board's seats: whoever held a seat keeps the one at
+the same ordinal, a player whose seat went to the computer is stood up, and a
+host whose seat did is moved to the first open one — or the change is refused
+if there is none. The referee also sends every table a `title` and a `brief`
+(the map, the forces, the terms) so a lobby can describe a setup it has no
+engine to read.
 
 ### The attacks it is built against
 

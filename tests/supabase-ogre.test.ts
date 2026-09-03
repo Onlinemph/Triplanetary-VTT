@@ -11,6 +11,7 @@
 
 import { describe, expect, it } from 'vitest';
 import type { PlayerId } from '../src/engine/index.js';
+import type { AnyState, StateSummary } from '../src/net/kinds.js';
 import { OGRE_RULES, actorOf, asOgreState } from '../src/net/ogreRules.js';
 import { rulesFor } from '../src/net/rulesAll.js';
 import type { LoggedCommand } from '../src/net/supabase/protocol.js';
@@ -26,6 +27,7 @@ import {
   takeSeat,
   verifyPassword,
   viewFor,
+  reconfigure,
 } from '../src/net/supabase/referee.js';
 
 const rules = OGRE_RULES;
@@ -187,5 +189,93 @@ describe('the table password', () => {
     const out = playComputerSeats(g, dice(5), undefined, 60, rules);
     const log: LoggedCommand[] = out.logged;
     expect(log.every((e) => typeof (e.cmd as { by: string }).by === 'string')).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Changing the setup from the lobby
+// ---------------------------------------------------------------------------
+
+describe('changing a ground table’s setup from its lobby', () => {
+  const lobby = (opts: { computer?: readonly number[] } = {}): StoredGame => {
+    const g = table('mark-iii-attack', { ...opts, status: 'lobby' });
+    // The host holds the first human seat; a friend has taken the second.
+    const seats = g.seats.map((s, i) =>
+      s.kind === 'computer'
+        ? s
+        : {
+            ...s,
+            kind: 'human' as const,
+            userId: i === 0 ? 'user-0' : 'user-1',
+            name: i === 0 ? 'Host' : 'Friend',
+            lastSeen: 5,
+          },
+    );
+    return { ...g, seats };
+  };
+  const custom = (): { opening: AnyState; summary: StateSummary } => {
+    const opening = rules.seal(rules.build('custom', { seed: 3 }));
+    return { opening, summary: rules.summary(opening) };
+  };
+
+  it('rebuilds the roster from the new board and keeps whoever held each ordinal', () => {
+    const g = lobby();
+    const { opening, summary } = custom();
+    const out = reconfigure(g, 'custom', opening, summary, [], 99);
+    expect(out.ok).toBe(true);
+    if (!out.ok) return;
+    expect(out.game.scenarioId).toBe('custom');
+    expect(out.game.state).toBe(opening);
+    expect(out.game.seats.map((s) => s.seat)).toEqual(summary.playerOrder);
+    expect(out.game.seats.map((s) => [s.kind, s.userId, s.name])).toEqual([
+      ['human', 'user-0', 'Host'],
+      ['human', 'user-1', 'Friend'],
+    ]);
+    // The factions are the new board's, not the old one's.
+    expect(out.game.seats.map((s) => s.faction)).toEqual(
+      summary.playerOrder.map((id) => summary.players[id]?.faction),
+    );
+  });
+
+  it('stands up a player whose seat went to the computer, and reseats the host if it was theirs', () => {
+    const g = lobby();
+    const { opening, summary } = custom();
+    const friendOut = reconfigure(g, 'custom', opening, summary, [1], 99);
+    expect(friendOut.ok && friendOut.game.seats.map((s) => [s.kind, s.userId])).toEqual([
+      ['human', 'user-0'],
+      ['computer', null],
+    ]);
+    // With the friend gone, a host whose seat went to the computer takes the other.
+    const alone: StoredGame = {
+      ...g,
+      seats: g.seats.map((s, i) =>
+        i === 1 ? { ...s, kind: 'open', userId: null, lastSeen: null } : s,
+      ),
+    };
+    const hostMoved = reconfigure(alone, 'custom', opening, summary, [0], 99);
+    expect(hostMoved.ok && hostMoved.game.seats.map((s) => [s.kind, s.userId, s.name])).toEqual([
+      ['computer', null, summary.players[summary.playerOrder[0]!]?.name],
+      ['human', 'user-0', 'Host'],
+    ]);
+    // With the friend still there, the host has nowhere to go.
+    expect(reconfigure(g, 'custom', opening, summary, [0], 99).ok).toBe(false);
+    const nowhere = reconfigure(g, 'custom', opening, summary, [0, 1], 99);
+    expect(nowhere.ok).toBe(false);
+  });
+
+  it('refuses once the table has begun', () => {
+    const g = { ...lobby(), status: 'playing' as const };
+    const { opening, summary } = custom();
+    expect(reconfigure(g, 'custom', opening, summary, [], 99).ok).toBe(false);
+  });
+
+  it('describes a custom table for the lobby: title and brief', () => {
+    const { opening, summary } = custom();
+    expect(summary.title).toBe('Custom battle');
+    expect(summary.brief[0]).toMatch(/^Map: /);
+    expect(summary.brief.some((l) => /attacking/.test(l))).toBe(true);
+    const info = tableInfo({ ...table('custom'), state: opening }, 'user-0', 0, rules);
+    expect(info.title).toBe('Custom battle');
+    expect(info.brief).toEqual(summary.brief);
   });
 });

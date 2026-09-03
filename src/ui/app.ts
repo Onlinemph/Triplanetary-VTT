@@ -75,6 +75,7 @@ import { createLogPanel } from './panels/logpanel.js';
 import { openHelpDrawer } from './panels/help.js';
 import { type PickerResult, openScenarioPicker } from './panels/scenarioPicker.js';
 import { mountAllGames, openOgrePicker, openStartMenu } from './panels/startMenu.js';
+import { type BuilderCatalogue, openBattleBuilder } from './panels/battleBuilder.js';
 import { createTopBar } from './panels/topbar.js';
 import {
   type Actions,
@@ -154,6 +155,7 @@ export const createApp = (deps: AppDeps): App => {
   const tableActions: TableActions = {
     sit: (seat) => void sitAt(seat),
     reclaim: (seat) => void reclaimSeat(seat),
+    configure: () => void configureTable(),
     start: () => void startTable(),
     leave: () => leaveTable(true),
     notify: (text, tone) => act.notify(text, tone),
@@ -235,7 +237,7 @@ export const createApp = (deps: AppDeps): App => {
   };
 
   const scenarioName = (): string =>
-    deps.scenarios.find((s) => s.id === scenarioId)?.name ?? 'Triplanetary';
+    table?.table?.title ?? deps.scenarios.find((s) => s.id === scenarioId)?.name ?? 'Triplanetary';
 
   // --- Selection helpers ---------------------------------------------------
 
@@ -1616,7 +1618,13 @@ export const createApp = (deps: AppDeps): App => {
   interface BattleSave {
     readonly v: 1;
     readonly source:
-      | { readonly kind: 'scenario'; readonly id: string; readonly seed: number }
+      | {
+          readonly kind: 'scenario';
+          readonly id: string;
+          readonly seed: number;
+          /** A custom battle's order: the forces, the map and the terms. */
+          readonly order?: OrderOfBattle;
+        }
       | { readonly kind: 'order'; readonly order: OrderOfBattle };
     readonly ai: readonly string[];
     readonly setup: boolean;
@@ -1811,6 +1819,7 @@ export const createApp = (deps: AppDeps): App => {
     battleSeed: number,
     ai: readonly string[] = [],
     resume: BattleSave | null = null,
+    order?: OrderOfBattle,
   ): Promise<void> => {
     if (groundBattle) return;
     const make = await import('../ogre/ui/battle.js').catch(() => null);
@@ -1819,7 +1828,12 @@ export const createApp = (deps: AppDeps): App => {
       act.newGame();
       return;
     }
-    const source = { kind: 'scenario', id, seed: battleSeed } as const;
+    const source = {
+      kind: 'scenario',
+      id,
+      seed: battleSeed,
+      ...(order ? { order } : {}),
+    } as const;
     const setup = resume ? resume.setup : true;
     groundBattle = make.createOgreBattle({
       host: overlays,
@@ -1838,7 +1852,7 @@ export const createApp = (deps: AppDeps): App => {
   /** Pick a saved battle back up, whatever it was. */
   const resumeBattle = (save: BattleSave): void => {
     if (save.source.kind === 'scenario') {
-      void openOgreScenario(save.source.id, save.source.seed, save.ai, save);
+      void openOgreScenario(save.source.id, save.source.seed, save.ai, save, save.source.order);
       return;
     }
     // An Orbital Drop assault resumes with the war it belongs to; a campaign
@@ -1997,6 +2011,7 @@ export const createApp = (deps: AppDeps): App => {
         const ai = computer !== null && ids[computer] !== undefined ? [ids[computer]!] : [];
         void openOgreScenario(id, battleSeed, ai);
       },
+      onCustom: () => void openCustomBuilder(),
       // A ground table needs the referee: it keeps the board and plays the
       // computer's seat, so a quick table cannot hold one.
       ...(online.available && online.modes.includes('refereed')
@@ -2004,8 +2019,158 @@ export const createApp = (deps: AppDeps): App => {
             onHost: (id: string, battleSeed: number, computer: number | null) => {
               openHostDialog(overlays, {
                 modes: ['refereed'],
-                onHost: (_mode, password) => void hostOgreTable(id, battleSeed, computer, password),
+                onHost: (_mode, password) =>
+                  void hostOgreTable(id, battleSeed, computer, password, undefined),
                 onCancel: () => void openOgreScenarios(),
+              });
+            },
+          }
+        : {}),
+    });
+  };
+
+  /**
+   * The builder's catalogue: the ground game's units, boards and presets,
+   * loaded on demand the way the battle view is. Cached, because the engine
+   * does not change between openings.
+   */
+  let builderCatalogue: BuilderCatalogue | null = null;
+  const loadCatalogue = async (): Promise<BuilderCatalogue | null> => {
+    if (builderCatalogue) return builderCatalogue;
+    const loaded = await Promise.all([
+      import('../ogre/scenarios/index.js'),
+      import('../ogre/engine/units.js'),
+      import('../ogre/engine/ogres.js'),
+      import('../ogre/engine/map.js'),
+      import('../ogre/engine/hex.js'),
+    ]).catch(() => null);
+    if (loaded === null) return null;
+    const [scen, units, ogres, maps, hexes] = loaded;
+    const unit = (id: string): { id: string; name: string; armorUnits: number } => {
+      const cls = (units.UNIT_CLASSES as Record<string, { name: string; armorUnits: number }>)[id]!;
+      return { id, name: cls.name, armorUnits: cls.armorUnits };
+    };
+    const custom = (
+      name: string,
+      blurb: string,
+      order: Omit<OrderOfBattle, 'battleId' | 'scenarioId' | 'seed'>,
+    ): { name: string; blurb: string; order: OrderOfBattle } => ({
+      name,
+      blurb,
+      order: { battleId: `preset-${name}`, seed: 0, scenarioId: scen.CUSTOM_ID, ...order },
+    });
+    builderCatalogue = {
+      ogres: Object.values(ogres.OGRE_TYPES).map((t) => ({
+        id: t.id,
+        name: t.name,
+        armorUnits: t.armorUnits,
+      })),
+      armour: units.SELECTABLE_CLASSES.map(unit),
+      infantry: Object.values(units.UNIT_CLASSES)
+        .filter((c) => c.kind === 'infantry')
+        .map((c) => unit(c.id)),
+      victories: (['command-post', 'breakthrough', 'attrition'] as const).map((id) => ({
+        id,
+        name: scen.VICTORY_NAMES[id],
+        blurb: scen.VICTORY_BLURBS[id],
+      })),
+      limits: scen.MAP_LIMITS,
+      presets: [
+        custom('Combined arms', 'A cybertank with an escort against a mixed defence.', {
+          sides: scen.DEFAULT_CUSTOM.sides,
+          terms: scen.DEFAULT_CUSTOM.terms,
+        }),
+        custom(
+          'Mark III attack',
+          'The classic: one Ogre against twelve armour units and twenty squads.',
+          {
+            sides: [
+              { player: 'attacker', faction: 'Paneuropean Federation', forces: { MK3: 1 } },
+              {
+                player: 'defender',
+                faction: 'North American Combine',
+                forces: { HVY: 4, MSL: 3, GEV: 3, HWZ: 1, INF: 20 },
+              },
+            ],
+            terms: { map: { kind: 'ogre' }, victory: 'command-post', centralLimit: 20 },
+          },
+        ),
+        custom('Cybertank duel', 'A Mark V against a Mark III with a screen of its own.', {
+          sides: [
+            { player: 'attacker', faction: 'Paneuropean Federation', forces: { MK5: 1 } },
+            {
+              player: 'defender',
+              faction: 'North American Combine',
+              forces: { MK3: 1, HVY: 2, GEV: 2, INF: 6 },
+            },
+          ],
+          terms: { map: { kind: 'ogre' }, victory: 'command-post' },
+        }),
+        custom('River crossing', 'Break through settled country and off the far edge.', {
+          sides: [
+            {
+              player: 'attacker',
+              faction: 'Paneuropean Federation',
+              forces: { MK3: 1, HVY: 2, GEV: 4, INF: 6 },
+            },
+            {
+              player: 'defender',
+              faction: 'North American Combine',
+              forces: { HVY: 3, MSL: 2, GEV: 2, HWZ: 1, INF: 12 },
+            },
+          ],
+          terms: { map: { kind: 'gev' }, victory: 'breakthrough', turnLimit: 12 },
+        }),
+      ],
+      preview: (spec) => {
+        const map = scen.customMap(spec);
+        return {
+          name: map.name,
+          cols: map.cols,
+          rows: map.rows,
+          cells: maps
+            .allHexes(map)
+            .map((h) => ({ ...hexes.toOffset(h), terrain: maps.terrainAt(map, h) }))
+            .filter((c) => c.terrain !== 'clear'),
+          lines: map.areaLines ?? null,
+        };
+      },
+      value: (forces) => scen.forceValue(forces),
+    };
+    return builderCatalogue;
+  };
+
+  /** The custom battle door: build an order, then fight it here or host it. */
+  let builderOverlay: Overlay | null = null;
+  const openCustomBuilder = async (initial?: OrderOfBattle): Promise<void> => {
+    if (builderOverlay) return;
+    const catalogue = await loadCatalogue();
+    if (catalogue === null) {
+      act.notify('The battle builder could not be loaded.', 'bad');
+      act.newGame();
+      return;
+    }
+    const seats = (computer: number | null): readonly string[] =>
+      computer === null ? [] : [computer === 0 ? 'attacker' : 'defender'];
+    builderOverlay = openBattleBuilder(overlays, {
+      catalogue,
+      ...(initial ? { initial } : {}),
+      dismissible: session !== null || table !== null,
+      newSeed: () => deps.randomSeed(),
+      onClose: () => {
+        builderOverlay = null;
+      },
+      onBack: () => void openOgreScenarios(),
+      onStart: (order, computer) =>
+        void openOgreScenario(order.scenarioId, order.seed, seats(computer), null, order),
+      ...(online.available && online.modes.includes('refereed')
+        ? {
+            onHost: (order: OrderOfBattle, computer: number | null) => {
+              openHostDialog(overlays, {
+                modes: ['refereed'],
+                onHost: (_mode, password) =>
+                  void hostOgreTable(order.scenarioId, order.seed, computer, password, order),
+                onCancel: () => void openCustomBuilder(order),
               });
             },
           }
@@ -2019,6 +2184,7 @@ export const createApp = (deps: AppDeps): App => {
     battleSeed: number,
     computer: number | null,
     password: string,
+    order: OrderOfBattle | undefined,
   ): Promise<void> => {
     if (!online.available) return;
     try {
@@ -2029,6 +2195,7 @@ export const createApp = (deps: AppDeps): App => {
             scenarioId: id,
             seed: battleSeed,
             options: {},
+            ...(order ? { order } : {}),
             computerSeats: computer === null ? [] : [computer],
             mode: 'refereed',
             password,
@@ -2038,7 +2205,8 @@ export const createApp = (deps: AppDeps): App => {
       );
     } catch (err) {
       act.notify(`Could not open a table: ${reasonOf(err)}`, 'bad');
-      void openOgreScenarios();
+      if (order) void openCustomBuilder(order);
+      else void openOgreScenarios();
     }
   };
 
@@ -2349,6 +2517,55 @@ export const createApp = (deps: AppDeps): App => {
       act.notify(reasonOf(err), 'bad');
     }
     refreshTable();
+  };
+
+  /**
+   * The host changes a ground table's setup from the lobby: the builder opens
+   * on the table's current order (or a preset, for a printed scenario), and
+   * what it produces goes to the referee, which rebuilds the board for
+   * everyone. The computer keeps the seats it had.
+   */
+  const configureTable = async (): Promise<void> => {
+    const t = table;
+    const info = t?.table;
+    if (!t || !info || !t.configure || builderOverlay) return;
+    const catalogue = await loadCatalogue();
+    if (catalogue === null) {
+      act.notify('The battle builder could not be loaded.', 'bad');
+      return;
+    }
+    const board = t.board?.state as { scenarioData?: Record<string, unknown> } | null | undefined;
+    const current = board?.scenarioData?.['order'] as OrderOfBattle | undefined;
+    const computers = info.seats.filter((s) => s.kind === 'computer').map((s) => s.ordinal);
+    builderOverlay = openBattleBuilder(overlays, {
+      catalogue,
+      ...(current && current.scenarioId === 'custom' ? { initial: current } : {}),
+      dismissible: true,
+      newSeed: () => deps.randomSeed(),
+      onClose: () => {
+        builderOverlay = null;
+      },
+      onBack: () => undefined,
+      onApply: (order) => {
+        void (async () => {
+          try {
+            await t.configure?.({
+              kind: 'ogre',
+              scenarioId: order.scenarioId,
+              seed: order.seed,
+              options: {},
+              order,
+              computerSeats: computers,
+              mode: 'refereed',
+            });
+            act.notify('The setup is changed. Everyone in the lobby sees it.', 'good');
+          } catch (err) {
+            act.notify(reasonOf(err), 'bad');
+          }
+          refreshTable();
+        })();
+      },
+    });
   };
 
   const reclaimSeat = async (seat: PlayerId): Promise<void> => {

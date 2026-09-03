@@ -42,6 +42,16 @@ export interface ScenarioDef {
   /** Victory conditions, in the order the rulebook lists them. */
   readonly victoryConditions: readonly string[];
   readonly map: GameMap;
+  /**
+   * The board a particular game of this scenario is played on, when it is
+   * not always `map`: a custom battle names its own, generated from the
+   * order in `scenarioData`. Read it through `mapOf`, never `map` directly.
+   */
+  mapFor?(state: GameState): GameMap;
   build(opts: ScenarioBuildOptions): GameState;
   checkVictory(state: GameState): VictoryState | null;
 }
+
+/** The board this game is on: the scenario's own, or the one it built for this game. */
+export const mapOf = (def: ScenarioDef, state: GameState): GameMap =>
+  def.mapFor?.(state) ?? def.map;

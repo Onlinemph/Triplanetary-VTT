@@ -336,7 +336,7 @@ export const syncResponse = (
   // caller who reached this table by holding its id is not a member, so they do
   // not get the invitation: an id that leaks into a screenshot, a bug report or
   // a console log would otherwise be a standing offer of a chair.
-  const full = tableInfo(game, userId, now);
+  const full = tableInfo(game, userId, now, rules);
   const table = seat === null ? { ...full, code: '' } : full;
 
   if (game.fog || open === null) {

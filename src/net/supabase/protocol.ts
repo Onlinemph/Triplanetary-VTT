@@ -111,6 +111,9 @@ export interface TableInfo {
   /** True when the table has a password: the code alone does not seat you. */
   readonly locked: boolean;
   readonly scenarioId: string;
+  /** The scenario's name, and lines describing the setup, from the referee. */
+  readonly title?: string;
+  readonly brief?: readonly string[];
   readonly fog: boolean;
   readonly status: GameStatus;
   readonly turn: number;
@@ -185,6 +188,24 @@ export interface StartRequest {
   readonly gameId: string;
 }
 
+/**
+ * Change a table's setup from its lobby: the same choices `create` took,
+ * applied to a table that has not begun. The board is rebuilt, the roster
+ * with it — whoever held a seat keeps the one at the same ordinal — and
+ * everyone in the lobby sees the new terms. Host only.
+ */
+export interface ConfigureRequest {
+  readonly action: 'configure';
+  readonly v: number;
+  readonly gameId: string;
+  readonly scenarioId?: string;
+  readonly seed?: number;
+  readonly options?: Record<string, boolean>;
+  readonly fleets?: Readonly<Record<string, readonly string[]>>;
+  readonly order?: unknown;
+  readonly computerSeats?: readonly number[];
+}
+
 /** Give an order. The only call that can change the board. */
 export interface CommandRequest {
   readonly action: 'command';
@@ -212,7 +233,13 @@ export interface SyncRequest {
 }
 
 export type PlayRequest =
-  CreateRequest | JoinRequest | LeaveRequest | StartRequest | CommandRequest | SyncRequest;
+  | CreateRequest
+  | JoinRequest
+  | LeaveRequest
+  | StartRequest
+  | ConfigureRequest
+  | CommandRequest
+  | SyncRequest;
 
 // ---------------------------------------------------------------------------
 // Responses
@@ -291,6 +318,7 @@ export const parsePlayRequest = (value: unknown): PlayRequest | null => {
     case 'leave':
     case 'start':
     case 'sync':
+    case 'configure':
       return str('gameId') ? (value as unknown as PlayRequest) : null;
     case 'command':
       return str('gameId') &&

@@ -290,6 +290,16 @@ const adopt = (client: TableClient, s: Sinks, opened: boolean): TablePort => {
     reclaim: async (seat) => {
       await client.join(codeOf(), seat, { reclaim: true });
     },
+    configure: async (opts) => {
+      await client.configure({
+        scenarioId: opts.scenarioId,
+        seed: opts.seed,
+        options: optionRecord(opts.options),
+        ...(opts.fleets ? { fleets: opts.fleets } : {}),
+        ...(opts.order ? { order: opts.order } : {}),
+        computerSeats: opts.computerSeats,
+      });
+    },
     send: (cmd) => client.send(cmd as AnyCommand),
     leave: () => client.leave(),
     close: () => client.close(),

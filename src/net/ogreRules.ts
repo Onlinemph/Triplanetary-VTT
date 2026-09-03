@@ -16,7 +16,8 @@ import { type GameState as OgreState, activePlayer, setupActor } from '../ogre/e
 import type { Command as OgreCommand } from '../ogre/engine/commands.js';
 import { applyCommand } from '../ogre/engine/reducer.js';
 import { overrunActor } from '../ogre/engine/overrun.js';
-import { scenarioById } from '../ogre/scenarios/index.js';
+import { CUSTOM_ID, describeCustom, mapOf, scenarioById } from '../ogre/scenarios/index.js';
+import { orderOf } from '../campaign/orders.js';
 import { aiPlan } from '../ogre/ai/player.js';
 import type { AnyState, KindRules } from './kinds.js';
 
@@ -43,7 +44,7 @@ export const ogreRules = (): KindRules => ({
     const out = applyCommand(
       { ...s, rng: { seed: die >>> 0 } },
       cmd as OgreCommand,
-      def.map,
+      mapOf(def, s),
       def.checkVictory,
     );
     return out.result.ok
@@ -61,7 +62,7 @@ export const ogreRules = (): KindRules => ({
     const who = actorOf(s);
     if (!computers.has(who)) return [];
     const def = scenarioById(s.scenarioId);
-    return def ? aiPlan(s, def.map, who) : [];
+    return def ? aiPlan(s, mapOf(def, s), who) : [];
   },
   summary: (state) => {
     const s = state as OgreState;
@@ -70,7 +71,11 @@ export const ogreRules = (): KindRules => ({
       const p = s.players[id];
       players[id] = { name: p?.name ?? id, faction: p?.faction ?? id };
     }
+    const def = scenarioById(s.scenarioId);
+    const order = orderOf(s.scenarioData);
     return {
+      title: def?.name ?? s.scenarioId,
+      brief: s.scenarioId === CUSTOM_ID && order ? describeCustom(order) : def ? [def.blurb] : [],
       turn: s.turn,
       finished: s.victory !== null,
       fog: false,

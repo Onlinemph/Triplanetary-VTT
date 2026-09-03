@@ -202,6 +202,12 @@ export interface TablePort {
    * is the proof. Only a locked table has a password to check.
    */
   reclaim(seat: PlayerId): Promise<void>;
+  /**
+   * Change the setup while the table is in its lobby: the host's door only,
+   * and only a refereed table has it. The referee rebuilds the board and the
+   * roster, and everyone at the table sees the new terms.
+   */
+  configure?(opts: HostOptions): Promise<void>;
   /** Give an order. False when the referee refused it. */
   send(cmd: Command | object): Promise<boolean>;
   /** Vacate the seat and stop listening. */
