@@ -32,6 +32,7 @@
  *    What matters is that the client returns with the rows it missed.
  */
 
+import type { AnyCommand, AnyState } from '../src/net/kinds.js';
 import { describe, expect, it, vi } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import {
@@ -109,7 +110,11 @@ const DIE_TWO = 0x2545f491;
 const refereeBoard = (log: readonly LoggedCommand[]): GameState => {
   let state = gunfight();
   for (const entry of log) {
-    const out = applyCommand({ ...state, rng: { seed: entry.die >>> 0 } }, entry.cmd, DEFAULT_MAP);
+    const out = applyCommand(
+      { ...state, rng: { seed: entry.die >>> 0 } },
+      entry.cmd as Command,
+      DEFAULT_MAP,
+    );
     if (!out.result.ok) throw new Error(`the yardstick will not apply: ${out.result.reason}`);
     state = out.state;
   }
@@ -131,6 +136,8 @@ const commandRow = (entry: LoggedCommand): Record<string, unknown> => ({
 const table = (over: Partial<TableInfo> = {}): TableInfo => ({
   id: 'game-1',
   code: 'ABCDEF',
+  kind: 'tri',
+  locked: false,
   scenarioId: 'client-gunfight',
   fog: false,
   status: 'playing',
@@ -283,7 +290,7 @@ interface Rig {
   readonly client: TableClient;
   /** The referee's log. Push to it and the next sync will hand it over. */
   readonly log: LoggedCommand[];
-  readonly rejections: { reason: string; cmd?: Command }[];
+  readonly rejections: { reason: string; cmd?: AnyCommand }[];
   readonly connections: TableConnection[];
   readonly seats: (PlayerId | null)[];
 }
@@ -337,7 +344,7 @@ const rig = (referee?: (log: LoggedCommand[]) => Referee): Rig => {
   const supa = new FakeSupabase();
   supa.answer = (referee ?? openReferee)(log);
 
-  const rejections: { reason: string; cmd?: Command }[] = [];
+  const rejections: { reason: string; cmd?: AnyCommand }[] = [];
   const connections: TableConnection[] = [];
   const seats: (PlayerId | null)[] = [];
 
@@ -629,5 +636,106 @@ describe('when the channel drops', () => {
     expect(supa.channels).toHaveLength(1);
     expect(client.connection).toBe('closed');
     vi.useRealTimers();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A ground table
+// ---------------------------------------------------------------------------
+
+describe('a ground table', () => {
+  it('fetches the rules the referee names, fills the board, and keeps the password', async () => {
+    const { OGRE_RULES, actorOf, asOgreState } = await import('../src/net/ogreRules.js');
+    const { triRules } = await import('../src/net/kinds.js');
+    const initial = OGRE_RULES.seal(OGRE_RULES.build('mark-iii-attack', { seed: 7 }));
+    const summary = OGRE_RULES.summary(initial);
+    // Whoever the board says is deploying: in this scenario the defence sets up first.
+    const first = actorOf(asOgreState(initial));
+    const info = table({
+      kind: 'ogre',
+      locked: true,
+      scenarioId: 'mark-iii-attack',
+      status: 'playing',
+      seats: summary.playerOrder.map((seat, ordinal) => ({
+        seat,
+        ordinal,
+        faction: summary.players[seat]?.faction ?? seat,
+        name: summary.players[seat]?.name ?? seat,
+        kind: 'human',
+        present: true,
+        mine: seat === first,
+      })),
+    });
+    const log: LoggedCommand[] = [];
+    const supa = new FakeSupabase();
+    supa.answer = (req) => {
+      switch (req.action) {
+        case 'sync':
+          return {
+            ok: true,
+            table: info,
+            seat: first,
+            initial,
+            log: [...log],
+            index: log.length,
+          };
+        case 'command':
+          return { ok: true, index: log.length, seq: req.seq };
+        default:
+          return { ok: true, table: info, seat: first };
+      }
+    };
+
+    const adopted: AnyState[] = [];
+    const asked: string[] = [];
+    const client = new TableClient(
+      supa,
+      { adoptSnapshot: (state) => adopted.push(state) },
+      {
+        rules: (kind) => {
+          asked.push(kind);
+          return kind === 'ogre' ? OGRE_RULES : triRules();
+        },
+      },
+    );
+    await client.join('FGKMNP', undefined, { password: 'rosebud' });
+
+    // The referee said which game; the rules came from the source, once.
+    expect(asked).toEqual(['ogre']);
+    expect(client.table?.kind).toBe('ogre');
+    expect(supa.sent[0]).toMatchObject({ action: 'join', code: 'FGKMNP', password: 'rosebud' });
+    // The board that arrived is the ground game's, not the fleet game's.
+    const board = adopted.at(-1);
+    expect(board !== undefined && 'units' in board).toBe(true);
+
+    // A logged order lands where the referee landed, through those rules.
+    const cmd = { type: 'finishSetup', by: first } as AnyCommand;
+    const entry: LoggedCommand = { idx: 1, cmd, die: 4242 };
+    log.push(entry);
+    supa.current.deliver(TABLES.commands, 'INSERT', commandRow(entry));
+    await settle();
+    const expected = OGRE_RULES.apply(initial, cmd, 4242);
+    expect(expected.ok ? 'ok' : expected.reason).toBe('ok');
+    if (expected.ok) expect(adopted.at(-1)).toEqual(OGRE_RULES.seal(expected.state));
+    expect(client.index).toBe(1);
+
+    // Taking a seat back is a join with a claim on it, and the password the
+    // client was let in with goes along without being asked for again.
+    await client.join('FGKMNP', first, { reclaim: true });
+    expect(supa.sent.filter((r) => r.action === 'join').at(-1)).toMatchObject({
+      action: 'join',
+      seat: first,
+      password: 'rosebud',
+      reclaim: true,
+    });
+    client.close();
+  });
+
+  it('refuses a table of a game it has no rules for', async () => {
+    const info = table({ kind: 'ogre' });
+    const supa = new FakeSupabase();
+    supa.answer = () => ({ ok: true, table: info, seat: 'a' });
+    const client = new TableClient(supa, new GameSession(gunfight(), DEFAULT_MAP));
+    await expect(client.join('FGKMNP')).rejects.toThrow(/no rules for an? "ogre" table/);
   });
 });

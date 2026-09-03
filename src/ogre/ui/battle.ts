@@ -102,10 +102,30 @@ export type OgreBattleSource =
       readonly seed: number;
     };
 
+/**
+ * A battle fought at a refereed table. The board is the referee's: the view
+ * adopts every snapshot it sends, and an order leaves for the referee instead
+ * of the local session. The local engine still answers every *question*
+ * (where a unit may go, what a shot is worth), because the referee runs the
+ * same engine and the answer is the same.
+ */
+export interface OnlineBattle {
+  /** The seat this browser holds; null when watching. */
+  readonly seat: PlayerId | null;
+  readonly board: {
+    readonly state: unknown;
+    subscribe(fn: () => void): () => void;
+  };
+  /** Give an order to the referee. Resolves false when it was refused. */
+  send(cmd: Command): Promise<boolean>;
+}
+
 export interface OgreBattleOptions {
   /** Where to mount. The view covers it while the battle is open. */
   readonly host: HTMLElement;
   readonly battle: OgreBattleSource;
+  /** Present when the battle is fought at a refereed table. */
+  readonly online?: OnlineBattle;
   /** Seats the computer plays, by player id. */
   readonly ai?: readonly PlayerId[];
   /**
@@ -162,16 +182,25 @@ export const createOgreBattle = (opts: OgreBattleOptions): OgreBattle => {
       ? (scenarioById(battle.order.scenarioId) ?? LANDING)
       : (scenarioById(battle.id) ?? LANDING);
   const withSetup = opts.setup ?? true;
+  const online = opts.online ?? null;
   const session = new GameSession(
-    battle.kind === 'order'
-      ? scenario.build({ seed: battle.order.seed, order: battle.order, setup: withSetup })
-      : scenario.build({ seed: battle.seed, setup: withSetup }),
+    online
+      ? (online.board.state as GameState)
+      : battle.kind === 'order'
+        ? scenario.build({ seed: battle.order.seed, order: battle.order, setup: withSetup })
+        : scenario.build({ seed: battle.seed, setup: withSetup }),
     scenario.map,
     {
       victoryCheck: scenario.checkVictory,
     },
   );
-  if (opts.resume && opts.resume.length > 0) session.replay(opts.resume);
+  if (online) session.adoptSnapshot(online.board.state as GameState);
+  else if (opts.resume && opts.resume.length > 0) session.replay(opts.resume);
+  // Every snapshot the referee sends replaces the board; the session's
+  // subscribers (below) redraw from it.
+  const boardUnsub = online
+    ? online.board.subscribe(() => session.adoptSnapshot(online.board.state as GameState))
+    : () => {};
 
   const aiSeats = new Set<PlayerId>(opts.ai ?? []);
 
@@ -235,7 +264,14 @@ export const createOgreBattle = (opts: OgreBattleOptions): OgreBattle => {
     setupActor(session.state) ?? overrunActor(session.state) ?? activePlayer(session.state);
 
   /** The computer holds this seat; the panels watch rather than offer. */
-  const computerTurn = (): boolean => aiSeats.has(me());
+  /** Whether the decision at hand is this browser's to make. */
+  const mine = (): boolean => (online ? online.seat === me() : true);
+  /**
+   * True when the seat deciding is not this player's: the computer's at a
+   * local table, or anyone else's at an online one. The board is then read
+   * only — orders are refused before they are formed.
+   */
+  const computerTurn = (): boolean => aiSeats.has(me()) || !mine();
 
   const selectedUnit = (): Unit | null => {
     if (!session || !ui.selected) return null;
@@ -593,10 +629,36 @@ export const createOgreBattle = (opts: OgreBattleOptions): OgreBattle => {
   };
 
   const dispatch = (cmd: Command): boolean => {
+    if (online) {
+      // The referee decides; its answer arrives as a snapshot or a refusal.
+      // Only a plainly illegal order is caught here, so a slip is explained
+      // at once rather than after a round trip.
+      const check = previewLocally(cmd);
+      if (check !== null) {
+        say(check, true);
+        return false;
+      }
+      void online.send(cmd).then((ok) => {
+        if (!ok && !destroyed) say('The referee refused that order.', true);
+      });
+      return true;
+    }
     const result = session.dispatch(cmd);
     if (!result.ok) say(result.reason, true);
     draw();
     return result.ok;
+  };
+
+  /**
+   * Ask the local engine whether an order is legal without keeping the
+   * result: a throwaway session on a copy of the board. Null means it passed.
+   */
+  const previewLocally = (cmd: Command): string | null => {
+    const probe = new GameSession(structuredClone(session.state), scenario.map, {
+      victoryCheck: scenario.checkVictory,
+    });
+    const result = probe.dispatch(cmd);
+    return result.ok ? null : result.reason;
   };
 
   // ---------------------------------------------------------------------
@@ -692,7 +754,8 @@ export const createOgreBattle = (opts: OgreBattleOptions): OgreBattle => {
    */
   const scheduleAi = (): void => {
     window.clearTimeout(aiTimer);
-    if (destroyed || session.state.victory || !computerTurn()) return;
+    // At a refereed table the referee plays the computer's seats.
+    if (online || destroyed || session.state.victory || !computerTurn()) return;
     // Deployment is thirty small decisions; the turns are the ones worth watching.
     aiTimer = window.setTimeout(stepAi, session.state.setup ? 60 : 240);
   };
@@ -808,7 +871,7 @@ export const createOgreBattle = (opts: OgreBattleOptions): OgreBattle => {
         el(
           'span',
           { class: 'player', style: `--accent:${player.color}` },
-          `${player.name}${aiSeats.has(actor) ? ' · computer' : ''}`,
+          `${player.name}${aiSeats.has(actor) ? ' · computer' : online && !mine() ? ' · their move' : ''}`,
         ),
         el('span', { class: 'phase' }, phaseText),
       ),
@@ -818,7 +881,11 @@ export const createOgreBattle = (opts: OgreBattleOptions): OgreBattle => {
         button(advance, endPhase, {
           class: 'primary',
           disabled: computerTurn(),
-          title: computerTurn() ? 'The computer is playing this seat' : 'Advance (space)',
+          title: computerTurn()
+            ? online && !mine()
+              ? 'Waiting on the other seat'
+              : 'The computer is playing this seat'
+            : 'Advance (space)',
         }),
         button('Undo', undo, { disabled: !session?.canUndo, title: 'Local games only' }),
         button('+', () => zoomBy(1.25), { class: 'zoom', title: 'Zoom in' }),
@@ -2069,6 +2136,7 @@ export const createOgreBattle = (opts: OgreBattleOptions): OgreBattle => {
       destroyed = true;
       window.clearTimeout(aiTimer);
       unsubscribe();
+      boardUnsub();
       window.removeEventListener('keydown', onKeyDown);
       window.removeEventListener('resize', onWindowResize);
       window.clearTimeout(toastTimer);

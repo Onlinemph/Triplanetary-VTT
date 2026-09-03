@@ -53,9 +53,9 @@ import { createClient } from 'npm:@supabase/supabase-js@^2.112.3';
 // comment, so the two agree on where the types come from.
 // @deno-types="../_shared/engine.d.ts"
 import {
-  type Command,
+  type AnyCommand,
+  type AnyState,
   type CreateRequest,
-  type GameState,
   type JoinRequest,
   type LoggedCommand,
   type PlayRequest,
@@ -64,23 +64,28 @@ import {
   type StoredGame,
   type SyncRequest,
   type TableResponse,
+  type GameKind,
+  type KindRules,
   CODE_LENGTH,
   PRESENCE_MS,
   SUPABASE_PROTOCOL_VERSION,
   TABLES,
-  buildScenario,
   codeFrom,
+  hashPassword,
+  isGameKind,
   judge,
   leaveSeat,
   parsePlayRequest,
   playComputerSeats,
-  scenarioById,
-  sealDie,
+  reclaimSeat,
+  rulesFor,
   seatOf,
   tableInfo,
   takeSeat,
+  verifyPassword,
   viewFor,
   viewsForAll,
+  wantsPassword,
 } from '../_shared/engine.js';
 import {
   type GameRow,
@@ -196,7 +201,7 @@ const callerOf = async (req: Request): Promise<string | null> => {
 // Reading a table
 // ---------------------------------------------------------------------------
 
-const GAME_COLUMNS = 'id, code, scenario_id, fog, status, turn, command_count, host_id';
+const GAME_COLUMNS = 'id, code, kind, scenario_id, fog, status, turn, command_count, host_id';
 const SEAT_COLUMNS = 'seat, ordinal, faction, name, kind, user_id, last_seen';
 
 const fail = (what: string, error: { message: string } | null): void => {
@@ -228,7 +233,11 @@ const loadGame = async (by: 'id' | 'code', value: string): Promise<Loaded | null
   const row = found.data as unknown as GameRow;
 
   const [secret, seats] = await Promise.all([
-    admin.from(SECRETS).select('seed, options, fleets, state').eq('game_id', row.id).maybeSingle(),
+    admin
+      .from(SECRETS)
+      .select('seed, options, fleets, state, password')
+      .eq('game_id', row.id)
+      .maybeSingle(),
     admin.from(TABLES.seats).select(SEAT_COLUMNS).eq('game_id', row.id),
   ]);
   fail('reading the board', secret.error);
@@ -264,7 +273,7 @@ const readLog = async (gameId: string, since: number): Promise<LoggedCommand[]> 
       .order('idx', { ascending: true })
       .range(0, LOG_PAGE - 1);
     fail('reading the log', page.error);
-    const rows = (page.data ?? []) as unknown as { idx: number; cmd: Command; die: number }[];
+    const rows = (page.data ?? []) as unknown as { idx: number; cmd: AnyCommand; die: number }[];
     for (const row of rows) out.push(loggedFromDb(row));
     if (rows.length < LOG_PAGE) return out;
   }
@@ -318,8 +327,14 @@ const reapLobbies = async (): Promise<void> => {
   if (error) console.error('reaping stale lobbies failed', error.message);
 };
 
+/** The rules a stored table plays by: the fleet game unless it says otherwise. */
+const rulesOfGame = (game: StoredGame): KindRules => rulesFor(game.kind ?? 'tri');
+
 const createAction = async (req: CreateRequest, userId: string): Promise<Response> => {
-  if (scenarioById(req.scenarioId) === undefined) return refuse('no scenario by that name');
+  const kind: GameKind = req.kind === undefined ? 'tri' : req.kind;
+  if (!isGameKind(kind)) return refuse('no game by that name');
+  const rules = rulesFor(kind);
+  if (!rules.hasScenario(req.scenarioId)) return refuse('no scenario by that name');
 
   // A fogged scenario's secrets are a pure function of this number. Escape
   // picks the fugitive with `rollDie({seed: seedOf(opts)})`; Lateral 7 places
@@ -332,25 +347,30 @@ const createAction = async (req: CreateRequest, userId: string): Promise<Respons
   const wantsFog = req.options?.['fogOfWar'] === true;
   const seed = !wantsFog && typeof req.seed === 'number' ? req.seed >>> 0 : rollDie();
 
-  let opening: GameState;
+  let opening: AnyState;
   try {
     // The client chose the options and the fleets, so both are arbitrary JSON
-    // until the scenario has looked at them. `buildScenario` is the thing that
+    // until the scenario has looked at them. The scenario is the thing that
     // knows what a hull is called; a refusal here is a bad request, not a bug.
-    opening = sealDie(
-      buildScenario(req.scenarioId, setupFrom(seed, req.options, req.fleets, req.order)),
+    opening = rules.seal(
+      rules.build(req.scenarioId, setupFrom(seed, req.options, req.fleets, req.order)),
     );
   } catch {
     return refuse('that scenario cannot be set up with those options');
   }
 
+  const summary = rules.summary(opening);
   const now = Date.now();
-  const seats = openingSeats(opening, req.computerSeats, userId, req.name, now);
+  const seats = openingSeats(summary, req.computerSeats, userId, req.name, now);
 
   // Fog is read off the built state, never off the request. "Which one is not
   // the client's choice — it is `TableInfo.fog`", and the state is where the
   // scenario recorded its answer.
-  const fog = opening.options.fogOfWar;
+  const fog = summary.fog;
+
+  // The password is what a player remembers instead of an account. Hashed
+  // here, stored beside the seed where no client may read, and never echoed.
+  const password = wantsPassword(req.password) ? await hashPassword(req.password ?? '') : null;
 
   for (let attempt = 0; attempt < CODE_ATTEMPTS; attempt += 1) {
     const code = codeFrom(crypto.getRandomValues(new Uint8Array(CODE_LENGTH)));
@@ -363,8 +383,10 @@ const createAction = async (req: CreateRequest, userId: string): Promise<Respons
       p_options: opening.options,
       p_fleets: req.fleets ?? {},
       p_state: opening,
-      p_turn: opening.turn,
+      p_turn: summary.turn,
       p_seats: seats.map(seatToInsert),
+      p_kind: kind,
+      p_password: password,
     });
     fail('opening the table', error);
     const result = data as { ok: boolean; id?: string; reason?: string } | null;
@@ -374,6 +396,8 @@ const createAction = async (req: CreateRequest, userId: string): Promise<Respons
     const game: StoredGame = {
       id: result.id ?? '',
       code,
+      kind,
+      locked: password !== null,
       scenarioId: req.scenarioId,
       fog,
       status: 'lobby',
@@ -413,7 +437,7 @@ const writeSeats = async (
   game: StoredGame,
   userId: string,
   next: readonly SeatRow[],
-  views: Record<string, GameState>,
+  views: Record<string, AnyState>,
 ): Promise<boolean> => {
   const changed = changedSeats(game.seats, next);
   if (changed.length === 0 && Object.keys(views).length === 0) return true;
@@ -429,7 +453,12 @@ const writeSeats = async (
 
 const joinAction = async (req: JoinRequest, userId: string): Promise<Response> => {
   const loaded = await loadGame('code', req.code.toUpperCase());
-  const hit = loaded !== null && loaded.game.status !== 'finished';
+  // A wrong password is charged as a miss and answered as one: the code and
+  // the password are one gate, and an oracle that says which half was wrong
+  // is half a search done.
+  const opened =
+    loaded !== null && (await verifyPassword(loaded.setup.password, req.password ?? ''));
+  const hit = loaded !== null && opened && loaded.game.status !== 'finished';
 
   // Charge for the guess before answering it. A miss is uniform and says
   // nothing, but a hit announces itself, so a loop over the code space is a
@@ -445,8 +474,35 @@ const joinAction = async (req: JoinRequest, userId: string): Promise<Response> =
 
   if (!hit || loaded === null) return refuse(NO_TABLE);
   const game = loaded.game;
-
+  const rules = rulesOfGame(game);
   const now = Date.now();
+
+  // Taking a seat back from another device: the password has just proved the
+  // caller belongs here, and the seat's name says which chair is theirs.
+  if (req.reclaim === true) {
+    if (typeof req.seat !== 'string' || req.seat === '') {
+      return refuse('say which seat is yours to take it back');
+    }
+    const change = reclaimSeat(game, userId, req.seat, req.name, now);
+    if (!change.ok || change.seats === undefined) return refuse(change.reason ?? NO_TABLE);
+    const { data, error } = await admin.rpc('reclaim_seat', {
+      p_game: game.id,
+      p_user: userId,
+      p_seat: req.seat,
+      p_name: req.name ?? '',
+    });
+    fail('reclaiming the seat', error);
+    if ((data as { ok: boolean } | null)?.ok !== true)
+      return refuse('that seat could not be reclaimed');
+    const next = change.seats;
+    if (game.fog && game.status === 'playing') {
+      await writeSeats({ ...game, seats: next }, userId, next, {
+        [req.seat]: viewFor({ ...game, seats: next }, req.seat, undefined, rules),
+      });
+    }
+    return answer(seated({ ...game, seats: next }, userId, now));
+  }
+
   const change = takeSeat(game, userId, req.seat, req.name, now);
   if (!change.ok || change.seats === undefined) return refuse(NO_TABLE);
 
@@ -454,7 +510,7 @@ const joinAction = async (req: JoinRequest, userId: string): Promise<Response> =
   const seat = change.seat ?? null;
   const views =
     game.fog && seat !== null && game.status === 'playing'
-      ? { [seat]: viewFor({ ...game, seats: next }, seat) }
+      ? { [seat]: viewFor({ ...game, seats: next }, seat, undefined, rules) }
       : {};
 
   // A refusal here means somebody took the seat between the read and the write.
@@ -507,10 +563,11 @@ const startAction = async (game: StoredGame, userId: string): Promise<Response> 
   if (notReady !== null) return refuse(notReady);
 
   const playing: StoredGame = { ...game, status: 'playing' };
-  const out = playComputerSeats(playing, rollDie);
+  const rules = rulesOfGame(game);
+  const out = playComputerSeats(playing, rollDie, undefined, undefined, rules);
   const final = out.game;
 
-  const written = await commit(final, game.commandCount, out.logged, seatOf(final, userId));
+  const written = await commit(final, game.commandCount, out.logged, seatOf(final, userId), rules);
   if (!written.ok) return refuse('somebody else started this game first');
   return answer(seated(final, userId, Date.now()));
 };
@@ -536,6 +593,7 @@ const commit = async (
   expect: number,
   logged: readonly LoggedCommand[],
   seat: string | null,
+  rules: KindRules,
 ): Promise<{ ok: boolean }> => {
   const { data, error } = await admin.rpc('apply_command', {
     p_game: game.id,
@@ -544,7 +602,7 @@ const commit = async (
     p_status: game.status,
     p_turn: game.state.turn,
     p_commands: logged.map(logRow),
-    p_views: game.fog ? viewsForAll(game) : {},
+    p_views: game.fog ? viewsForAll(game, undefined, rules) : {},
     p_seat: seat,
   });
   fail('recording the command', error);
@@ -564,7 +622,7 @@ const COMMAND_ATTEMPTS = 3;
 
 const commandAction = async (
   gameId: string,
-  cmd: Command,
+  cmd: AnyCommand,
   userId: string,
   seq: number | undefined,
 ): Promise<Response> => {
@@ -574,18 +632,19 @@ const commandAction = async (
     const game = loaded.game;
 
     const seat = seatOf(game, userId);
-    const verdict = judge(game, seat, cmd, rollDie());
+    const rules = rulesOfGame(game);
+    const verdict = judge(game, seat, cmd, rollDie(), undefined, rules);
     if (!verdict.ok) return refuse(verdict.reason, 200, seq);
 
     // The computer answers inside the same move. A human's order and every
     // order the referee's own seats gave in reply are one indivisible thing:
     // committing the first without the second would leave a board waiting on a
     // player that no longer has to act.
-    const after = playComputerSeats(verdict.game, rollDie);
+    const after = playComputerSeats(verdict.game, rollDie, undefined, undefined, rules);
     const final = after.game;
     const logged = [verdict.logged, ...after.logged];
 
-    const written = await commit(final, game.commandCount, logged, seat);
+    const written = await commit(final, game.commandCount, logged, seat, rules);
     if (written.ok) return answer({ ok: true, index: final.commandCount, seq });
   }
 
@@ -613,9 +672,10 @@ const syncAction = async (req: SyncRequest, userId: string): Promise<Response> =
   const { game, setup } = loaded;
 
   const seat = seatOf(game, userId);
+  const rules = rulesOfGame(game);
   const since = typeof req.since === 'number' && req.since > 0 ? Math.floor(req.since) : 0;
 
-  let open: { initial: GameState | null; log: readonly LoggedCommand[] } | null = null;
+  let open: { initial: AnyState | null; log: readonly LoggedCommand[] } | null = null;
   if (!game.fog) {
     try {
       open = {
@@ -625,7 +685,7 @@ const syncAction = async (req: SyncRequest, userId: string): Promise<Response> =
         // turn one and call it caught up.
         initial:
           since === 0
-            ? buildScenario(
+            ? rules.build(
                 game.scenarioId,
                 // A campaign order is not stored on its own row: the opening
                 // state embedded it in `scenarioData` at create, nothing in
@@ -667,7 +727,7 @@ const syncAction = async (req: SyncRequest, userId: string): Promise<Response> =
     if (error !== null) console.warn('could not record presence', error.message);
   }
 
-  return answer(syncResponse(game, seat, userId, Date.now(), open));
+  return answer(syncResponse(game, seat, userId, Date.now(), open, rules));
 };
 
 // ---------------------------------------------------------------------------

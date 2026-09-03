@@ -34,6 +34,7 @@ export class GameSession {
   private readonly refusals: RefusedCommand[] = [];
   private readonly transport: Transport;
   private readonly victoryCheck?: VictoryCheck;
+  private authoritative = false;
 
   constructor(initial: GameState, map: GameMap, opts: SessionOptions = {}) {
     this.initial = initial;
@@ -68,7 +69,24 @@ export class GameSession {
    * button is disabled rather than being quietly wrong.
    */
   get canUndo(): boolean {
-    return this.transport.isLocal && this.commands.length > 0;
+    return !this.authoritative && this.transport.isLocal && this.commands.length > 0;
+  }
+
+  /**
+   * Take a board whole, from a referee that judged the command and rolled
+   * the die where nobody could see it. The local log no longer describes how
+   * the board got here, so undo and replay are off from this point: the
+   * session is a view onto somebody else's authority.
+   */
+  adoptSnapshot(state: GameState): void {
+    this.current = state;
+    this.authoritative = true;
+    this.notify();
+  }
+
+  /** True once a referee's board has been adopted. */
+  get isServerAuthoritative(): boolean {
+    return this.authoritative;
   }
 
   subscribe(fn: () => void): () => void {

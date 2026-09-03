@@ -50,7 +50,8 @@
  *    dice with it.
  */
 
-import type { Command, GameState, PlayerId } from '../../engine/index.js';
+import type { PlayerId } from '../../engine/index.js';
+import type { AnyCommand, AnyState, GameKind } from '../kinds.js';
 
 /** Bumped when the shapes below change incompatibly. */
 export const SUPABASE_PROTOCOL_VERSION = 1;
@@ -70,7 +71,7 @@ export const SUPABASE_PROTOCOL_VERSION = 1;
 export interface LoggedCommand {
   /** Position in the log, from 1. Gapless, and the game's canonical order. */
   readonly idx: number;
-  readonly cmd: Command;
+  readonly cmd: AnyCommand;
   readonly die: number;
 }
 
@@ -105,6 +106,10 @@ export interface TableInfo {
   readonly id: string;
   /** The short code a friend types to join. */
   readonly code: string;
+  /** Which game is on the table. */
+  readonly kind: GameKind;
+  /** True when the table has a password: the code alone does not seat you. */
+  readonly locked: boolean;
   readonly scenarioId: string;
   readonly fog: boolean;
   readonly status: GameStatus;
@@ -122,7 +127,15 @@ export interface TableInfo {
 export interface CreateRequest {
   readonly action: 'create';
   readonly v: number;
+  /** Which game to referee. Omitted means the fleet game. */
+  readonly kind?: GameKind;
   readonly scenarioId: string;
+  /**
+   * The table's password, or empty for a table that opens on its code
+   * alone. Hashed by the referee; it is what a player remembers instead of
+   * an account, and what lets them take their seat back from a new device.
+   */
+  readonly password?: string;
   readonly seed?: number;
   readonly options?: Record<string, boolean>;
   readonly fleets?: Readonly<Record<string, readonly string[]>>;
@@ -148,6 +161,14 @@ export interface JoinRequest {
   /** The seat wanted; omitted takes the first open one, `null` spectates. */
   readonly seat?: PlayerId | null;
   readonly name?: string;
+  /** The table's password, if it has one. */
+  readonly password?: string;
+  /**
+   * Take `seat` even if another device holds it. Needs the password and a
+   * named seat: this is how a player who lost a browser gets their chair
+   * back, and it drops whoever was sitting in it.
+   */
+  readonly reclaim?: boolean;
 }
 
 /** Leave a seat so somebody else may take it. */
@@ -169,7 +190,7 @@ export interface CommandRequest {
   readonly action: 'command';
   readonly v: number;
   readonly gameId: string;
-  readonly cmd: Command;
+  readonly cmd: AnyCommand;
   /**
    * Echoed back so a client can match a refusal to what it tried, exactly as
    * the WebSocket protocol's `seq` does.
@@ -223,11 +244,11 @@ export interface SyncResponse {
   readonly table: TableInfo;
   readonly seat: PlayerId | null;
   /** Open games: the starting position, with the die sealed. */
-  readonly initial?: GameState;
+  readonly initial?: AnyState;
   /** Open games: every command from `since + 1` on, with the die it used. */
   readonly log?: readonly LoggedCommand[];
   /** Fog games: this seat's redacted view of the board as it stands. */
-  readonly snapshot?: GameState;
+  readonly snapshot?: AnyState;
   /** The log index `snapshot` reflects, so a client can spot a stale row. */
   readonly index: number;
 }

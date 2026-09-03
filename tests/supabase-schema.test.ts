@@ -1002,3 +1002,162 @@ describe('reaping abandoned lobbies', () => {
     expect(await survivors()).toContain(STALE);
   });
 });
+
+// ---------------------------------------------------------------------------
+// 0005: two games at one table, and a password to remember
+// ---------------------------------------------------------------------------
+
+describe('two games, one password', () => {
+  const ROSTER = JSON.stringify([
+    {
+      seat: 'combine',
+      ordinal: 0,
+      faction: 'Combine',
+      name: 'Eve',
+      kind: 'human',
+      user_id: SPECTATOR,
+      last_seen: '2026-01-01T00:00:00Z',
+    },
+    {
+      seat: 'paneuropean',
+      ordinal: 1,
+      faction: 'Paneuropean',
+      name: 'Computer',
+      kind: 'computer',
+      user_id: null,
+      last_seen: null,
+    },
+  ]);
+  const CREATE =
+    'select public.create_game($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) as out';
+  const args = (kind: string, password: string | null): unknown[] => [
+    'FGKMNP',
+    'landing',
+    false,
+    SPECTATOR,
+    7,
+    '{}',
+    '{}',
+    '{"units":{},"rng":{"seed":0}}',
+    1,
+    ROSTER,
+    kind,
+    password,
+  ];
+
+  it('opens a table of the ground game with a password, through the one create_game', async () => {
+    const made = await asReferee(CREATE, args('ogre', 'v1$salt$digest'));
+    expect(made.error).toBeNull();
+    expect((made.rows[0]!['out'] as { ok: boolean }).ok).toBe(true);
+    const row = await asReferee(
+      `select g.kind, s.password
+         from public.games g join public.game_secrets s on s.game_id = g.id
+        where g.code = 'FGKMNP'`,
+    );
+    expect(row.rows).toEqual([{ kind: 'ogre', password: 'v1$salt$digest' }]);
+  });
+
+  it('refuses a game of a kind the referee has no rules for', async () => {
+    const made = await asReferee(CREATE, args('chess', null));
+    expect(made.error).not.toBeNull();
+    expect(made.error).toMatch(/kind/);
+  });
+
+  it('has exactly one create_game, so an RPC call cannot resolve to the old one', async () => {
+    const fns = await asReferee(
+      `select count(*)::int as n
+         from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+        where n.nspname = 'public' and p.proname = 'create_game'`,
+    );
+    expect(fns.rows).toEqual([{ n: 1 }]);
+  });
+
+  it('defaults an old table to the fleet game with no password', async () => {
+    const rows = await rowsFor(CAROL, `select kind from public.games where id = '${OPEN}'`);
+    expect(rows).toEqual([{ kind: 'tri' }]);
+    const secret = await asReferee(
+      `select password from public.game_secrets where game_id = '${OPEN}'`,
+    );
+    expect(secret.rows).toEqual([{ password: null }]);
+  });
+
+  it('keeps the password where a seated player cannot read it', async () => {
+    await asReferee(`update public.game_secrets set password = 'v1$x$y' where game_id = '${OPEN}'`);
+    const read = await attempt(
+      'authenticated',
+      CAROL,
+      `select password from public.game_secrets where game_id = '${OPEN}'`,
+    );
+    expect(denied(read)).toBe(true);
+    // The games row a player may read carries no such column at all.
+    const mine = await rowsFor(CAROL, `select * from public.games where id = '${OPEN}'`);
+    expect(Object.keys(mine[0]!)).not.toContain('password');
+  });
+
+  it('lets reclaim_seat hand a held seat to another account, vacating that account’s old one', async () => {
+    const out = await asReferee('select public.reclaim_seat($1, $2, $3, $4) as out', [
+      OPEN,
+      DAVE,
+      'p1',
+      'Dave, back again',
+    ]);
+    expect(out.error).toBeNull();
+    expect(out.rows[0]!['out']).toEqual({ ok: true });
+    const seats = await asReferee(
+      `select seat, kind, user_id, name from public.seats where game_id = '${OPEN}' order by ordinal`,
+    );
+    expect(seats.rows).toEqual([
+      { seat: 'p1', kind: 'human', user_id: DAVE, name: 'Dave, back again' },
+      { seat: 'p2', kind: 'open', user_id: null, name: 'Dave' },
+    ]);
+  });
+
+  it('keeps the seat’s name when the claimant gives none', async () => {
+    await asReferee('select public.reclaim_seat($1, $2, $3, $4)', [OPEN, DAVE, 'p1', '  ']);
+    const seats = await asReferee(
+      `select name from public.seats where game_id = '${OPEN}' and seat = 'p1'`,
+    );
+    expect(seats.rows).toEqual([{ name: 'Carol' }]);
+  });
+
+  it('refuses to reclaim a computer’s seat, a seat that does not exist, or a table that is gone', async () => {
+    await asReferee(
+      `update public.seats set kind = 'computer', user_id = null where game_id = '${OPEN}' and seat = 'p2'`,
+    );
+    const computer = await asReferee('select public.reclaim_seat($1, $2, $3, $4) as out', [
+      OPEN,
+      CAROL,
+      'p2',
+      'Carol',
+    ]);
+    expect(computer.rows[0]!['out']).toEqual({ ok: false, reason: 'computer' });
+    const missing = await asReferee('select public.reclaim_seat($1, $2, $3, $4) as out', [
+      OPEN,
+      CAROL,
+      'p9',
+      'Carol',
+    ]);
+    expect(missing.rows[0]!['out']).toEqual({ ok: false, reason: 'no-seat' });
+    const gone = await asReferee('select public.reclaim_seat($1, $2, $3, $4) as out', [
+      '00000000-0000-4000-8000-000000000000',
+      CAROL,
+      'p1',
+      'Carol',
+    ]);
+    expect(gone.rows[0]!['out']).toEqual({ ok: false, reason: 'gone' });
+  });
+
+  it('keeps both functions away from clients: the referee checks the password first', async () => {
+    const asCarol = await attempt(
+      'authenticated',
+      CAROL,
+      'select public.reclaim_seat($1, $2, $3, $4)',
+      [OPEN, CAROL, 'p2', 'Carol'],
+    );
+    expect(asCarol.error).toMatch(/permission denied/);
+    const asAnon = await attempt('anon', null, CREATE, args('ogre', null));
+    expect(asAnon.error).toMatch(/permission denied/);
+    const asStranger = await attempt('authenticated', SPECTATOR, CREATE, args('ogre', null));
+    expect(asStranger.error).toMatch(/permission denied/);
+  });
+});

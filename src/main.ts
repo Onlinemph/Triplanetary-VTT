@@ -16,13 +16,22 @@
 /// <reference types="vite/client" />
 
 import { DEFAULT_MAP } from '@engine/map.js';
+import type { Command } from '@engine/commands.js';
 import type { GameOptions, GameState, PlayerId } from '@engine/types.js';
 import { GameSession } from '@net/session.js';
+import {
+  type AnyCommand,
+  type AnyState,
+  type GameKind,
+  type KindRules,
+  triRules,
+} from '@net/kinds.js';
 import {
   QuickTable,
   TableClient,
   type QuickEvents,
   type QuickLike,
+  type SessionSink,
   type SupabaseLike,
   type TableClientEvents,
   type TableConnection,
@@ -36,6 +45,7 @@ import { readBattleResult } from '@campaign/result.js';
 import { CampaignSession } from '@campaign/session.js';
 import { createApp } from '@ui/app.js';
 import type {
+  BoardPort,
   CampaignDeps,
   CampaignHandle,
   LinkState,
@@ -131,6 +141,77 @@ const vessel = (): GameSession =>
   new GameSession(buildScenario(SCENARIO_SUMMARIES[0]!.id), DEFAULT_MAP);
 
 /**
+ * The ground game's board, as the client fills it and the shell reads it.
+ *
+ * No engine lives here. The Ogre view brings its own session and adopts each
+ * snapshot the way it adopts a save, so the vessel is only a value and the
+ * listeners who want to hear it change.
+ */
+interface BoardVessel extends BoardPort {
+  adoptSnapshot(state: AnyState): void;
+}
+
+const boardVessel = (): BoardVessel => {
+  let state: unknown = null;
+  const listeners = new Set<() => void>();
+  return {
+    get state() {
+      return state;
+    },
+    subscribe: (fn) => {
+      listeners.add(fn);
+      return () => {
+        listeners.delete(fn);
+      };
+    },
+    adoptSnapshot: (next) => {
+      state = next;
+      for (const fn of [...listeners]) fn();
+    },
+  };
+};
+
+/**
+ * One sink for whichever game a table turns out to hold.
+ *
+ * A joiner learns the table's game only when the referee answers, after the
+ * client has already been built, so the client is given both vessels behind
+ * one door and each snapshot goes to the one shaped for it: a fleet game has
+ * ships, a ground game has units.
+ */
+interface Sinks {
+  readonly session: GameSession;
+  readonly board: BoardVessel;
+  readonly sink: SessionSink;
+}
+
+const sinks = (): Sinks => {
+  const session = vessel();
+  const board = boardVessel();
+  return {
+    session,
+    board,
+    sink: {
+      map: session.map,
+      adoptSnapshot: (state) => {
+        if ('ships' in state) session.adoptSnapshot(state);
+        else board.adoptSnapshot(state);
+      },
+    },
+  };
+};
+
+/**
+ * The rules for a table's game, found once the referee has named it. The
+ * ground game's engine is loaded on demand, the way the battle view is, so a
+ * fleet table costs nobody the download.
+ */
+const rulesFor = async (kind: GameKind): Promise<KindRules> => {
+  if (kind === 'ogre') return (await import('@net/ogreRules.js')).ogreRules();
+  return triRules(DEFAULT_MAP);
+};
+
+/**
  * The optional rules, as the wire carries them.
  *
  * `CreateRequest.options` is a plain record of booleans, deliberately: the
@@ -175,31 +256,45 @@ const backend = async (): Promise<SupabaseLike & QuickLike> =>
     createClient(SUPABASE_URL, SUPABASE_ANON_KEY),
   ));
 
-const adopt = (client: TableClient, session: GameSession, opened: boolean): TablePort => ({
-  session: port(session),
-  get seat() {
-    return client.seat;
-  },
-  get table() {
-    return client.table;
-  },
-  get link() {
-    return LINK[client.connection];
-  },
-  host: opened,
-  start: () => client.start(),
-  // Moving seats is joining again by name. `takeSeat` vacates the old one in
-  // the same write — "one account, one seat" — so there is nothing to undo
-  // first, and nothing for another player to slip into in between.
-  sit: async (seat) => {
+const adopt = (client: TableClient, s: Sinks, opened: boolean): TablePort => {
+  // The referee has answered by now, so the table's game is known: a fleet
+  // table hands the shell its session, a ground table hands it the board.
+  const ground = client.table?.kind === 'ogre';
+  const codeOf = (): string => {
     const code = client.table?.code;
     if (code === undefined) throw new Error('there is no table to sit down at');
-    await client.join(code, seat);
-  },
-  send: (cmd) => client.send(cmd),
-  leave: () => client.leave(),
-  close: () => client.close(),
-});
+    return code;
+  };
+  return {
+    session: ground ? null : port(s.session),
+    board: ground ? s.board : null,
+    get seat() {
+      return client.seat;
+    },
+    get table() {
+      return client.table;
+    },
+    get link() {
+      return LINK[client.connection];
+    },
+    host: opened,
+    start: () => client.start(),
+    // Moving seats is joining again by name. `takeSeat` vacates the old one in
+    // the same write — "one account, one seat" — so there is nothing to undo
+    // first, and nothing for another player to slip into in between.
+    sit: async (seat) => {
+      await client.join(codeOf(), seat);
+    },
+    // Taking a seat back is the same join with a claim on it; the client
+    // presents the password it was let in with.
+    reclaim: async (seat) => {
+      await client.join(codeOf(), seat, { reclaim: true });
+    },
+    send: (cmd) => client.send(cmd as AnyCommand),
+    leave: () => client.leave(),
+    close: () => client.close(),
+  };
+};
 
 const relay = (e: TableEvents): TableClientEvents => ({
   onSeat: (seat: PlayerId | null) => e.onSeat?.(seat),
@@ -258,6 +353,8 @@ const quickAdopt = (client: QuickTable, session: GameSession, opened: boolean): 
     return {
       id: info.code,
       code: info.code,
+      kind: 'tri',
+      locked: true,
       scenarioId: info.scenarioId,
       fog: false,
       status: 'playing',
@@ -283,6 +380,7 @@ const quickAdopt = (client: QuickTable, session: GameSession, opened: boolean): 
 
   return {
     session: port(session),
+    board: null,
     get seat() {
       return client.seat;
     },
@@ -295,7 +393,11 @@ const quickAdopt = (client: QuickTable, session: GameSession, opened: boolean): 
     host: opened,
     start: async () => undefined,
     sit: (seat) => client.sit(seat),
-    send: (cmd) => client.send(cmd),
+    // A quick table has no names to prove: everyone at it knows the one
+    // password. What it has instead is a clock — a seat nobody has been heard
+    // from in a while is open again, and sitting there is the reclaim.
+    reclaim: (seat) => client.sit(seat),
+    send: (cmd) => client.send(cmd as Command),
     leave: () => client.leave(),
     close: () => {
       client.close();
@@ -338,17 +440,26 @@ const online: OnlinePort =
             });
             return quickAdopt(client, session, true);
           }
-          const session = vessel();
-          const client = new TableClient(await backend(), session, {}, relay(events));
+          const s = sinks();
+          const client = new TableClient(
+            await backend(),
+            s.sink,
+            { rules: rulesFor },
+            relay(events),
+          );
           await client.create({
+            ...(opts.kind !== undefined ? { kind: opts.kind } : {}),
             scenarioId: opts.scenarioId,
             seed: opts.seed,
             options: optionRecord(opts.options),
             ...(opts.fleets ? { fleets: opts.fleets } : {}),
             ...(opts.order ? { order: opts.order } : {}),
             computerSeats: opts.computerSeats,
+            ...(opts.password !== undefined && opts.password !== ''
+              ? { password: opts.password }
+              : {}),
           });
-          return adopt(client, session, true);
+          return adopt(client, s, true);
         },
         join: async (code, seat, events, jopts): Promise<TablePort> => {
           if (jopts?.mode === 'quick') {
@@ -376,10 +487,21 @@ const online: OnlinePort =
             }
             return quickAdopt(client, session, false);
           }
-          const session = vessel();
-          const client = new TableClient(await backend(), session, {}, relay(events));
-          await client.join(code, seat);
-          return adopt(client, session, false);
+          const s = sinks();
+          const client = new TableClient(
+            await backend(),
+            s.sink,
+            { rules: rulesFor },
+            relay(events),
+          );
+          await client.join(
+            code,
+            seat,
+            jopts?.password !== undefined && jopts.password !== ''
+              ? { password: jopts.password }
+              : {},
+          );
+          return adopt(client, s, false);
         },
         // The invitation is this page with the code on it, so a friend who
         // follows it lands in the lobby rather than on the scenario list.

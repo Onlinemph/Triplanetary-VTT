@@ -19,17 +19,19 @@
 // See the note in `index.ts`: Deno needs pointing at the declaration file.
 // @deno-types="../_shared/engine.d.ts"
 import {
-  type BuildOptions,
-  type Command,
-  type GameState,
+  type AnyCommand,
+  type AnyState,
+  type BuildSetup,
+  type GameKind,
   type LoggedCommand,
+  type StateSummary,
   type PlayerId,
   type SeatKind,
   type SeatRow,
   type StoredGame,
   type SyncResponse,
   type GameStatus,
-  sealDie,
+  type KindRules,
   tableInfo,
   viewFor,
 } from '../_shared/engine.js';
@@ -41,6 +43,7 @@ import {
 export interface GameRow {
   id: string;
   code: string;
+  kind: GameKind;
   scenario_id: string;
   fog: boolean;
   status: GameStatus;
@@ -53,7 +56,9 @@ export interface SecretRow {
   seed: number;
   options: Record<string, boolean>;
   fleets: Record<string, string[]>;
-  state: GameState;
+  state: AnyState;
+  /** The table's password as the referee hashed it, or null for a code-only table. */
+  password: string | null;
 }
 
 export interface SeatDbRow {
@@ -110,6 +115,8 @@ export const storedGame = (
 ): StoredGame => ({
   id: game.id,
   code: game.code,
+  kind: game.kind,
+  locked: secret.password !== null && secret.password !== '',
   scenarioId: game.scenario_id,
   fog: game.fog,
   status: game.status,
@@ -164,14 +171,14 @@ export const setupFrom = (
   options: Record<string, boolean> | undefined,
   fleets: Readonly<Record<string, readonly string[]>> | undefined,
   order?: unknown,
-): BuildOptions => ({
+): BuildSetup => ({
   seed,
-  options: options as Partial<GameState['options']>,
-  fleets: fleets as BuildOptions['fleets'],
+  options,
+  fleets,
   // A campaign order of battle rides the same trust boundary as the fleets:
   // arbitrary JSON until the scenario has looked at it, and the scenario
   // throws on one it dislikes.
-  order: order as BuildOptions['order'],
+  order,
 });
 
 const trimmed = (name: string | undefined): string | null => {
@@ -193,15 +200,15 @@ const trimmed = (name: string | undefined): string | null => {
  * demonstration, and refusing it would be an opinion rather than a rule.
  */
 export const openingSeats = (
-  state: GameState,
+  summary: StateSummary,
   computerOrdinals: readonly number[] | undefined,
   hostId: string,
   hostName: string | undefined,
   now: number,
 ): SeatRow[] => {
   const computers = new Set(computerOrdinals ?? []);
-  const rows = state.playerOrder.map((id, ordinal): SeatRow => {
-    const player = state.players[id];
+  const rows = summary.playerOrder.map((id, ordinal): SeatRow => {
+    const player = summary.players[id];
     return {
       seat: id,
       ordinal,
@@ -268,7 +275,11 @@ export const logRow = (entry: LoggedCommand): Record<string, unknown> => ({
 });
 
 /** A row of the `commands` table, back in the shape the protocol describes. */
-export const loggedFromDb = (row: { idx: number; cmd: Command; die: number }): LoggedCommand => ({
+export const loggedFromDb = (row: {
+  idx: number;
+  cmd: AnyCommand;
+  die: number;
+}): LoggedCommand => ({
   idx: row.idx,
   cmd: row.cmd,
   die: Number(row.die),
@@ -317,7 +328,8 @@ export const syncResponse = (
   seat: PlayerId | null,
   userId: string | null,
   now: number,
-  open: { initial: GameState | null; log: readonly LoggedCommand[] } | null,
+  open: { initial: AnyState | null; log: readonly LoggedCommand[] } | null,
+  rules: KindRules,
 ): SyncResponse => {
   // The join code is what turns a game id into a seat, and "membership, not
   // knowledge, grants a read" is the rule the whole schema is built on. A
@@ -328,7 +340,13 @@ export const syncResponse = (
   const table = seat === null ? { ...full, code: '' } : full;
 
   if (game.fog || open === null) {
-    return { ok: true, table, seat, snapshot: viewFor(game, seat), index: game.commandCount };
+    return {
+      ok: true,
+      table,
+      seat,
+      snapshot: viewFor(game, seat, undefined, rules),
+      index: game.commandCount,
+    };
   }
   return {
     ok: true,
@@ -336,7 +354,7 @@ export const syncResponse = (
     seat,
     // Absent on a tail sync, so the client can tell "here is the whole game"
     // from "here is what you missed" without inspecting indexes.
-    ...(open.initial === null ? {} : { initial: sealDie(open.initial) }),
+    ...(open.initial === null ? {} : { initial: rules.seal(open.initial) }),
     log: open.log,
     index: game.commandCount,
   };

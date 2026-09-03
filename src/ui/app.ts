@@ -153,6 +153,7 @@ export const createApp = (deps: AppDeps): App => {
   // badge should not know whether leaving a table also tears down a session.
   const tableActions: TableActions = {
     sit: (seat) => void sitAt(seat),
+    reclaim: (seat) => void reclaimSeat(seat),
     start: () => void startTable(),
     leave: () => leaveTable(true),
     notify: (text, tone) => act.notify(text, tone),
@@ -1996,6 +1997,86 @@ export const createApp = (deps: AppDeps): App => {
         const ai = computer !== null && ids[computer] !== undefined ? [ids[computer]!] : [];
         void openOgreScenario(id, battleSeed, ai);
       },
+      // A ground table needs the referee: it keeps the board and plays the
+      // computer's seat, so a quick table cannot hold one.
+      ...(online.available && online.modes.includes('refereed')
+        ? {
+            onHost: (id: string, battleSeed: number, computer: number | null) => {
+              openHostDialog(overlays, {
+                modes: ['refereed'],
+                onHost: (_mode, password) => void hostOgreTable(id, battleSeed, computer, password),
+                onCancel: () => void openOgreScenarios(),
+              });
+            },
+          }
+        : {}),
+    });
+  };
+
+  /** Open a refereed table for a printed Ogre scenario, and share the code. */
+  const hostOgreTable = async (
+    id: string,
+    battleSeed: number,
+    computer: number | null,
+    password: string,
+  ): Promise<void> => {
+    if (!online.available) return;
+    try {
+      enterTable(
+        await online.host(
+          {
+            kind: 'ogre',
+            scenarioId: id,
+            seed: battleSeed,
+            options: {},
+            computerSeats: computer === null ? [] : [computer],
+            mode: 'refereed',
+            password,
+          },
+          tableEvents(),
+        ),
+      );
+    } catch (err) {
+      act.notify(`Could not open a table: ${reasonOf(err)}`, 'bad');
+      void openOgreScenarios();
+    }
+  };
+
+  /**
+   * Fight a ground table's battle in the Ogre view, over everything else.
+   *
+   * The view is handed the board the referee keeps and the seat this browser
+   * holds; every order it forms goes to the referee, and every snapshot that
+   * comes back is adopted. The scenario is built locally only to name the
+   * map and the victory check — the board itself is the referee's.
+   */
+  const mountOgreTable = async (t: TablePort): Promise<void> => {
+    const info = t.table;
+    const board = t.board;
+    if (groundBattle || board === null || info === null) return;
+    const make = await import('../ogre/ui/battle.js').catch(() => null);
+    if (make === null) {
+      act.notify('The Ogre battle view could not be loaded.', 'bad');
+      return;
+    }
+    // The load took a moment; the table may have been left in it.
+    if (groundBattle || table !== t || t.board === null || t.board.state === null) return;
+    groundBattle = make.createOgreBattle({
+      host: overlays,
+      battle: { kind: 'scenario', id: info.scenarioId, seed: 0 },
+      online: {
+        get seat() {
+          return t.seat;
+        },
+        board,
+        send: (cmd) => t.send(cmd),
+      },
+      ai: info.seats.filter((seat) => seat.kind === 'computer').map((seat) => seat.seat),
+      setup: false,
+      onExit: () => {
+        closeGroundBattle();
+        leaveTable(false);
+      },
     });
   };
 
@@ -2106,7 +2187,9 @@ export const createApp = (deps: AppDeps): App => {
     const t = table;
     if (t === null) return null;
     const info = t.table;
-    const state = session?.state ?? null;
+    // A ground table's board is the Ogre view's to read; the badge says only
+    // that the table exists. Whose move it is shows in that view's own bar.
+    const state = t.session !== null ? (session?.state ?? null) : null;
     const who =
       info !== null && info.status === 'playing' && state !== null ? activePlayer(state) : null;
     return {
@@ -2156,6 +2239,11 @@ export const createApp = (deps: AppDeps): App => {
       if (session) renderer?.fitAll(session.state);
       canvas.focus();
     }
+    // A ground table that has begun is fought in the Ogre view, over
+    // everything: a joiner arriving mid-battle lands straight in it.
+    if (t !== null && t.board !== null && info !== null && info.status !== 'lobby') {
+      void mountOgreTable(t);
+    }
     paintTable();
     render();
   };
@@ -2166,7 +2254,7 @@ export const createApp = (deps: AppDeps): App => {
     // The referee plays the computer's seats, through the same judge a person's
     // orders go through. Nothing on this side should be giving them.
     computerSeats = new Set();
-    installSession(t.session);
+    if (t.session !== null) installSession(t.session);
     refreshTable();
   };
 
@@ -2204,16 +2292,18 @@ export const createApp = (deps: AppDeps): App => {
       : resume?.code === code
         ? (resume.seat ?? undefined)
         : undefined;
+    const attempt = (mode: OnlineMode): Promise<TablePort> =>
+      online.join(code, wanted, tableEvents(), { mode, password });
     try {
-      // A password means a quick table; its absence means a refereed one. The
-      // joiner does not know which a code belongs to, so the mode follows what
-      // they typed rather than being asked for separately.
-      enterTable(
-        await online.join(code, wanted, tableEvents(), {
-          mode: password === '' ? 'refereed' : 'quick',
-          password,
-        }),
-      );
+      // Every table has a password now, so the joiner cannot tell from what
+      // they typed which arrangement a code belongs to. A quick table is one
+      // database call to ask, so it is asked first; the referee's answer is
+      // the one reported when neither knows the code, because it is the one
+      // that also covers a wrong password.
+      const quickToo = password !== '' && online.modes.includes('quick');
+      let port: TablePort | null = null;
+      if (quickToo) port = await attempt('quick').catch(() => null);
+      enterTable(port ?? (await attempt('refereed')));
     } catch (err) {
       act.notify(`Could not join ${code}: ${reasonOf(err)}`, 'bad');
       if (session) act.newGame();
@@ -2225,7 +2315,7 @@ export const createApp = (deps: AppDeps): App => {
     if (!online.available || joinOverlay !== null) return;
     joinOverlay = openJoinDialog(overlays, {
       code,
-      wantsPassword: online.modes.includes('quick'),
+      wantsPassword: true,
       onJoin: (typed, watchOnly, password) => {
         joinOverlay = null;
         void joinTable(typed, watchOnly, password);
@@ -2255,6 +2345,18 @@ export const createApp = (deps: AppDeps): App => {
     if (t === null) return;
     try {
       await t.sit(seat);
+    } catch (err) {
+      act.notify(reasonOf(err), 'bad');
+    }
+    refreshTable();
+  };
+
+  const reclaimSeat = async (seat: PlayerId): Promise<void> => {
+    const t = table;
+    if (t === null) return;
+    try {
+      await t.reclaim(seat);
+      act.notify('The seat is yours again.', 'good');
     } catch (err) {
       act.notify(reasonOf(err), 'bad');
     }
