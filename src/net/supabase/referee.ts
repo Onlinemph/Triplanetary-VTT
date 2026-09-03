@@ -31,6 +31,7 @@
 
 import { type GameMap, type PlayerId, DEFAULT_MAP } from '../../engine/index.js';
 import { commandIsAuthorised } from '../redact.js';
+import type { BattleResult, OrderOfBattle } from '../../campaign/orders.js';
 import {
   type AnyCommand,
   type AnyState,
@@ -79,6 +80,12 @@ export interface StoredGame {
   readonly commandCount: number;
   readonly seats: readonly SeatRow[];
   readonly hostId: string;
+  /** The table this one was opened for: a ground battle's frozen sky. */
+  readonly parentId?: string;
+  readonly parentCode?: string;
+  /** The ground battle this table is waiting on, while it is being fought. */
+  readonly childId?: string;
+  readonly childCode?: string;
 }
 
 /** How long a seat stays "present" after its last call. */
@@ -124,6 +131,8 @@ export const tableInfo = (
   locked: game.locked ?? false,
   scenarioId: game.scenarioId,
   ...(rules ? described(game, rules) : {}),
+  ...(game.parentCode !== undefined ? { parent: { code: game.parentCode } } : {}),
+  ...(game.childCode !== undefined ? { child: { code: game.childCode } } : {}),
   fog: game.fog,
   status: game.status,
   turn: game.state.turn,
@@ -302,7 +311,12 @@ export const judge = (
  * clear (they are the referee) but must be judged by the rules on exactly the
  * same terms as anybody else.
  */
-const resolve = (game: StoredGame, cmd: AnyCommand, die: number, rules: KindRules): Judgement => {
+export const resolve = (
+  game: StoredGame,
+  cmd: AnyCommand,
+  die: number,
+  rules: KindRules,
+): Judgement => {
   // Roll with the seed the caller drew, never with the stored one.
   const out = rules.apply(game.state, cmd, die);
   if (!out.ok) return { ok: false, reason: out.reason };
@@ -321,6 +335,61 @@ const resolve = (game: StoredGame, cmd: AnyCommand, die: number, rules: KindRule
     logged: { idx: next.commandCount, cmd, die: die >>> 0 },
     views: game.fog ? viewsForAll(next, DEFAULT_MAP, rules) : {},
   };
+};
+
+// ---------------------------------------------------------------------------
+// A child table: the frozen sky's ground battle
+// ---------------------------------------------------------------------------
+
+/**
+ * The roster of a child table, from its parent's.
+ *
+ * The order names its sides by the parent's player ids, so a side maps to the
+ * parent seat of the same name: a person there keeps their name and their
+ * account, a computer stays the computer's, and a side nobody at the parent
+ * holds — a base's militia, or an open seat — is the referee's to play.
+ */
+export const childSeats = (
+  parent: StoredGame,
+  order: OrderOfBattle,
+  summary: StateSummary,
+  now: number,
+): SeatRow[] =>
+  summary.playerOrder.map((id, ordinal): SeatRow => {
+    const player = summary.players[id];
+    const side = order.sides.find((s) => s.player === id);
+    const held = side === undefined ? undefined : parent.seats.find((s) => s.seat === side.player);
+    const human = held !== undefined && held.kind === 'human' && held.userId !== null;
+    return {
+      seat: id,
+      ordinal,
+      faction: player?.faction ?? id,
+      name: human ? held.name : (player?.name ?? id),
+      kind: human ? 'human' : 'computer',
+      userId: human ? held.userId : null,
+      lastSeen: human ? now : null,
+    };
+  });
+
+/**
+ * Hand a finished child's result back to the table that was waiting on it:
+ * the parent's own settling order, judged as any order is, and the computer's
+ * seats answering in the same move. Nothing here touches the store.
+ */
+export const settleParent = (
+  parent: StoredGame,
+  result: BattleResult,
+  dice: () => number,
+  rules: KindRules,
+):
+  | { readonly ok: true; readonly game: StoredGame; readonly logged: LoggedCommand[] }
+  | { readonly ok: false; readonly reason: string } => {
+  const make = rules.settleCommand;
+  if (!make) return { ok: false, reason: 'this game takes no results' };
+  const out = resolve(parent, make(parent.state, result), dice(), rules);
+  if (!out.ok) return { ok: false, reason: out.reason };
+  const after = playComputerSeats(out.game, dice, undefined, undefined, rules);
+  return { ok: true, game: after.game, logged: [out.logged, ...after.logged] };
 };
 
 // ---------------------------------------------------------------------------

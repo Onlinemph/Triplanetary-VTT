@@ -8,5 +8,6 @@ export * from '../../../src/net/supabase/referee.js';
 export * from '../../../src/net/kinds.js';
 export * from '../../../src/net/rulesAll.js';
 export * from '../../../src/net/redact.js';
+export * from '../../../src/campaign/orders.js';
 export * from '../../../src/scenarios/index.js';
 export * from '../../../src/engine/index.js';

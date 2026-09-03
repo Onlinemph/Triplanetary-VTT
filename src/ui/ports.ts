@@ -183,6 +183,10 @@ export interface BoardPort {
 }
 
 export interface TablePort {
+  /** Which arrangement this table is: a judge on the server, or a shared move list. */
+  readonly mode: OnlineMode;
+  /** The password the table was opened or joined with, for a hop to a linked table. */
+  readonly password: string | null;
   /** The Triplanetary session behind a space table; null at a ground table. */
   readonly session: SessionPort | null;
   /** The ground board behind an Ogre table; null at a space table. */

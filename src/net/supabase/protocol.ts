@@ -114,6 +114,10 @@ export interface TableInfo {
   /** The scenario's name, and lines describing the setup, from the referee. */
   readonly title?: string;
   readonly brief?: readonly string[];
+  /** The table this one was opened for: a ground battle's frozen sky. */
+  readonly parent?: { readonly code: string };
+  /** The ground battle this table is waiting on, while it is being fought. */
+  readonly child?: { readonly code: string };
   readonly fog: boolean;
   readonly status: GameStatus;
   readonly turn: number;

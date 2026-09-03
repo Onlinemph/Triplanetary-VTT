@@ -133,7 +133,9 @@ nobody shooting, and six exercises in vector movement graded against par.
 ### Playing with other people, over the internet
 
 Sit at a table, share a six-character code and a password, and play from
-anywhere. There are two arrangements, and the game offers both on the same
+anywhere. **[docs/ONLINE-PLAY.md](docs/ONLINE-PLAY.md)** is the player's
+guide: tables, seats, getting a seat back, custom battles, and how a war
+hands its ground battles off. There are two arrangements, and the game offers both on the same
 screen. Nobody needs an account: the code and the password are what a player
 remembers, and a player who comes back on another browser types the same
 password to take their own seat back.
@@ -166,7 +168,10 @@ against the referee's board exactly as it runs against a local one. The
 your own — either board or a fresh one generated from a seed, any mix of
 cybertanks, armour and infantry on both sides, and command-post, breakthrough
 or attrition terms — to fight at this keyboard or to host, and a host can
-change the setup from the lobby until the table begins.
+change the setup from the lobby until the table begins. An **Orbital Drop**
+war hosted as a refereed table hands its ground battles off by itself: when
+the sky freezes the referee opens a linked Ogre table, everyone at the war
+hops across to fight it, and the result comes home as the war's own order.
 
 **From a terminal**, if you have the repository checked out:
 

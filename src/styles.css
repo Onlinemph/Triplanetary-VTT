@@ -2989,3 +2989,16 @@ kbd {
     grid-template-columns: 1fr;
   }
 }
+
+/* --- Your tables, on the start menu -------------------------------------- */
+
+.start-tables {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 10px;
+}
+
+.start-tables .sect-title {
+  margin: 0 0 2px;
+}

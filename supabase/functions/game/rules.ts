@@ -50,6 +50,10 @@ export interface GameRow {
   turn: number;
   command_count: number;
   host_id: string;
+  parent_id?: string | null;
+  child_id?: string | null;
+  parent_code?: string | null;
+  child_code?: string | null;
 }
 
 export interface SecretRow {
@@ -124,6 +128,10 @@ export const storedGame = (
   commandCount: game.command_count,
   seats: seats.map(seatFromDb),
   hostId: game.host_id,
+  ...(game.parent_id ? { parentId: game.parent_id } : {}),
+  ...(game.parent_code ? { parentCode: game.parent_code } : {}),
+  ...(game.child_id ? { childId: game.child_id } : {}),
+  ...(game.child_code ? { childCode: game.child_code } : {}),
 });
 
 /**

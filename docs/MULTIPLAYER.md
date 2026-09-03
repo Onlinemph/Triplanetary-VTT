@@ -318,6 +318,7 @@ supabase/migrations/0003_apply.sql     accepting an order, atomically
 supabase/migrations/0004_throttle.sql  a cost for guessing join codes
 supabase/migrations/0005_kinds.sql     two games at one table, and a password
 supabase/migrations/0006_configure.sql  changing a lobby's setup
+supabase/migrations/0007_children.sql   a child table for the frozen sky
 supabase/functions/game/index.ts       the referee on the wire
 src/net/supabase/protocol.ts           the contract between the two
 src/net/supabase/referee.ts            the rules loop, with no I/O in it
@@ -468,6 +469,27 @@ host whose seat did is moved to the first open one — or the change is refused
 if there is none. The referee also sends every table a `title` and a `brief`
 (the map, the forces, the terms) so a lobby can describe a setup it has no
 engine to read.
+
+### The frozen sky, online: child tables
+
+Orbital Drop freezes the sky when landers are down and hands the ground
+battle to Ogre. At a refereed table the referee does the handing: after any
+command that leaves a fleet board waiting on a ground battle (`KindRules.
+handoff`), it builds the assault from the order, opens a **child table** for
+it through `create_child_game` — same password, same host, the roster drawn
+from the parent's by name, so the powers' players keep their seats and a
+base's militia is the computer's — and links the two: the parent carries the
+child's code, the child the parent's. Every browser at the parent sees the
+link and hops across (the seat follows the account, the password follows the
+client); the war table is left listening-off, never vacated. The child begins
+at once, with the computer's opening moves.
+
+When the child ends, `KindRules.settle` reads its `BattleResult` off the
+board and `settleParent` turns it into the parent's own `resolveGroundBattle`
+order, judged and committed like any other, with the parent's computer seats
+answering in the same move; `unlink_child` then clears the link. Leaving the
+finished battle takes a browser back to the war. A quick table has no
+referee to do any of this, and says so when its sky freezes.
 
 ### The attacks it is built against
 

@@ -18,6 +18,7 @@ import { applyCommand } from '../ogre/engine/reducer.js';
 import { overrunActor } from '../ogre/engine/overrun.js';
 import { CUSTOM_ID, describeCustom, mapOf, scenarioById } from '../ogre/scenarios/index.js';
 import { orderOf } from '../campaign/orders.js';
+import { readBattleResult } from '../ogre/campaign/result.js';
 import { aiPlan } from '../ogre/ai/player.js';
 import type { AnyState, KindRules } from './kinds.js';
 
@@ -63,6 +64,13 @@ export const ogreRules = (): KindRules => ({
     if (!computers.has(who)) return [];
     const def = scenarioById(s.scenarioId);
     return def ? aiPlan(s, mapOf(def, s), who) : [];
+  },
+  // A ground table fought for a frozen sky reports its result the way a
+  // battle fought in the browser does; the parent's rules turn it into an order.
+  settle: (state) => {
+    const s = state as OgreState;
+    if (!s.victory || !orderOf(s.scenarioData)) return null;
+    return readBattleResult(s, []);
   },
   summary: (state) => {
     const s = state as OgreState;

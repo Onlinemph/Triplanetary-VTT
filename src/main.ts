@@ -266,6 +266,10 @@ const adopt = (client: TableClient, s: Sinks, opened: boolean): TablePort => {
     return code;
   };
   return {
+    mode: 'refereed',
+    get password() {
+      return client.secret ?? null;
+    },
     session: ground ? null : port(s.session),
     board: ground ? s.board : null,
     get seat() {
@@ -389,6 +393,8 @@ const quickAdopt = (client: QuickTable, session: GameSession, opened: boolean): 
   };
 
   return {
+    mode: 'quick',
+    password: null,
     session: port(session),
     board: null,
     get seat() {
