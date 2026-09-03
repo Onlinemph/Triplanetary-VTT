@@ -54,9 +54,14 @@
  * — a caller with no session at all — nothing whatsoever.
  */
 
-import type { Command, GameState, PlayerId } from '../../engine/index.js';
-import type { GameSession } from '../session.js';
-import { isCommand } from '../transport.js';
+import type { GameMap, PlayerId } from '../../engine/index.js';
+import {
+  type AnyCommand,
+  type AnyState,
+  type GameKind,
+  type KindRules,
+  triRules,
+} from '../kinds.js';
 import {
   type CreateRequest,
   type ErrorResponse,
@@ -154,6 +159,12 @@ export interface TableClientOptions {
   readonly functionName?: string;
   /** The name to sit down under. Defaults to one made from the account id. */
   readonly name?: string;
+  /**
+   * How to find the rules for a table's game once the referee has said which
+   * it is. Omitted, only the fleet game is known, and a table of any other
+   * kind is refused at join.
+   */
+  readonly rules?: RulesSource;
   /** First resubscribe delay, doubled on each failure. */
   readonly minBackoffMs?: number;
   readonly maxBackoffMs?: number;
@@ -173,11 +184,29 @@ export interface TableClientEvents {
   onTable?: (table: TableInfo) => void;
   onConnection?: (state: TableConnection) => void;
   /** Something the referee refused, with the reason it gave. */
-  onRejected?: (reason: string, cmd?: Command) => void;
+  onRejected?: (reason: string, cmd?: AnyCommand) => void;
 }
 
 /** Everything `create` needs; the protocol's request minus its envelope. */
 export type CreateOptions = Omit<CreateRequest, 'action' | 'v'>;
+
+/** What a join may add to the code: the table's password, and a claim on a seat. */
+export interface JoinExtras {
+  readonly password?: string;
+  readonly reclaim?: boolean;
+}
+
+/**
+ * Where the client puts the board it is told about. A `GameSession` of either
+ * game satisfies this; the client never asks the session anything else.
+ */
+export interface SessionSink {
+  readonly map?: unknown;
+  adoptSnapshot(state: AnyState): void;
+}
+
+/** The rules for a kind of game, found when the table says which it is. */
+export type RulesSource = (kind: GameKind) => KindRules | Promise<KindRules>;
 
 // ---------------------------------------------------------------------------
 // Reading what the network sends
@@ -216,19 +245,26 @@ const rowOf = (payload: unknown): Record<string, unknown> | null => {
  * the replication stream has a size limit. A client that adopted the truncated
  * half would render an empty map; one that notices asks for the row instead.
  */
-const looksLikeState = (v: unknown): v is GameState =>
+const looksLikeState = (v: unknown): v is AnyState =>
   isRecord(v) &&
   typeof v['turn'] === 'number' &&
   typeof v['scenarioId'] === 'string' &&
-  isRecord(v['ships']) &&
+  (isRecord(v['ships']) || isRecord(v['units'])) &&
   isRecord(v['players']) &&
   isRecord(v['rng']);
+
+/**
+ * Is this plausibly a command of either game? Its type and author are all the
+ * client reads; the referee accepted it, and the rules judge it on replay.
+ */
+const looksLikeCommand = (v: unknown): v is AnyCommand =>
+  isRecord(v) && typeof v['type'] === 'string' && typeof v['by'] === 'string';
 
 const loggedFrom = (row: Record<string, unknown>): LoggedCommand | null => {
   const idx = numberOf(row['idx']);
   const die = numberOf(row['die']);
   const cmd = row['cmd'];
-  if (idx === null || die === null || !isCommand(cmd)) return null;
+  if (idx === null || die === null || !looksLikeCommand(cmd)) return null;
   return { idx, cmd, die: die >>> 0 };
 };
 
@@ -291,6 +327,7 @@ export class TableClient {
 
   private chosenName: string | null;
   private account: string | null = null;
+  private readonly rulesSource: RulesSource;
 
   private game: string | null = null;
   private info: TableInfo | null = null;
@@ -302,10 +339,11 @@ export class TableClient {
    * a fog game, and the flag this client reads to know which it is playing:
    * without a starting position there is nothing to replay a command onto.
    */
-  private origin: GameState | null = null;
+  private origin: AnyState | null = null;
   private entries: LoggedCommand[] = [];
   /** The board this client believes in, sealed exactly as the referee stores it. */
-  private board: GameState | null = null;
+  private board: AnyState | null = null;
+  private rules: KindRules | null = null;
   /** The highest log index applied here. */
   private applied = 0;
   /** The highest log index the referee has admitted to, applied or not. */
@@ -323,13 +361,25 @@ export class TableClient {
 
   private syncing: Promise<void> | null = null;
   private syncAgain = false;
+  /**
+   * The password this table was opened or joined with. Every join presents it
+   * again — moving seats, coming back, taking a seat back — so it is kept for
+   * the life of the client rather than asked for twice.
+   */
+  private password: string | undefined;
 
   constructor(
     private readonly supabase: SupabaseLike,
-    private readonly session: GameSession,
+    private readonly session: SessionSink,
     options: TableClientOptions = {},
     private readonly events: TableClientEvents = {},
   ) {
+    this.rulesSource =
+      options.rules ??
+      ((kind: GameKind): KindRules => {
+        if (kind !== 'tri') throw new Error(`this client has no rules for a "${kind}" table`);
+        return triRules(this.session.map as GameMap | undefined);
+      });
     this.settings = {
       functionName: options.functionName ?? 'game',
       minBackoffMs: options.minBackoffMs ?? 500,
@@ -434,13 +484,27 @@ export class TableClient {
     const res = await this.call(
       request({ action: 'create', ...options, name: options.name ?? this.name }),
     );
-    return this.enter(res);
+    const info = await this.enter(res);
+    this.password = options.password;
+    return info;
   }
 
-  async join(code: string, seat?: PlayerId | null): Promise<TableInfo> {
+  async join(code: string, seat?: PlayerId | null, extras: JoinExtras = {}): Promise<TableInfo> {
     await this.signIn();
-    const res = await this.call(request({ action: 'join', code, seat, name: this.name }));
-    return this.enter(res);
+    const password = extras.password ?? this.password;
+    const res = await this.call(
+      request({
+        action: 'join',
+        code,
+        seat,
+        name: this.name,
+        ...(password !== undefined ? { password } : {}),
+        ...(extras.reclaim === true ? { reclaim: true } : {}),
+      }),
+    );
+    const info = await this.enter(res);
+    this.password = password;
+    return info;
   }
 
   /** Close the lobby and begin. The referee refuses this from anyone but the host. */
@@ -479,7 +543,7 @@ export class TableClient {
    * to show until the referee's row comes back. Returns whether the referee
    * took it; a refusal also reaches `onRejected` with the reason.
    */
-  async send(cmd: Command): Promise<boolean> {
+  async send(cmd: AnyCommand): Promise<boolean> {
     const gameId = this.game;
     if (gameId === null) {
       this.events.onRejected?.('not at a table', cmd);
@@ -545,6 +609,8 @@ export class TableClient {
     this.game = res.table.id;
     this.setSeat(res.seat);
     this.setTable(res.table);
+    // The table names its game; the rules for it may have to be fetched.
+    this.rules = await this.rulesSource(res.table.kind ?? 'tri');
     this.listen();
     // Sync now rather than waiting for the subscription to come up: the channel
     // may never come up, and a lobby that renders nothing is worse than one
@@ -626,7 +692,7 @@ export class TableClient {
     const tail = [...(res.log ?? [])].sort((a, b) => a.idx - b.idx);
     if (res.initial !== undefined && (tail[0]?.idx ?? 1) === 1) {
       const log = tail;
-      const { state, failed } = replayLog(res.initial, log, this.session.map);
+      const { state, failed } = replayLog(res.initial, log, undefined, this.rulesNow());
       this.origin = res.initial;
       this.board = state;
       if (failed !== null) {
@@ -677,7 +743,7 @@ export class TableClient {
   private applyLogged(entry: LoggedCommand): boolean {
     const board = this.board;
     if (board === null) return false;
-    const { state, failed } = replayLog(board, [entry], this.session.map);
+    const { state, failed } = replayLog(board, [entry], undefined, this.rulesNow());
     if (failed !== null) {
       this.events.onRejected?.('the referee accepted a command this build refuses', entry.cmd);
       return false;
@@ -697,7 +763,12 @@ export class TableClient {
    * that produced this board, because replaying them would need the very thing
    * the fog withholds.
    */
-  private adoptSnapshot(state: GameState, index: number): void {
+  /** The rules for the table we are at; the fleet game's until a table says otherwise. */
+  private rulesNow(): KindRules {
+    return (this.rules ??= triRules(this.session.map as GameMap | undefined));
+  }
+
+  private adoptSnapshot(state: AnyState, index: number): void {
     this.origin = null;
     this.entries = [];
     this.board = state;

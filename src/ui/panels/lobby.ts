@@ -50,6 +50,12 @@ export interface TableView {
 export interface TableActions {
   /** Take an open seat, or stand up to watch with `null`. */
   sit(seat: PlayerId | null): void;
+  /**
+   * Take back a seat somebody's browser still holds — this player's own, from
+   * before their storage was cleared or their phone died. The table password
+   * is the proof, so only a locked table offers it.
+   */
+  reclaim?(seat: PlayerId): void;
   start(): void;
   leave(): void;
   notify(text: string, tone?: Notice['tone']): void;
@@ -181,19 +187,23 @@ export const openHostDialog = (
     },
   });
 
+  const passwordHint = el('p', { class: 'hint' });
   const passwordRow = el(
     'div',
     { class: 'join-form password-row' },
     el('p', { class: 'sel-hint', text: 'Password for the table' }),
     password,
-    el('p', {
-      class: 'hint',
-      text: 'Anyone with the code and this password can sit down. Read them both out together.',
-    }),
+    passwordHint,
   );
 
+  // Every table has a password now. At a quick table it is the only lock on
+  // the door; at a refereed one it also lets a player who lost their browser
+  // prove a seat is theirs — so the wording says which job it is doing.
   const showPassword = (): void => {
-    passwordRow.hidden = mode !== 'quick';
+    passwordHint.textContent =
+      mode === 'quick'
+        ? 'Anyone with the code and this password can sit down. Read them both out together.'
+        : 'Anyone with the code and this password can sit down, and a player who comes back on a different browser types it to take their seat again.';
   };
 
   const choices = o.modes.map((m) =>
@@ -220,7 +230,7 @@ export const openHostDialog = (
 
   const submit = (): void => {
     const pw = password.value.trim();
-    if (mode === 'quick' && pw === '') {
+    if (pw === '') {
       password.focus();
       return;
     }
@@ -241,7 +251,7 @@ export const openHostDialog = (
   });
 
   showPassword();
-  if (mode === 'quick') password.focus();
+  password.focus();
   return overlay;
 };
 
@@ -310,10 +320,9 @@ export interface JoinPrompt {
   /** Prefilled from the link's fragment, which never leaves the browser. */
   readonly password?: string | null;
   /**
-   * True when this build can open quick tables, which are the ones with a
-   * password. The field is offered rather than demanded: the joiner does not
-   * know which kind of table a code belongs to until they try it, and a
-   * refereed table simply ignores what is typed here.
+   * True when this build can open tables at all, which are the ones with a
+   * password. The field is offered rather than demanded: an old refereed table
+   * may have none, and a watcher needs only the code.
    */
   readonly wantsPassword?: boolean;
   onJoin(code: string, watchOnly: boolean, password: string): void;
@@ -351,7 +360,7 @@ export const openJoinDialog = (host: HTMLElement, o: JoinPrompt): Overlay => {
     autocapitalize: 'none',
     spellcheck: 'false',
     'aria-label': 'Table password',
-    placeholder: 'password, for a quick table',
+    placeholder: 'table password',
     onkeydown: (ev: Event) => {
       if ((ev as KeyboardEvent).key === 'Enter') submit();
     },
@@ -377,7 +386,7 @@ export const openJoinDialog = (host: HTMLElement, o: JoinPrompt): Overlay => {
         class: 'hint',
         text:
           o.wantsPassword === true
-            ? 'The password is for a quick table. Leave it empty for a refereed one — you will land in the lobby either way, where you can see the scenario, the roster, and take a seat.'
+            ? 'The host read you a password with the code. You will land in the lobby, where you can see the scenario, the roster, and take a seat — or take yours back, if you are returning on a different browser.'
             : 'You will land in the lobby, where you can see the scenario, the roster, and take a seat.',
       }),
       el(
@@ -559,6 +568,21 @@ const seatRow = (s: SeatInfo, v: TableView, act: TableActions): HTMLElement =>
           variant: 'quiet',
           class: 'sit-here',
           onClick: () => act.sit(s.seat),
+        })
+      : null,
+    // A held seat on a locked table can be taken back with the password: the
+    // player who lost their browser sees their own name here and says so.
+    s.kind === 'human' &&
+      !s.mine &&
+      v.table?.locked === true &&
+      act.reclaim !== undefined &&
+      v.table.status !== 'finished'
+      ? button({
+          label: 'This is me',
+          variant: 'quiet',
+          class: 'sit-here',
+          title: `Take ${s.name}’s seat back with the table password`,
+          onClick: () => act.reclaim?.(s.seat),
         })
       : null,
   );

@@ -78,13 +78,22 @@ const SURFACE = [
       'judge',
       'leaveSeat',
       'playComputerSeats',
+      'reclaimSeat',
       'seatOf',
       'tableInfo',
       'takeSeat',
       'viewFor',
       'viewsForAll',
+      'hashPassword',
+      'verifyPassword',
+      'wantsPassword',
+      'kindOf',
     ],
   },
+  // Both games' rules, by kind: the referee runs whichever the table names.
+  // `kinds.js` is where the types come from; `rulesAll.js` carries the Ogre engine.
+  { from: 'src/net/kinds.js', values: ['triRules', 'authorOf'] },
+  { from: 'src/net/rulesAll.js', values: ['rulesFor', 'isGameKind'] },
   { from: 'src/net/redact.js', values: ['sealDie'] },
   { from: 'src/scenarios/index.js', values: ['buildScenario', 'scenarioById'] },
   // The map every rules call defaults to, and — through the declaration file

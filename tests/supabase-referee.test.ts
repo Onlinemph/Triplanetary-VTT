@@ -47,6 +47,7 @@ import { buildScenario } from '../src/scenarios/index.js';
 import { ALWAYS_VISIBLE_KEY, sealDie } from '../src/net/redact.js';
 import { aiHasMove } from '../src/ai/driver.js';
 import type { GameStatus, LoggedCommand } from '../src/net/supabase/protocol.js';
+import type { AnyState } from '../src/net/kinds.js';
 import {
   type SeatRow,
   type StoredGame,
@@ -68,6 +69,11 @@ import {
 } from '../src/net/supabase/referee.js';
 
 const map = DEFAULT_MAP;
+
+/** The referee's board is typed for either game; these tests are about the fleet game. */
+const tri = (state: AnyState): GameState => state as GameState;
+const triViews = (g: StoredGame): [string, GameState][] =>
+  Object.entries(viewsForAll(g, map)).map(([seat, view]) => [seat, tri(view)]);
 
 // ---------------------------------------------------------------------------
 // Harness
@@ -174,7 +180,7 @@ const alwaysVisibleTo = (state: GameState, seat: PlayerId): ReadonlySet<string> 
 };
 
 /** Two boards are the same board, dice and all. */
-const same = (a: GameState, b: GameState): boolean => JSON.stringify(a) === JSON.stringify(b);
+const same = (a: AnyState, b: AnyState): boolean => JSON.stringify(a) === JSON.stringify(b);
 
 /**
  * Two corvettes in the same deep-space hex, in the combat phase, guns loaded.
@@ -236,7 +242,7 @@ const DECLINE: Command = { type: 'declineCounterattack', by: 'b' };
 const exchange = (die: number): number => {
   const shot = accepted(judge(gunfight(), 'a', ATTACK, die, map));
   const settled = accepted(judge(shot.game, 'b', DECLINE, 1, map));
-  return settled.game.state.ships['b1']!.disabled;
+  return tri(settled.game.state).ships['b1']!.disabled;
 };
 
 // ---------------------------------------------------------------------------
@@ -368,7 +374,7 @@ describe('the log as an audit trail', () => {
     const forwards = replayLog(start.state, played.logged, map);
     const backwards = replayLog(start.state, [...played.logged].reverse(), map);
     expect(same(backwards.state, forwards.state)).toBe(true);
-    expect(same(forwards.state, played.game.state)).toBe(true);
+    expect(same(forwards.state, tri(played.game.state))).toBe(true);
   });
 
   it('replays differently when a logged die is tampered with', () => {
@@ -384,7 +390,7 @@ describe('the log as an audit trail', () => {
         e.idx === entry.idx ? { ...e, die: (e.die ^ 0x5f5f5f5f) >>> 0 } : e,
       );
       const out = replayLog(start.state, tampered, map);
-      return out.failed !== null || !same(out.state, played.game.state);
+      return out.failed !== null || !same(out.state, tri(played.game.state));
     });
     expect(diverged.length).toBeGreaterThan(0);
   });
@@ -476,7 +482,7 @@ describe('seat authority', () => {
     // `status` is what the lobby, the roster and every later `judge` read, so it
     // has to follow `state.victory` in the same write, not in a later sweep.
     const played = playComputerSeats(soloTable('bi-planetary'), dice(5), map, 400);
-    expect(played.game.state.victory).not.toBeNull();
+    expect(tri(played.game.state).victory).not.toBeNull();
     expect(played.game.status).toBe('finished');
     const after = judge(played.game, 'mars', { type: 'endPhase', by: 'mars' }, 1, map);
     expect(after.ok === false && after.reason).toMatch(/is over/);
@@ -518,11 +524,11 @@ describe('fog of war', () => {
     // knows the location of the liner", which the scenario declares by name.
     for (const scenario of ['escape', 'lateral-7', 'piracy']) {
       const played = playComputerSeats(soloTable(scenario), dice(5), map, 25);
-      for (const [seat, view] of Object.entries(viewsForAll(played.game, map))) {
-        const published = alwaysVisibleTo(played.game.state, seat);
+      for (const [seat, view] of triViews(played.game)) {
+        const published = alwaysVisibleTo(tri(played.game.state), seat);
         for (const ship of Object.values(view.ships)) {
           const entitled =
-            areAllied(played.game.state, seat, ship.owner) ||
+            areAllied(tri(played.game.state), seat, ship.owner) ||
             ship.destroyed ||
             ship.detectedBy.includes(seat) ||
             published.has(ship.id);
@@ -550,9 +556,9 @@ describe('fog of war', () => {
     const leaks: string[] = [];
     for (const scenario of ['escape', 'lateral-7', 'piracy']) {
       const played = playComputerSeats(soloTable(scenario), dice(5), map, 25);
-      for (const [seat, view] of Object.entries(viewsForAll(played.game, map))) {
+      for (const [seat, view] of triViews(played.game)) {
         const named = allStrings(view);
-        for (const [id, ship] of Object.entries(played.game.state.ships)) {
+        for (const [id, ship] of Object.entries(tri(played.game.state).ships)) {
           if (ship.owner === seat || id in view.ships) continue;
           if (named.has(id)) leaks.push(`${scenario}/${seat}: ${id} at ${pathsTo(view, id)[0]}`);
         }
@@ -569,8 +575,8 @@ describe('fog of war', () => {
     const leaks: string[] = [];
     for (const scenario of ['escape', 'lateral-7', 'piracy']) {
       const played = playComputerSeats(soloTable(scenario), dice(5), map, 25);
-      for (const [seat, view] of Object.entries(viewsForAll(played.game, map))) {
-        for (const ship of Object.values(played.game.state.ships)) {
+      for (const [seat, view] of triViews(played.game)) {
+        for (const ship of Object.values(tri(played.game.state).ships)) {
           if (ship.owner === seat || ship.id in view.ships) continue;
           const label = shipLabel(ship);
           const heard = view.log.find((e) => e.text.includes(label));
@@ -583,7 +589,7 @@ describe('fog of war', () => {
 
   it('gives a spectator of a fog game nothing at all', () => {
     const g = table('escape');
-    const view = viewFor(g, null, map);
+    const view = tri(viewFor(g, null, map));
     expect(Object.keys(view.ships)).toHaveLength(0);
     expect(view.rng.seed).toBe(0);
   });
@@ -615,7 +621,7 @@ describe('the computer’s seats', () => {
       g = accepted(judge(g, 'mars', { type: 'endPhase', by: 'mars' }, roll(), map)).game;
       const ai = playComputerSeats(g, roll, map);
       g = ai.game;
-      orders.push(...ai.logged.map((e) => e.cmd));
+      orders.push(...ai.logged.map((e) => e.cmd as Command));
     }
     expect(orders.length).toBeGreaterThan(0);
     expect(orders.every((c) => c.by === 'venus')).toBe(true);
@@ -635,7 +641,7 @@ describe('the computer’s seats', () => {
       g = accepted(judge(g, 'mars', { type: 'endPhase', by: 'mars' }, roll(), map)).game;
       const ai = playComputerSeats(g, roll, map);
       g = ai.game;
-      expect({ step: i, owed: aiHasMove(g.state, computers, map) }).toEqual({
+      expect({ step: i, owed: aiHasMove(tri(g.state), computers, map) }).toEqual({
         step: i,
         owed: false,
       });
@@ -644,7 +650,7 @@ describe('the computer’s seats', () => {
 
   it('plays a whole game out and stops at victory', () => {
     const played = playComputerSeats(soloTable('bi-planetary'), dice(5), map, 400);
-    expect(played.game.state.victory?.winners.length).toBeGreaterThan(0);
+    expect(tri(played.game.state).victory?.winners.length).toBeGreaterThan(0);
     expect(played.game.status).toBe('finished');
     // Well short of the budget: hitting the limit would mean the loop stopped
     // for the one reason that is always a bug.
@@ -655,7 +661,7 @@ describe('the computer’s seats', () => {
     const g = soloTable('bi-planetary');
     const decided: StoredGame = {
       ...g,
-      state: { ...g.state, victory: { winners: ['mars'], level: 'decisive', reason: 'test' } },
+      state: { ...tri(g.state), victory: { winners: ['mars'], level: 'decisive', reason: 'test' } },
     };
     expect(playComputerSeats(decided, dice(5), map).logged).toHaveLength(0);
   });
@@ -702,7 +708,10 @@ describe('the computer’s seats', () => {
     // Nothing done, nothing to publish.
     const decided: StoredGame = {
       ...fogged,
-      state: { ...fogged.state, victory: { winners: ['pilgrims'], level: 'moral', reason: 'x' } },
+      state: {
+        ...tri(fogged.state),
+        victory: { winners: ['pilgrims'], level: 'moral', reason: 'x' },
+      },
     };
     expect(playComputerSeats(decided, dice(5), map).views).toEqual({});
   });

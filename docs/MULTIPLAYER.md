@@ -316,9 +316,12 @@ supabase/migrations/0001_schema.sql    the tables a game lives in
 supabase/migrations/0002_policies.sql  who may read what, and nobody may write
 supabase/migrations/0003_apply.sql     accepting an order, atomically
 supabase/migrations/0004_throttle.sql  a cost for guessing join codes
+supabase/migrations/0005_kinds.sql     two games at one table, and a password
 supabase/functions/game/index.ts       the referee on the wire
 src/net/supabase/protocol.ts           the contract between the two
 src/net/supabase/referee.ts            the rules loop, with no I/O in it
+src/net/kinds.ts                       what the referee asks of a game's rules
+src/net/ogreRules.ts                   the ground game, answering it
 src/net/supabase/client.ts             the browser side
 ```
 
@@ -399,6 +402,48 @@ Realtime respects all of this for free, because a row reaches a subscriber only
 if row level security would let that subscriber select it. The policies _are_
 the streaming rules.
 
+### Two games, one referee
+
+The referee never names an engine. Everything it needs from a game is the
+`KindRules` interface in `src/net/kinds.ts` — build a board from a seed and
+setup, apply one command with a die, seal the generator, redact for a seat,
+plan the computer's orders, and summarise (turn, finished, fog, seats) — and a
+table's `games.kind` says which rules to fetch. `tri` is Triplanetary; `ogre`
+is the ground game, answered by `src/net/ogreRules.ts`, whose actor is whoever
+the board says is deciding: the seat deploying, the seat firing in an overrun,
+or the active player. The browser client fetches the same rules once the
+referee has said which table it joined, and the Ogre engine is loaded on
+demand so a fleet table never pays for it.
+
+Two things follow. The ground game is open information, so its log streams to
+every seat the way an unfogged fleet game's does, and every browser rebuilds
+the board by replay — the referee's sealed die included. And the computer's
+seats are the referee's to play: `playComputerSeats` asks the ported AI for a
+plan and runs it through the same judge a person's orders go through, order
+by order, until the decision is a human's again.
+
+### A password instead of an account
+
+Nobody at these tables has a login. What a player has is a six-letter code
+and the password the host read out with it, and that pair is the whole gate
+for a refereed table now, as it always was for a quick one. The referee hashes
+the password (salted SHA-256, `v1$salt$digest`, via Web Crypto) into
+`game_secrets.password`, which no client may read; a wrong password is
+answered as "no table on that code" and charged as a throttle miss, so the
+code and the password are one guess rather than two. A table opened with no
+password — every table from before 0005 — still opens on its code alone.
+
+The password is also how a seat survives a lost browser. A seat belongs to the
+anonymous account that took it, and that account lives in one browser's
+storage: clear it, or come back on a phone, and the seat reads as somebody
+else's. `reclaim_seat` takes it back — the password proves the caller belongs
+at the table, the seat's name says which chair is theirs, and the previous
+holder is dropped, any other seat the claimant held being vacated in the same
+transaction. Only a locked table offers it, and never for a computer's seat.
+A quick table has no names to prove, since everyone at it knows the one
+password; its answer is the clock — a seat nobody has been heard from in a
+while is open again, and sitting there is the reclaim.
+
 ### The attacks it is built against
 
 Assume a player with a genuine account, a genuine seat, the client source in
@@ -421,7 +466,11 @@ front of them, and `curl`. In rough order of how much they would gain:
   history is the one holding the service key.
 - **Guess a join code.** Uniform refusals give nothing away, but a hit announces
   itself, so misses are budgeted per account: twenty in ten minutes, then the
-  answer is the same refusal either way.
+  answer is the same refusal either way. A wrong password is a miss on the same
+  budget, and the same refusal.
+- **Take a seat with the code alone.** A locked table's join checks the password
+  before it looks at the seats, and a reclaim is a join, so nobody at the table
+  can be unseated by anyone who is not already let in.
 - **Predict the dice.** See the sealed die above.
 
 ### What is deliberately _not_ defended
@@ -436,6 +485,10 @@ front of them, and `curl`. In rough order of how much they would gain:
   `select *`, which is what Realtime's row authorisation appears to do. Breaking
   the roster stream to hide a uuid from somebody already looking at your ships is
   the wrong trade.
+- **A friend with the password taking your seat.** Anyone let in can reclaim
+  any human seat by name. Among people who chose to sit down together that is
+  the feature — it is how you get your own seat back — and the roster shows who
+  did it.
 - **Denial of service beyond the throttle.** Supabase's own limits do the rest.
 
 ### Testing it without a Supabase project
@@ -445,7 +498,10 @@ Both halves are testable with nothing running:
 - `tests/supabase-referee.test.ts` drives the rules loop directly. It is the
   `server/room.ts` trick again — keep the decisions in pure functions and the
   I/O somewhere else — and it proves the sealed die, seat authority, exact
-  replay, per-seat fog, and the computer's seats.
+  replay, per-seat fog, and the computer's seats. `tests/supabase-ogre.test.ts`
+  does the same for a ground table: the deploying seat is the actor, the
+  computer plays through deployment, a replay rebuilds the board, and a
+  password hashes, verifies and reclaims.
 - `tests/supabase-schema.test.ts` boots **real PostgreSQL** in WebAssembly
   (PGlite), runs the migration files read off disk, and then attacks them. Every
   denial in the table above is its own case, named for its attack, and the suite

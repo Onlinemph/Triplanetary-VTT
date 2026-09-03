@@ -16,6 +16,7 @@ import type { GameMap } from '@engine/map.js';
 import type { GameOptions, GameState, PlayerId } from '@engine/types.js';
 import type { CampaignCommand, CampaignState } from '@campaign/engine.js';
 import type { BattleResult, OrderOfBattle } from '@campaign/orders.js';
+import type { GameKind } from '@net/kinds.js';
 import type { SeatInfo, TableInfo } from '@net/supabase/protocol.js';
 import type { RenderView } from '@render/renderer.js';
 
@@ -170,8 +171,22 @@ export interface TableEvents {
  * the shell does to that session moves the board — every order leaves through
  * `send` and comes back as a state somebody else computed.
  */
+/**
+ * A board the shell does not read itself: the ground game's, kept current by
+ * the referee. The Ogre view adopts each snapshot the way it adopts a save.
+ */
+export interface BoardPort {
+  /** The latest state the referee sent, typed by whoever mounts the game. */
+  readonly state: unknown;
+  /** Fires after every new snapshot. Returns an unsubscribe function. */
+  subscribe(fn: () => void): () => void;
+}
+
 export interface TablePort {
-  readonly session: SessionPort;
+  /** The Triplanetary session behind a space table; null at a ground table. */
+  readonly session: SessionPort | null;
+  /** The ground board behind an Ogre table; null at a space table. */
+  readonly board: BoardPort | null;
   readonly seat: PlayerId | null;
   readonly table: TableInfo | null;
   readonly link: LinkState;
@@ -181,8 +196,14 @@ export interface TablePort {
   start(): Promise<void>;
   /** Move to another open seat, or stand up to watch with `null`. */
   sit(seat: PlayerId | null): Promise<void>;
+  /**
+   * Take a seat back that another browser (or this one, before its storage
+   * was cleared) still holds: the table password plus the name on the seat
+   * is the proof. Only a locked table has a password to check.
+   */
+  reclaim(seat: PlayerId): Promise<void>;
   /** Give an order. False when the referee refused it. */
-  send(cmd: Command): Promise<boolean>;
+  send(cmd: Command | object): Promise<boolean>;
   /** Vacate the seat and stop listening. */
   leave(): Promise<void>;
   /** Stop listening without vacating, so the seat is still ours to resume. */
@@ -202,10 +223,16 @@ export interface TablePort {
 export type OnlineMode = 'quick' | 'refereed';
 
 export interface HostOptions extends ScenarioBuildOptions {
+  /** Which game the table plays. Omitted means Triplanetary. */
+  readonly kind?: GameKind;
   readonly scenarioId: string;
   readonly computerSeats: ComputerSeats;
   readonly mode?: OnlineMode;
-  /** Required by a `quick` table, meaningless to a refereed one. */
+  /**
+   * The table's password. A `quick` table cannot open without one; a refereed
+   * table locks its seats behind it, so a player who lost their browser can
+   * prove a seat is theirs.
+   */
   readonly password?: string;
 }
 

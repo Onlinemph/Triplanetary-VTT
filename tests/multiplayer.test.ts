@@ -28,6 +28,7 @@ import {
   viewFor,
   viewsForAll,
 } from '../src/net/supabase/referee.js';
+import type { AnyState } from '../src/net/kinds.js';
 
 const map = DEFAULT_MAP;
 
@@ -282,12 +283,15 @@ const played = (scenarioId: string, orders: number, seed = 7): StoredGame => {
 
 const FOG_SCENARIOS = ['escape', 'lateral-7', 'piracy'] as const;
 
+/** These tests are about the fleet game's fog; the referee's board is typed for either game. */
+const tri = (state: AnyState): GameState => state as GameState;
+
 /** Ships the real board holds that this payload has no business mentioning. */
 const forbidden = (game: StoredGame, view: GameState): string[] => {
   const shown = new Set(Object.keys(view.ships));
   const names = allStrings(view);
-  return Object.keys(game.state.ships).filter(
-    (id) => !shown.has(id) && !game.state.ships[id]!.destroyed && names.has(id),
+  return Object.keys(tri(game.state).ships).filter(
+    (id) => !shown.has(id) && !tri(game.state).ships[id]!.destroyed && names.has(id),
   );
 };
 
@@ -301,10 +305,10 @@ describe('fog of war over the Supabase transport', () => {
     for (const scenario of FOG_SCENARIOS) {
       for (const orders of [25, 60, 120]) {
         const game = played(scenario, orders);
-        expect(game.state.options.fogOfWar).toBe(true);
+        expect(tri(game.state).options.fogOfWar).toBe(true);
         const views = viewsForAll(game, map);
         for (const seat of game.state.playerOrder) {
-          expect({ scenario, orders, seat, leaked: forbidden(game, views[seat]!) }).toEqual({
+          expect({ scenario, orders, seat, leaked: forbidden(game, tri(views[seat]!)) }).toEqual({
             scenario,
             orders,
             seat,
@@ -326,7 +330,7 @@ describe('fog of war over the Supabase transport', () => {
     for (const scenario of FOG_SCENARIOS) {
       for (const orders of [25, 60, 120]) {
         const game = played(scenario, orders);
-        const leaked = forbidden(game, viewFor(game, null, map));
+        const leaked = forbidden(game, tri(viewFor(game, null, map)));
         expect({ scenario, orders, leaked }).toEqual({ scenario, orders, leaked: [] });
       }
     }
@@ -341,11 +345,11 @@ describe('fog of war over the Supabase transport', () => {
     for (const scenario of FOG_SCENARIOS) {
       const game = played(scenario, 120);
       for (const seat of game.state.playerOrder) {
-        const view = viewFor(game, seat, map);
+        const view = tri(viewFor(game, seat, map));
         const focused = new Set(
           view.log.flatMap((e) => (e.focus ?? []).map((h) => `${h.q},${h.r}`)),
         );
-        const leaked = Object.values(game.state.ships)
+        const leaked = Object.values(tri(game.state).ships)
           .filter(
             (s) => !(s.id in view.ships) && !s.destroyed && focused.has(`${s.pos.q},${s.pos.r}`),
           )
@@ -382,12 +386,12 @@ describe('fog of war over the Supabase transport', () => {
     }));
     const table: StoredGame = { ...game, seats };
 
-    const before = new Set(Object.keys(viewFor(table, mine, map).ships));
+    const before = new Set(Object.keys(tri(viewFor(table, mine, map)).ships));
     const vacated: StoredGame = { ...table, seats: leaveSeat(table, 'user-2') };
     const hop = takeSeat(vacated, 'user-0', theirs, undefined, 2);
 
     const gained = hop.ok
-      ? Object.keys(viewFor({ ...vacated, seats: hop.seats! }, theirs, map).ships).filter(
+      ? Object.keys(tri(viewFor({ ...vacated, seats: hop.seats! }, theirs, map)).ships).filter(
           (id) => !before.has(id),
         )
       : [];

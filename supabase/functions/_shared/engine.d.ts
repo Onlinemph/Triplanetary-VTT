@@ -5,6 +5,8 @@
 
 export * from '../../../src/net/supabase/protocol.js';
 export * from '../../../src/net/supabase/referee.js';
+export * from '../../../src/net/kinds.js';
+export * from '../../../src/net/rulesAll.js';
 export * from '../../../src/net/redact.js';
 export * from '../../../src/scenarios/index.js';
 export * from '../../../src/engine/index.js';

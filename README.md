@@ -132,8 +132,11 @@ nobody shooting, and six exercises in vector movement graded against par.
 
 ### Playing with other people, over the internet
 
-Sit at a table, share a six-character code, and play from anywhere. There are
-two arrangements, and the game offers both on the same screen.
+Sit at a table, share a six-character code and a password, and play from
+anywhere. There are two arrangements, and the game offers both on the same
+screen. Nobody needs an account: the code and the password are what a player
+remembers, and a player who comes back on another browser types the same
+password to take their own seat back.
 
 ### The quick table — one SQL file, nothing deployed
 
@@ -155,7 +158,10 @@ rebuilds the board that the fog exists to hide.
 
 Every order is checked against the rules before it is accepted, each side gets
 only the board it is entitled to, and the fogged scenarios work. It costs a
-deployment.
+deployment. It is also where the ground game is played online: every Ogre
+scenario's picker has a **Host a table** button, the referee keeps the board
+and plays any seat handed to the computer, and the amber battle view runs
+against the referee's board exactly as it runs against a local one.
 
 **From a terminal**, if you have the repository checked out:
 

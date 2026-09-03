@@ -144,6 +144,11 @@ export interface OgrePickerOpts {
    * two-player scenario — or null for hot seat.
    */
   onStart(id: string, seed: number, computer: number | null): void;
+  /**
+   * Open the scenario as an online table instead. Absent when this build has
+   * no referee to host it, in which case the picker offers no such door.
+   */
+  onHost?(id: string, seed: number, computer: number | null): void;
   onBack(): void;
   onClose?(): void;
 }
@@ -171,6 +176,15 @@ export const openOgrePicker = (host: HTMLElement, o: OgrePickerOpts): Overlay =>
     ...(o.onClose ? { onClose: o.onClose } : {}),
     actions: [
       { label: 'All games', variant: 'ghost', onClick: o.onBack },
+      ...(o.onHost
+        ? [
+            {
+              label: 'Host a table',
+              variant: 'quiet' as const,
+              onClick: () => o.onHost?.(selected, seed, computer),
+            },
+          ]
+        : []),
       {
         label: 'Take the field',
         variant: 'primary',
@@ -201,7 +215,7 @@ export const openOgrePicker = (host: HTMLElement, o: OgrePickerOpts): Overlay =>
             { class: 'scenario-meta mono' },
             el('span', { text: pluralise(s.players, 'player') }),
             el('span', { class: 'dot-sep', text: '·' }),
-            el('span', { text: 'hot seat or solo' }),
+            el('span', { text: o.onHost ? 'hot seat, solo or online' : 'hot seat or solo' }),
           ),
           el('span', { class: 'scenario-blurb', text: s.blurb }),
         ),
@@ -239,7 +253,9 @@ export const openOgrePicker = (host: HTMLElement, o: OgrePickerOpts): Overlay =>
         el('h3', { class: 'sect-title', text: 'The table' }),
         el('p', {
           class: 'hint',
-          text: 'Pass the keyboard, or hand a seat to the computer. The amber board takes the whole screen until the battle is decided.',
+          text: o.onHost
+            ? 'Pass the keyboard, hand a seat to the computer, or host a table and send a friend the code. The amber board takes the whole screen until the battle is decided.'
+            : 'Pass the keyboard, or hand a seat to the computer. The amber board takes the whole screen until the battle is decided.',
         }),
         el(
           'div',
