@@ -41,6 +41,8 @@ export { CODE_ALPHABET, CODE_LENGTH, PRESENCE_MS, codeFrom, isCode, replayLog } 
 export {
   QuickTable,
   fingerprint,
+  codeFor,
+  CODE_TAKEN,
   type QuickEvents,
   type QuickLike,
   type QuickListing,

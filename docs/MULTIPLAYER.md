@@ -470,6 +470,44 @@ if there is none. The referee also sends every table a `title` and a `brief`
 (the map, the forces, the terms) so a lobby can describe a setup it has no
 engine to read.
 
+### Both games at a quick table
+
+The quick table carries both games too, and for the same reason the referee
+does: nothing in `quick.ts` knows either rulebook. A row names its `kind`, the
+client asks `KindRules` to build the opening position and to apply each move
+with the die Postgres drew, and the ground game's engine is fetched only by a
+browser that sits down at a ground table. The fingerprint that catches drift
+covers both boards — where every ship is with what left in it, or where every
+counter is with how much of it is still working.
+
+What a quick table cannot do is play a seat. The computer's seat is the
+referee's, so a ground table with one is refereed-only and the host dialog
+says why; two people at a quick table play each other.
+
+`schema.sql` is written to be re-pasted, and this change is why that matters:
+an install from before both games were carried gains `tri_tables.kind` with an
+`alter table ... add column if not exists`, and every table it already had
+keeps working as the fleet game. `tri_host` gained two arguments, so the old
+signature is dropped before the new one is created — two functions of that
+name and PostgREST could not tell a call for one from a call for the other.
+
+### The frozen sky at a quick table
+
+There is no referee to open the ground battle's table and announce it, so
+every browser at the war works out the same code instead: `codeFor(parentCode,
+battleId)`, which is FNV-1a over the two things everybody already has, mapped
+into the schema's own alphabet. `tri_host` takes that code (`p_code`), opens
+the table under it if it is free, and raises `code-taken` if it is not — which
+is the answer the second browser wanted, because it means the table is
+standing and it should join. The battle inherits the war's password, so
+everyone let into the war is let into its battle.
+
+Carrying the verdict home is the browser's job here rather than the server's.
+A decided board is read for its `BattleResult`, the war is rejoined, and the
+result is posted into its move list as `resolveGroundBattle` — which any
+seated player may give, so both try and the second finds the war no longer
+waiting and stands down.
+
 ### The frozen sky, online: child tables
 
 Orbital Drop freezes the sky when landers are down and hands the ground

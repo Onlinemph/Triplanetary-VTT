@@ -15,6 +15,13 @@
 -- same rules on the same list and lands on the same board. It is the model a
 -- group of friends wants: paste one file, share a code and a password, play.
 --
+-- It carries both games. A table names its `kind` — `tri` for the fleet game,
+-- `ogre` for the ground one — and nothing else here changes, because nothing
+-- here knows either rulebook: a game is a scenario, a seed and an ordered list
+-- of moves whichever engine reads them. A war that hands off to a ground
+-- battle opens a second table for it, at a code both browsers work out for
+-- themselves from this table's code, so the hand-off needs no referee either.
+--
 -- **The other** (`supabase/migrations/`, plus an Edge Function) puts a referee
 -- on the server. It judges every order against the rules before accepting it,
 -- and it can hold a board that no player is allowed to see in full.
@@ -98,6 +105,12 @@ create table if not exists tri_tables (
   updated_at    timestamptz not null default now()
 );
 
+-- Which game is on the table. Added after the fact, so an install from before
+-- both games were carried keeps every table it already had, as the fleet game.
+alter table tri_tables
+  add column if not exists kind text not null default 'tri'
+  check (kind in ('tri', 'ogre'));
+
 create table if not exists tri_moves (
   code       text        not null references tri_tables(code) on delete cascade,
   idx        integer     not null,
@@ -174,12 +187,19 @@ $$;
 -- level security — and each checks the table password before doing anything.
 -- That check is the whole model: know the code and the password, join the game.
 
+-- The signature gained two arguments, so the old one goes first: leaving it
+-- would make two functions of this name and PostgREST could not tell a call
+-- for one from a call for the other.
+drop function if exists tri_host(text, text, jsonb, text, boolean);
+
 create or replace function tri_host(
   p_password text,
   p_scenario text,
   p_setup    jsonb,
   p_name     text default '',
-  p_listed   boolean default true
+  p_listed   boolean default true,
+  p_kind     text default 'tri',
+  p_code     text default null
 )
 returns text
 language plpgsql
@@ -200,24 +220,39 @@ begin
       'Fog of war needs the refereed mode — this one relays moves, and the move list gives the hidden board away. Play this scenario hot-seat, solo, or on a refereed table.';
   end if;
 
-  for _ in 1 .. 12 loop
-    -- Crockford-ish: no I, O, U or numbers that read as letters, because this
-    -- gets read aloud and typed in by somebody else.
-    v_code := (
-      select string_agg(substr('ABCDEFGHJKMNPQRSTVWXYZ23456789', 1 + (get_byte(b, i) % 30), 1), '')
-        from (select gen_random_bytes(6) as b) s, generate_series(0, 5) as i
-    );
-    exit when not exists (select 1 from tri_tables t where t.code = v_code);
-    v_code := null;
-  end loop;
-
-  if v_code is null then
-    raise exception 'Could not find a free table code. Try again.';
+  if coalesce(p_kind, 'tri') not in ('tri', 'ogre') then
+    raise exception 'There is no game by that name.';
   end if;
 
-  insert into tri_tables (code, name, password_hash, scenario_id, setup, listed)
+  -- A caller may name the code it wants. That is how a war opens the table for
+  -- its ground battle without a referee to mint one: every browser at the war
+  -- works out the same code, the first to arrive opens it, and the rest are
+  -- told it is taken and go and join it.
+  if coalesce(p_code, '') <> '' then
+    v_code := upper(trim(p_code));
+    if exists (select 1 from tri_tables t where t.code = v_code) then
+      raise exception 'code-taken';
+    end if;
+  else
+    for _ in 1 .. 12 loop
+      -- Crockford-ish: no I, O, U or numbers that read as letters, because this
+      -- gets read aloud and typed in by somebody else.
+      v_code := (
+        select string_agg(substr('ABCDEFGHJKMNPQRSTVWXYZ23456789', 1 + (get_byte(b, i) % 30), 1), '')
+          from (select gen_random_bytes(6) as b) s, generate_series(0, 5) as i
+      );
+      exit when not exists (select 1 from tri_tables t where t.code = v_code);
+      v_code := null;
+    end loop;
+
+    if v_code is null then
+      raise exception 'Could not find a free table code. Try again.';
+    end if;
+  end if;
+
+  insert into tri_tables (code, name, password_hash, scenario_id, setup, listed, kind)
   values (v_code, coalesce(p_name, ''), crypt(p_password, gen_salt('bf')),
-          p_scenario, p_setup, coalesce(p_listed, true));
+          p_scenario, p_setup, coalesce(p_listed, true), coalesce(p_kind, 'tri'));
 
   return v_code;
 end;
@@ -245,6 +280,7 @@ begin
     'code', t.code,
     'name', t.name,
     'scenarioId', t.scenario_id,
+    'kind', t.kind,
     'setup', t.setup,
     'seats', (
       -- The keys are secrets. Names and claim times are not.
@@ -475,6 +511,7 @@ as $$
              'code', t.code,
              'name', t.name,
              'scenarioId', t.scenario_id,
+             'kind', t.kind,
              'turn', t.turn,
              'seats', (select count(*) from jsonb_each(t.seats)),
              'updatedAt', t.updated_at
@@ -517,7 +554,7 @@ grant select on tri_moves to anon, authenticated;
 
 revoke execute on function tri_roll() from public, anon, authenticated;
 
-grant execute on function tri_host(text, text, jsonb, text, boolean) to anon, authenticated;
+grant execute on function tri_host(text, text, jsonb, text, boolean, text, text) to anon, authenticated;
 grant execute on function tri_open(text, text)                       to anon, authenticated;
 grant execute on function tri_since(text, text, integer)             to anon, authenticated;
 grant execute on function tri_sit(text, text, text, text, text)      to anon, authenticated;

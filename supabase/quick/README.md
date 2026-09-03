@@ -1,8 +1,12 @@
 # Online tables, with nothing to deploy
 
-Play Triplanetary with somebody across the internet. No command line, no
-account, no server to run. You paste one file into a web page, copy two values
-out of it, and that is the setup.
+Play with somebody across the internet. No command line, no account, no server
+to run. You paste one file into a web page, copy two values out of it, and
+that is the setup.
+
+It carries both games. Triplanetary, Ogre, a battle designed in the battle
+builder and an Orbital Drop war all sit at a table of this kind, and a war
+opens a second table for each of its ground battles by itself.
 
 There is a second, heavier way to play online in this repository — a referee
 that runs on Supabase and judges every move. [Which one you want](#which-of-the-two-you-want)
@@ -76,6 +80,11 @@ Then **Play online** → choose **Quick table**, type a password, and open the
 table. You get a six-character code. Read the code and the password out to
 whoever is playing; they press **Join with a code** and type both.
 
+An Ogre battle opens the same way, from **Host a table** in the Ogre scenario
+picker or the battle builder. A war that freezes its sky for a ground battle
+opens that battle's table on its own: everyone at the war is taken to it, and
+brought back when it is decided.
+
 Share them however you like. Anyone with both can sit down.
 
 ## Housekeeping
@@ -145,6 +154,8 @@ hot-seat, solo, or on the refereed mode.
 | Rules enforced by                             | each browser           | the server                       |
 | A modified client can propose an illegal move | yes, and others notice | no                               |
 | Fog-of-war scenarios                          | refused                | supported                        |
+| A seat played by the computer                 | no                     | yes                              |
+| Triplanetary, Ogre, the war between them      | all three              | all three                        |
 | Accounts                                      | none                   | anonymous, automatic             |
 
 Both use the same rules, the same map and the same dice discipline. They can

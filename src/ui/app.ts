@@ -2076,12 +2076,9 @@ export const createApp = (deps: AppDeps): App => {
       // Online, the ground battle is not this browser's to build. A refereed
       // table gets a child table from the referee, and `refreshTable` hops to
       // it; a quick table has no referee to open one.
-      if (t.mode === 'quick') {
-        act.notify(
-          'The sky is frozen, but a quick table has no referee to fight the ground battle. Host the war as a refereed table to play it through.',
-          'warn',
-        );
-      }
+      // A refereed table gets its child from the referee, and `refreshTable`
+      // hops to it; a quick table opens its own.
+      if (t.mode === 'quick') void hopToQuickBattle(t, order);
       return;
     }
     void mountOrbitalBattle(order);
@@ -2125,13 +2122,13 @@ export const createApp = (deps: AppDeps): App => {
       onCustom: () => void openCustomBuilder(),
       // A ground table needs the referee: it keeps the board and plays the
       // computer's seat, so a quick table cannot hold one.
-      ...(online.available && online.modes.includes('refereed')
+      ...(online.available
         ? {
             onHost: (id: string, battleSeed: number, computer: number | null) => {
               openHostDialog(overlays, {
-                modes: ['refereed'],
-                onHost: (_mode, password) =>
-                  void hostOgreTable(id, battleSeed, computer, password, undefined),
+                ...groundModes(computer),
+                onHost: (mode, password) =>
+                  void hostOgreTable(id, battleSeed, computer, password, undefined, mode),
                 onCancel: () => void openOgreScenarios(),
               });
             },
@@ -2274,13 +2271,13 @@ export const createApp = (deps: AppDeps): App => {
       onBack: () => void openOgreScenarios(),
       onStart: (order, computer) =>
         void openOgreScenario(order.scenarioId, order.seed, seats(computer), null, order),
-      ...(online.available && online.modes.includes('refereed')
+      ...(online.available
         ? {
             onHost: (order: OrderOfBattle, computer: number | null) => {
               openHostDialog(overlays, {
-                modes: ['refereed'],
-                onHost: (_mode, password) =>
-                  void hostOgreTable(order.scenarioId, order.seed, computer, password, order),
+                ...groundModes(computer),
+                onHost: (mode, password) =>
+                  void hostOgreTable(order.scenarioId, order.seed, computer, password, order, mode),
                 onCancel: () => void openCustomBuilder(order),
               });
             },
@@ -2290,12 +2287,32 @@ export const createApp = (deps: AppDeps): App => {
   };
 
   /** Open a refereed table for a printed Ogre scenario, and share the code. */
+  /**
+   * Which arrangements a ground table may use.
+   *
+   * Both, until somebody hands a seat to the computer: a quick table has no
+   * referee, and the computer's seat is the referee's to play. Rather than
+   * open a table with a chair nobody is ever in, the choice narrows and says
+   * why.
+   */
+  const groundModes = (
+    computer: number | null,
+  ): { modes: readonly OnlineMode[]; note?: string } => {
+    if (!online.available) return { modes: ['refereed'] };
+    if (computer === null) return { modes: online.modes };
+    return {
+      modes: ['refereed'],
+      note: 'A seat given to the computer needs a refereed table: the referee is what plays it. Choose hot seat instead to open a quick table.',
+    };
+  };
+
   const hostOgreTable = async (
     id: string,
     battleSeed: number,
     computer: number | null,
     password: string,
     order: OrderOfBattle | undefined,
+    mode: OnlineMode = 'refereed',
   ): Promise<void> => {
     if (!online.available) return;
     try {
@@ -2308,7 +2325,7 @@ export const createApp = (deps: AppDeps): App => {
             options: {},
             ...(order ? { order } : {}),
             computerSeats: computer === null ? [] : [computer],
-            mode: 'refereed',
+            mode,
             password,
           },
           tableEvents(),
@@ -2362,8 +2379,9 @@ export const createApp = (deps: AppDeps): App => {
         const parent = t.table?.parent;
         if (parent !== undefined && t.table?.status === 'finished') {
           const password = t.password;
+          const mode = t.mode;
           closeTable(false);
-          void returnToParent(parent.code, password);
+          void returnToParent(parent.code, password, mode);
         } else {
           if (parent !== undefined) {
             act.notify(
@@ -2375,6 +2393,19 @@ export const createApp = (deps: AppDeps): App => {
         }
       },
     });
+
+    // With no referee behind the table, carrying the verdict back to the war
+    // is this browser's job; watch the board for one.
+    const parent = info.parent;
+    if (t.mode === 'quick' && parent !== undefined) {
+      const stop = board.subscribe(() => {
+        if (table !== t) {
+          stop();
+          return;
+        }
+        void settleQuickBattle(t, parent.code);
+      });
+    }
   };
 
   // --- The war room ---------------------------------------------------------
@@ -2577,18 +2608,87 @@ export const createApp = (deps: AppDeps): App => {
     }
   };
 
-  const returnToParent = async (code: string, password: string | null): Promise<void> => {
+  const returnToParent = async (
+    code: string,
+    password: string | null,
+    mode: OnlineMode,
+  ): Promise<void> => {
     if (!online.available) return;
     try {
       enterTable(
-        await online.join(code, undefined, tableEvents(), {
-          mode: 'refereed',
-          password: password ?? '',
-        }),
+        await online.join(code, undefined, tableEvents(), { mode, password: password ?? '' }),
       );
     } catch (err) {
       act.notify(`Could not return to the war: ${reasonOf(err)}`, 'bad');
       act.newGame();
+    }
+  };
+
+  /**
+   * The frozen sky at a table with no referee.
+   *
+   * There is nobody on the server to open the ground battle's table, so every
+   * browser at the war opens the same one: the code falls out of the war's own
+   * code and the battle's id, the first to arrive creates it, and the rest sit
+   * down at it.
+   */
+  const hopToQuickBattle = async (from: TablePort, order: OrderOfBattle): Promise<void> => {
+    if (!online.available || hopping) return;
+    hopping = true;
+    try {
+      const info = from.table;
+      if (info === null) return;
+      enterTable(
+        await online.battleTable(
+          { code: info.code, password: from.password },
+          order,
+          tableEvents(),
+        ),
+      );
+      act.notify(
+        'The sky is frozen. The ground battle is at its own table; the war resumes when it is decided.',
+        'info',
+      );
+    } catch (err) {
+      act.notify(`Could not open the ground battle: ${reasonOf(err)}`, 'bad');
+    } finally {
+      hopping = false;
+    }
+  };
+
+  /**
+   * Take a decided battle's result back to the war that froze for it.
+   *
+   * A refereed table has this done for it — the referee settles the parent the
+   * moment the child ends. Here the browser does it: rejoin the war, and post
+   * the result if nobody else has yet. Both players will try; the second one
+   * finds the war no longer waiting and quietly stands down.
+   */
+  let settling = false;
+  const settleQuickBattle = async (child: TablePort, parentCode: string): Promise<void> => {
+    if (!online.available || settling) return;
+    const board = child.board?.state;
+    if (board === undefined || board === null) return;
+    const result = await online.resultOf(board);
+    if (result === null) return;
+    settling = true;
+    const password = child.password;
+    try {
+      closeGroundBattle();
+      closeTable(false);
+      await returnToParent(parentCode, password, 'quick');
+      const war = table;
+      const pending = orbitalPending();
+      if (war === null || pending === null || pending.battleId !== result.battleId) return;
+      if (war.seat === null) {
+        act.notify('The battle is decided, but you hold no seat at the war to report it.', 'warn');
+        return;
+      }
+      await war.send({ type: 'resolveGroundBattle', by: war.seat, result });
+    } catch (err) {
+      act.notify(`The result could not be reported: ${reasonOf(err)}`, 'bad');
+    } finally {
+      settling = false;
     }
   };
 

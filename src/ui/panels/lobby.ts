@@ -170,6 +170,8 @@ export const openHostDialog = (
   host: HTMLElement,
   o: {
     modes: readonly OnlineMode[];
+    /** Why the choice is narrower than usual, when it is. */
+    note?: string;
     onHost(mode: OnlineMode, password: string): void;
     onCancel?(): void;
   },
@@ -245,7 +247,13 @@ export const openHostDialog = (
     title: 'Play online',
     subtitle:
       o.modes.length > 1 ? 'Two ways to sit at a table' : 'Open a table and invite somebody',
-    body: el('div', { class: 'host-form' }, ...(o.modes.length > 1 ? choices : []), passwordRow),
+    body: el(
+      'div',
+      { class: 'host-form' },
+      o.note !== undefined ? el('p', { class: 'hint', text: o.note }) : null,
+      ...(o.modes.length > 1 ? choices : []),
+      passwordRow,
+    ),
     onClose: () => {
       if (!submitted) o.onCancel?.();
     },

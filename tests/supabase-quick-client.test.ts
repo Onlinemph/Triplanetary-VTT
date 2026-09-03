@@ -27,8 +27,16 @@ import { pgcrypto } from '@electric-sql/pglite/contrib/pgcrypto';
 import { GameSession } from '../src/net/session.js';
 import { DEFAULT_MAP } from '../src/engine/map.js';
 import { buildScenario } from '../src/scenarios/index.js';
-import { QuickTable, fingerprint, type QuickLike } from '../src/net/supabase/quick.js';
-import type { ChannelLike } from '../src/net/supabase/client.js';
+import {
+  CODE_TAKEN,
+  QuickTable,
+  codeFor,
+  fingerprint,
+  type QuickLike,
+} from '../src/net/supabase/quick.js';
+import type { ChannelLike, RulesSource, SessionSink } from '../src/net/supabase/client.js';
+import { type AnyState, triRules } from '../src/net/kinds.js';
+import { OGRE_RULES, actorOf, asOgreState } from '../src/net/ogreRules.js';
 import type { OrderOfBattle } from '../src/campaign/orders.js';
 
 const SCHEMA = readFileSync(
@@ -466,3 +474,151 @@ describe('the fingerprint itself', () => {
     expect(fingerprint({ ...a, rng: { seed: 999 } })).toBe(fingerprint(a));
   });
 });
+
+// ---------------------------------------------------------------------------
+// The ground game, on the same kind of table
+// ---------------------------------------------------------------------------
+
+describe('a ground table', () => {
+  /** Somewhere to put a board, which is all the client asks of a session. */
+  const sink = (): { sink: SessionSink; board: () => AnyState | null } => {
+    let held: AnyState | null = null;
+    return {
+      sink: {
+        adoptSnapshot: (state) => {
+          held = state;
+        },
+      },
+      board: () => held,
+    };
+  };
+
+  const rules: RulesSource = (kind) => (kind === 'ogre' ? OGRE_RULES : triRules());
+
+  const ground = (name: string): { table: QuickTable; board: () => AnyState | null } => {
+    const s = sink();
+    return { table: new QuickTable(backend(), s.sink, {}, name, rules), board: s.board };
+  };
+
+  it('hosts the ground game, and builds its board rather than the fleet game’s', async () => {
+    const ann = ground('Ann');
+    const code = await ann.table.host({
+      scenarioId: 'mark-iii-attack',
+      kind: 'ogre',
+      password: 'pw',
+      setup: { seed: 7 },
+    });
+    expect(code).toMatch(/^[A-Z2-9]{6}$/);
+    expect(ann.table.kind).toBe('ogre');
+    expect(ann.table.table?.kind).toBe('ogre');
+    const board = ann.board();
+    expect(board !== null && 'units' in board).toBe(true);
+    expect(ann.table.summary()?.title).toBe('Mark III Attack');
+    // And the host is sitting in it: the seats are the ground game's.
+    expect(ann.table.seat).toBe(OGRE_RULES.summary(board!).playerOrder[0]);
+  });
+
+  it('plays a move between two browsers, and both land on the same board', async () => {
+    const ann = ground('Ann');
+    const bob = ground('Bob');
+    const code = await ann.table.host({
+      scenarioId: 'mark-iii-attack',
+      kind: 'ogre',
+      password: 'pw',
+      setup: { seed: 7 },
+    });
+    await bob.table.join(code, 'pw');
+    await bob.table.sitAnywhere();
+    expect(fingerprint(bob.board()!)).toBe(fingerprint(ann.board()!));
+
+    // The defence deploys first, and that is the seat Bob took.
+    const actor = actorOf(asOgreState(ann.board()!));
+    expect(bob.table.seat).toBe(actor);
+    expect(await bob.table.send({ type: 'finishSetup', by: actor } as never)).toBe(true);
+
+    // The doorbell: Ann re-reads and applies the same move.
+    await ann.table.join(code, 'pw');
+    expect(fingerprint(ann.board()!)).toBe(fingerprint(bob.board()!));
+    expect(ann.table.index).toBe(1);
+    // The move really moved the game on: deployment has passed to the Ogre.
+    expect(actorOf(asOgreState(ann.board()!))).not.toBe(actor);
+  });
+
+  it('refuses a table whose game this browser has no rules for', async () => {
+    const ann = ground('Ann');
+    const code = await ann.table.host({
+      scenarioId: 'mark-iii-attack',
+      kind: 'ogre',
+      password: 'pw',
+      setup: { seed: 7 },
+    });
+    const fleetOnly = new QuickTable(backend(), sink().sink, {}, 'Bob');
+    await expect(fleetOnly.join(code, 'pw')).rejects.toThrow(/no rules for an? "ogre" table/);
+  });
+
+  it('still opens a fleet table, and calls it the fleet game', async () => {
+    const alice = player('Alice');
+    const code = await alice.table.host({ scenarioId: 'flight-school', password: 'pw' });
+    expect(alice.table.kind).toBe('tri');
+    expect(alice.table.table?.kind).toBe('tri');
+    expect(code).toMatch(/^[A-Z2-9]{6}$/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The code a war's ground battle stands at
+// ---------------------------------------------------------------------------
+
+describe('the code a battle is worked out to be at', () => {
+  it('is the same for everybody, and different for another battle or another war', () => {
+    expect(codeFor('ABCDEF', 'drop-1-luna')).toBe(codeFor('ABCDEF', 'drop-1-luna'));
+    expect(codeFor('abcdef', 'drop-1-luna')).toBe(codeFor('ABCDEF', 'drop-1-luna'));
+    expect(codeFor('ABCDEF', 'drop-2-luna')).not.toBe(codeFor('ABCDEF', 'drop-1-luna'));
+    expect(codeFor('BCDEFG', 'drop-1-luna')).not.toBe(codeFor('ABCDEF', 'drop-1-luna'));
+  });
+
+  it('is a code this schema will actually accept', async () => {
+    const ann = ground2('Ann');
+    const code = codeFor('ABCDEF', 'drop-1-luna');
+    expect(code).toMatch(/^[ABCDEFGHJKMNPQRSTVWXYZ23456789]{6}$/);
+    const opened = await ann.host({
+      scenarioId: 'mark-iii-attack',
+      kind: 'ogre',
+      password: 'pw',
+      code,
+      setup: { seed: 7 },
+    });
+    expect(opened).toBe(code);
+  });
+
+  it('tells the second browser the table is already standing, so it joins instead', async () => {
+    const ann = ground2('Ann');
+    const bob = ground2('Bob');
+    const code = codeFor('ZZZZZZ', 'drop-9-vesta');
+    await ann.host({
+      scenarioId: 'mark-iii-attack',
+      kind: 'ogre',
+      password: 'pw',
+      code,
+      setup: { seed: 3 },
+    });
+    await expect(
+      bob.host({
+        scenarioId: 'mark-iii-attack',
+        kind: 'ogre',
+        password: 'pw',
+        code,
+        setup: { seed: 3 },
+      }),
+    ).rejects.toThrow(new RegExp(CODE_TAKEN));
+    // Which is the answer it wanted: the table is there to be joined.
+    await bob.join(code, 'pw');
+    expect(bob.table?.code).toBe(code);
+  });
+});
+
+/** A ground client with somewhere to put the board, for the code tests. */
+const ground2 = (name: string): QuickTable =>
+  new QuickTable(backend(), { adoptSnapshot: () => undefined }, {}, name, (kind) =>
+    kind === 'ogre' ? OGRE_RULES : triRules(),
+  );

@@ -16,7 +16,6 @@
 /// <reference types="vite/client" />
 
 import { DEFAULT_MAP } from '@engine/map.js';
-import type { Command } from '@engine/commands.js';
 import type { GameOptions, GameState, PlayerId } from '@engine/types.js';
 import { GameSession } from '@net/session.js';
 import {
@@ -27,8 +26,10 @@ import {
   triRules,
 } from '@net/kinds.js';
 import {
+  CODE_TAKEN,
   QuickTable,
   TableClient,
+  codeFor,
   type QuickEvents,
   type QuickLike,
   type SessionSink,
@@ -358,32 +359,40 @@ const quickRelay = (e: TableEvents): QuickEvents => ({
  * so the list is built from the board every browser already has, with the
  * database's claim map saying which of them somebody is sitting in.
  */
-const quickAdopt = (client: QuickTable, session: GameSession, opened: boolean): TablePort => {
+const quickAdopt = (
+  client: QuickTable,
+  s: Sinks,
+  opened: boolean,
+  /** The war this table's battle belongs to, when it is one. */
+  parentCode?: string,
+): TablePort => {
   const table = (): TableInfo | null => {
     const info = client.table;
-    if (!info) return null;
-    const state = session.state;
+    const summary = client.summary();
+    if (!info || !summary) return null;
     const claims = info.seats;
     return {
       id: info.code,
       code: info.code,
-      kind: 'tri',
+      kind: info.kind ?? 'tri',
       locked: true,
       scenarioId: info.scenarioId,
       fog: false,
       status: 'playing',
-      turn: state.turn,
+      turn: summary.turn,
+      title: summary.title,
+      brief: summary.brief,
+      ...(parentCode !== undefined ? { parent: { code: parentCode } } : {}),
       commandCount: client.index,
-      seats: state.playerOrder.map((seat, ordinal): SeatInfo => {
+      seats: summary.playerOrder.map((seat, ordinal): SeatInfo => {
         const claim = claims[seat];
+        const player = summary.players[seat];
         return {
           seat,
           ordinal,
-          faction: state.players[seat]?.faction ?? '',
+          faction: player?.faction ?? '',
           name:
-            claim?.name !== undefined && claim.name !== ''
-              ? claim.name
-              : (state.players[seat]?.name ?? seat),
+            claim?.name !== undefined && claim.name !== '' ? claim.name : (player?.name ?? seat),
           kind: claim ? 'human' : 'open',
           present: claim !== undefined,
           mine: client.seat === seat,
@@ -394,9 +403,13 @@ const quickAdopt = (client: QuickTable, session: GameSession, opened: boolean): 
 
   return {
     mode: 'quick',
-    password: null,
-    session: port(session),
-    board: null,
+    get password() {
+      return client.secret;
+    },
+    // The same split the refereed adapter makes: a fleet table hands the shell
+    // its session, a ground table hands it the board.
+    session: client.kind === 'ogre' ? null : port(s.session),
+    board: client.kind === 'ogre' ? s.board : null,
     get seat() {
       return client.seat;
     },
@@ -413,7 +426,7 @@ const quickAdopt = (client: QuickTable, session: GameSession, opened: boolean): 
     // password. What it has instead is a clock — a seat nobody has been heard
     // from in a while is open again, and sitting there is the reclaim.
     reclaim: (seat) => client.sit(seat),
-    send: (cmd) => client.send(cmd as Command),
+    send: (cmd) => client.send(cmd as AnyCommand),
     leave: () => client.leave(),
     close: () => {
       client.close();
@@ -440,11 +453,19 @@ const online: OnlinePort =
         modes: ['quick', 'refereed'],
         host: async (opts, events): Promise<TablePort> => {
           if (opts.mode === 'quick') {
-            const session = vessel();
-            const client = new QuickTable(await backend(), session, quickRelay(events));
+            const s = sinks();
+            const client = new QuickTable(
+              await backend(),
+              s.sink,
+              quickRelay(events),
+              undefined,
+              rulesFor,
+            );
             await client.host({
               scenarioId: opts.scenarioId,
+              ...(opts.kind !== undefined ? { kind: opts.kind } : {}),
               password: opts.password ?? '',
+              ...(opts.code !== undefined ? { code: opts.code } : {}),
               setup: {
                 ...(opts.seed === undefined ? {} : { seed: opts.seed }),
                 options: optionRecord(opts.options),
@@ -454,7 +475,7 @@ const online: OnlinePort =
                 ...(opts.order ? { order: opts.order } : {}),
               },
             });
-            return quickAdopt(client, session, true);
+            return quickAdopt(client, s, true);
           }
           const s = sinks();
           const client = new TableClient(
@@ -479,8 +500,14 @@ const online: OnlinePort =
         },
         join: async (code, seat, events, jopts): Promise<TablePort> => {
           if (jopts?.mode === 'quick') {
-            const session = vessel();
-            const client = new QuickTable(await backend(), session, quickRelay(events));
+            const s = sinks();
+            const client = new QuickTable(
+              await backend(),
+              s.sink,
+              quickRelay(events),
+              undefined,
+              rulesFor,
+            );
             await client.join(code, jopts.password ?? '');
             // A watcher passes `null` and stays standing. Anyone else sits: a
             // named seat if they asked for one, otherwise the first free chair,
@@ -501,7 +528,7 @@ const online: OnlinePort =
                 }
               } else await client.sit(seat);
             }
-            return quickAdopt(client, session, false);
+            return quickAdopt(client, s, false);
           }
           const s = sinks();
           const client = new TableClient(
@@ -519,6 +546,40 @@ const online: OnlinePort =
           );
           return adopt(client, s, false);
         },
+        battleTable: async (parent, order, events): Promise<TablePort> => {
+          const s = sinks();
+          const client = new QuickTable(
+            await backend(),
+            s.sink,
+            quickRelay(events),
+            undefined,
+            rulesFor,
+          );
+          const code = codeFor(parent.code, order.battleId);
+          const password = parent.password ?? '';
+          try {
+            await client.host({
+              scenarioId: order.scenarioId,
+              kind: 'ogre',
+              password,
+              code,
+              listed: false,
+              setup: { seed: order.seed, order },
+            });
+          } catch (err) {
+            // Somebody at the war opened it first, which is the answer we
+            // wanted: the table is standing, so sit down at it.
+            if (!(err instanceof Error) || !err.message.includes(CODE_TAKEN)) throw err;
+            await client.join(code, password);
+            if ((await client.sitAnywhere()) === null) {
+              events.onRefused?.(
+                'Both sides of the ground battle are taken, so you are watching it.',
+              );
+            }
+          }
+          return quickAdopt(client, s, false, parent.code);
+        },
+        resultOf: async (board) => (await rulesFor('ogre')).settle?.(board as AnyState) ?? null,
         // The invitation is this page with the code on it, so a friend who
         // follows it lands in the lobby rather than on the scenario list.
         linkFor: (code) => {
