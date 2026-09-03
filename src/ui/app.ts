@@ -2354,13 +2354,25 @@ export const createApp = (deps: AppDeps): App => {
       setup: false,
       onExit: () => {
         closeGroundBattle();
-        // A battle fought for a frozen sky leads back to the war it froze.
+        // A battle fought for a frozen sky leads back to the war it froze —
+        // once it is decided. Leaving it undecided leaves the war frozen, and
+        // the war table would only send this browser straight back, so that
+        // door opens on the start menu instead; both tables stay in Your
+        // tables for coming back.
         const parent = t.table?.parent;
-        if (parent !== undefined) {
+        if (parent !== undefined && t.table?.status === 'finished') {
           const password = t.password;
           closeTable(false);
           void returnToParent(parent.code, password);
-        } else leaveTable(false);
+        } else {
+          if (parent !== undefined) {
+            act.notify(
+              `The war at ${parent.code} stays frozen until this battle is decided. Rejoin either table from the start menu.`,
+              'info',
+            );
+          }
+          leaveTable(false);
+        }
       },
     });
   };
