@@ -78,7 +78,7 @@ const SURFACE = [
       'judge',
       'leaveSeat',
       'playComputerSeats',
-      'reclaimSeat',
+      'reclaimSeat, reconfigure',
       'seatOf',
       'tableInfo',
       'takeSeat',

@@ -55,6 +55,7 @@ import { createClient } from 'npm:@supabase/supabase-js@^2.112.3';
 import {
   type AnyCommand,
   type AnyState,
+  type ConfigureRequest,
   type CreateRequest,
   type JoinRequest,
   type LoggedCommand,
@@ -78,6 +79,7 @@ import {
   parsePlayRequest,
   playComputerSeats,
   reclaimSeat,
+  reconfigure,
   rulesFor,
   seatOf,
   tableInfo,
@@ -422,7 +424,7 @@ const createAction = async (req: CreateRequest, userId: string): Promise<Respons
 
 const seated = (game: StoredGame, userId: string, now: number): TableResponse => ({
   ok: true,
-  table: tableInfo(game, userId, now),
+  table: tableInfo(game, userId, now, rulesOfGame(game)),
   seat: seatOf(game, userId),
 });
 
@@ -557,6 +559,53 @@ const leaveAction = async (game: StoredGame, userId: string): Promise<Response> 
  * `playComputerSeats` runs immediately, so a solo table is already waiting on
  * the human by the time this returns rather than after some later poke.
  */
+/**
+ * Change the setup of a table still in its lobby. The same trust boundary as
+ * `create`: the request's JSON is arbitrary until the scenario has looked at
+ * it, and a seed is honoured only for open-information play.
+ */
+const configureAction = async (
+  req: ConfigureRequest,
+  game: StoredGame,
+  userId: string,
+): Promise<Response> => {
+  if (game.hostId !== userId) return refuse('only the host may change the setup');
+  if (game.status !== 'lobby') return refuse('the table has already begun');
+  const rules = rulesOfGame(game);
+  const scenarioId = req.scenarioId ?? game.scenarioId;
+  if (!rules.hasScenario(scenarioId)) return refuse('no scenario by that name');
+  const wantsFog = req.options?.['fogOfWar'] === true;
+  const seed = !wantsFog && typeof req.seed === 'number' ? req.seed >>> 0 : rollDie();
+  let opening: AnyState;
+  try {
+    opening = rules.seal(
+      rules.build(scenarioId, setupFrom(seed, req.options, req.fleets, req.order)),
+    );
+  } catch {
+    return refuse('that scenario cannot be set up with those options');
+  }
+  const summary = rules.summary(opening);
+  const now = Date.now();
+  const change = reconfigure(game, scenarioId, opening, summary, req.computerSeats, now);
+  if (!change.ok) return refuse(change.reason);
+  const { data, error } = await admin.rpc('reconfigure_game', {
+    p_game: game.id,
+    p_host: userId,
+    p_scenario: scenarioId,
+    p_fog: summary.fog,
+    p_seed: seed,
+    p_options: opening.options,
+    p_fleets: req.fleets ?? {},
+    p_state: opening,
+    p_turn: summary.turn,
+    p_seats: change.game.seats.map(seatToInsert),
+  });
+  fail('changing the setup', error);
+  if ((data as { ok: boolean } | null)?.ok !== true)
+    return refuse('the setup could not be changed');
+  return answer(seated(change.game, userId, now));
+};
+
 const startAction = async (game: StoredGame, userId: string): Promise<Response> => {
   if (game.hostId !== userId) return refuse('only the host may start this game');
   const notReady = readyToStart(game);
@@ -745,12 +794,15 @@ const dispatch = async (req: PlayRequest, userId: string): Promise<Response> => 
     case 'command':
       return commandAction(req.gameId, req.cmd, userId, req.seq);
     case 'leave':
-    case 'start': {
+    case 'start':
+    case 'configure': {
       const loaded = await loadGame('id', req.gameId);
       if (loaded === null) return refuse('no such table');
       return req.action === 'leave'
         ? leaveAction(loaded.game, userId)
-        : startAction(loaded.game, userId);
+        : req.action === 'start'
+          ? startAction(loaded.game, userId)
+          : configureAction(req, loaded.game, userId);
     }
   }
 };

@@ -739,3 +739,37 @@ describe('a ground table', () => {
     await expect(client.join('FGKMNP')).rejects.toThrow(/no rules for an? "ogre" table/);
   });
 });
+
+describe('changing the setup from the lobby', () => {
+  it('sends the setup with the table id, and syncs to take the new board', async () => {
+    const { client, supa } = await seated();
+    const before = supa.count('sync');
+    await client.configure({
+      scenarioId: 'client-gunfight',
+      seed: 9,
+      options: { fogOfWar: false },
+      computerSeats: [1],
+    });
+    const sent = supa.sent.find((r) => r.action === 'configure');
+    expect(sent).toMatchObject({
+      action: 'configure',
+      gameId: 'game-1',
+      scenarioId: 'client-gunfight',
+      seed: 9,
+      computerSeats: [1],
+    });
+    expect(supa.count('sync')).toBe(before + 1);
+    client.close();
+  });
+
+  it('surfaces the referee’s refusal', async () => {
+    const { client, supa } = await seated();
+    const answer = supa.answer;
+    supa.answer = (req) =>
+      req.action === 'configure'
+        ? { ok: false, reason: 'only the host may change the setup' }
+        : answer(req);
+    await expect(client.configure({ seed: 1 })).rejects.toThrow(/only the host/);
+    client.close();
+  });
+});

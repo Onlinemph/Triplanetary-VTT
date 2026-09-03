@@ -75,6 +75,7 @@ import {
   TABLES,
   channelFor,
   request,
+  type ConfigureRequest,
 } from './protocol.js';
 import { replayLog } from './referee.js';
 
@@ -189,6 +190,9 @@ export interface TableClientEvents {
 
 /** Everything `create` needs; the protocol's request minus its envelope. */
 export type CreateOptions = Omit<CreateRequest, 'action' | 'v'>;
+
+/** Everything `configure` takes: a lobby's setup, minus the envelope and the table. */
+export type ConfigureOptions = Omit<ConfigureRequest, 'action' | 'v' | 'gameId'>;
 
 /** What a join may add to the code: the table's password, and a claim on a seat. */
 export interface JoinExtras {
@@ -505,6 +509,18 @@ export class TableClient {
     const info = await this.enter(res);
     this.password = password;
     return info;
+  }
+
+  /**
+   * Change the table's setup while it is still in the lobby. The referee
+   * rebuilds the board and the roster and streams both; the sync afterwards
+   * is what puts the new opening position in this client's hands.
+   */
+  async configure(options: ConfigureOptions): Promise<void> {
+    const gameId = this.requireGame();
+    const res = await this.call(request({ action: 'configure', gameId, ...options }));
+    if (!res.ok) throw new Error(res.reason);
+    await this.sync();
   }
 
   /** Close the lobby and begin. The referee refuses this from anyone but the host. */

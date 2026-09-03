@@ -38,6 +38,7 @@ import {
   type KindRules,
   authorOf,
   triRules,
+  type StateSummary,
 } from '../kinds.js';
 import type { GameStatus, LoggedCommand, SeatInfo, SeatKind, TableInfo } from './protocol.js';
 
@@ -111,12 +112,18 @@ export const seatOf = (game: StoredGame, userId: string | null): PlayerId | null
   return game.seats.find((s) => s.userId === userId)?.seat ?? null;
 };
 
-export const tableInfo = (game: StoredGame, userId: string | null, now: number): TableInfo => ({
+export const tableInfo = (
+  game: StoredGame,
+  userId: string | null,
+  now: number,
+  rules?: KindRules,
+): TableInfo => ({
   id: game.id,
   code: game.code,
   kind: kindOf(game),
   locked: game.locked ?? false,
   scenarioId: game.scenarioId,
+  ...(rules ? described(game, rules) : {}),
   fog: game.fog,
   status: game.status,
   turn: game.state.turn,
@@ -133,6 +140,73 @@ export const tableInfo = (game: StoredGame, userId: string | null, now: number):
       mine: userId !== null && s.userId === userId,
     })),
 });
+
+/** What the referee can say about a table's setup that a lobby cannot work out itself. */
+const described = (
+  game: StoredGame,
+  rules: KindRules,
+): { title: string; brief: readonly string[] } => {
+  const summary = rules.summary(game.state);
+  return { title: summary.title, brief: summary.brief };
+};
+
+/**
+ * A table's setup, changed from its lobby.
+ *
+ * The board is the new opening position; the roster is rebuilt from its
+ * seats. Whoever held a seat keeps the one at the same ordinal — the host and
+ * an early joiner stay where they were across a change of scenario — unless
+ * that seat is now the computer's, in which case they are stood up. The host
+ * must stay seated, so a host whose seat went to the computer takes the first
+ * open one. Nothing here touches the store; the caller writes what comes back.
+ */
+export const reconfigure = (
+  game: StoredGame,
+  scenarioId: string,
+  opening: AnyState,
+  summary: StateSummary,
+  computerOrdinals: readonly number[] | undefined,
+  now: number,
+):
+  | { readonly ok: true; readonly game: StoredGame }
+  | { readonly ok: false; readonly reason: string } => {
+  if (game.status !== 'lobby') return { ok: false, reason: 'the table has already begun' };
+  const computers = new Set(computerOrdinals ?? []);
+  const seats: SeatRow[] = summary.playerOrder.map((id, ordinal): SeatRow => {
+    const player = summary.players[id];
+    const before = game.seats.find((s) => s.ordinal === ordinal);
+    const held =
+      before !== undefined &&
+      before.kind === 'human' &&
+      before.userId !== null &&
+      !computers.has(ordinal);
+    return {
+      seat: id,
+      ordinal,
+      faction: player?.faction ?? id,
+      name: held ? before.name : (player?.name ?? id),
+      kind: computers.has(ordinal) ? 'computer' : held ? 'human' : 'open',
+      userId: held ? before.userId : null,
+      lastSeen: held ? (before.lastSeen ?? now) : null,
+    };
+  });
+  if (!seats.some((s) => s.userId === game.hostId)) {
+    const idx = seats.findIndex((s) => s.kind === 'open');
+    if (idx < 0) return { ok: false, reason: 'the host needs a seat that is not the computer’s' };
+    const was = game.seats.find((s) => s.userId === game.hostId);
+    seats[idx] = {
+      ...seats[idx]!,
+      kind: 'human',
+      userId: game.hostId,
+      name: was?.name ?? seats[idx]!.name,
+      lastSeen: now,
+    };
+  }
+  return {
+    ok: true,
+    game: { ...game, scenarioId, fog: summary.fog, state: opening, commandCount: 0, seats },
+  };
+};
 
 /**
  * The board as one seat is entitled to see it.

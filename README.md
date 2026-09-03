@@ -161,7 +161,12 @@ only the board it is entitled to, and the fogged scenarios work. It costs a
 deployment. It is also where the ground game is played online: every Ogre
 scenario's picker has a **Host a table** button, the referee keeps the board
 and plays any seat handed to the computer, and the amber battle view runs
-against the referee's board exactly as it runs against a local one.
+against the referee's board exactly as it runs against a local one. The
+**battle builder** (the picker's _Custom battle_ door) designs a battle of
+your own — either board or a fresh one generated from a seed, any mix of
+cybertanks, armour and infantry on both sides, and command-post, breakthrough
+or attrition terms — to fight at this keyboard or to host, and a host can
+change the setup from the lobby until the table begins.
 
 **From a terminal**, if you have the repository checked out:
 

@@ -149,6 +149,8 @@ export interface OgrePickerOpts {
    * no referee to host it, in which case the picker offers no such door.
    */
   onHost?(id: string, seed: number, computer: number | null): void;
+  /** Open the battle builder instead: any forces, either board. */
+  onCustom?(): void;
   onBack(): void;
   onClose?(): void;
 }
@@ -176,6 +178,9 @@ export const openOgrePicker = (host: HTMLElement, o: OgrePickerOpts): Overlay =>
     ...(o.onClose ? { onClose: o.onClose } : {}),
     actions: [
       { label: 'All games', variant: 'ghost', onClick: o.onBack },
+      ...(o.onCustom
+        ? [{ label: 'Custom battle', variant: 'quiet' as const, onClick: () => o.onCustom?.() }]
+        : []),
       ...(o.onHost
         ? [
             {

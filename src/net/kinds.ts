@@ -49,6 +49,10 @@ export interface StateSummary {
   readonly fog: boolean;
   readonly playerOrder: readonly PlayerId[];
   readonly players: Readonly<Record<PlayerId, { readonly name: string; readonly faction: string }>>;
+  /** The scenario's name, for a lobby that has no engine to ask. */
+  readonly title: string;
+  /** Lines describing the setup: the map, the forces, the terms. */
+  readonly brief: readonly string[];
 }
 
 export type Applied =
@@ -110,7 +114,10 @@ export const triRules = (map: GameMap = DEFAULT_MAP): KindRules => ({
       const p = s.players[id];
       players[id] = { name: p?.name ?? id, faction: p?.faction ?? id };
     }
+    const def = scenarioById(s.scenarioId);
     return {
+      title: def?.name ?? s.scenarioId,
+      brief: [],
       turn: s.turn,
       finished: Boolean(s.victory),
       fog: s.options.fogOfWar,

@@ -1161,3 +1161,92 @@ describe('two games, one password', () => {
     expect(asStranger.error).toMatch(/permission denied/);
   });
 });
+
+// ---------------------------------------------------------------------------
+// 0006: changing the setup from the lobby
+// ---------------------------------------------------------------------------
+
+describe('changing a table’s setup from its lobby', () => {
+  const NEW_SEATS = JSON.stringify([
+    {
+      seat: 'attacker',
+      ordinal: 0,
+      faction: 'Paneurope',
+      name: 'Carol',
+      kind: 'human',
+      user_id: CAROL,
+      last_seen: '2026-01-01T00:00:00Z',
+    },
+    {
+      seat: 'defender',
+      ordinal: 1,
+      faction: 'Combine',
+      name: 'Computer',
+      kind: 'computer',
+      user_id: null,
+      last_seen: null,
+    },
+  ]);
+  const RECONFIGURE =
+    'select public.reconfigure_game($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) as out';
+  const args = (host: string): unknown[] => [
+    OPEN,
+    host,
+    'custom',
+    false,
+    99,
+    '{"stackingLimit":1}',
+    '{}',
+    '{"units":{},"rng":{"seed":0}}',
+    1,
+    NEW_SEATS,
+  ];
+
+  it('rewrites the scenario, the secrets and the roster of a lobby, in one call', async () => {
+    await asReferee(`update public.games set status = 'lobby' where id = '${OPEN}'`);
+    const out = await asReferee(RECONFIGURE, args(CAROL));
+    expect(out.error).toBeNull();
+    expect(out.rows[0]!['out']).toEqual({ ok: true });
+    const game = await asReferee(`select scenario_id, turn from public.games where id = '${OPEN}'`);
+    expect(game.rows).toEqual([{ scenario_id: 'custom', turn: 1 }]);
+    const secret = await asReferee(
+      `select seed, options, state from public.game_secrets where game_id = '${OPEN}'`,
+    );
+    expect(secret.rows).toEqual([
+      { seed: 99, options: { stackingLimit: 1 }, state: { units: {}, rng: { seed: 0 } } },
+    ]);
+    const seats = await asReferee(
+      `select seat, kind, user_id from public.seats where game_id = '${OPEN}' order by ordinal`,
+    );
+    expect(seats.rows).toEqual([
+      { seat: 'attacker', kind: 'human', user_id: CAROL },
+      { seat: 'defender', kind: 'computer', user_id: null },
+    ]);
+  });
+
+  it('refuses anyone but the host, and any table that has begun', async () => {
+    await asReferee(`update public.games set status = 'lobby' where id = '${OPEN}'`);
+    const notHost = await asReferee(RECONFIGURE, args(DAVE));
+    expect(notHost.rows[0]!['out']).toEqual({ ok: false, reason: 'not-host' });
+    await asReferee(`update public.games set status = 'playing' where id = '${OPEN}'`);
+    const begun = await asReferee(RECONFIGURE, args(CAROL));
+    expect(begun.rows[0]!['out']).toEqual({ ok: false, reason: 'begun' });
+    const gone = await asReferee(RECONFIGURE, [
+      '00000000-0000-4000-8000-000000000000',
+      ...args(CAROL).slice(1),
+    ]);
+    expect(gone.rows[0]!['out']).toEqual({ ok: false, reason: 'gone' });
+    // Nothing changed under any refusal.
+    const seats = await asReferee(
+      `select seat from public.seats where game_id = '${OPEN}' order by ordinal`,
+    );
+    expect(seats.rows).toEqual([{ seat: 'p1' }, { seat: 'p2' }]);
+  });
+
+  it('is the referee’s alone', async () => {
+    const asCarol = await attempt('authenticated', CAROL, RECONFIGURE, args(CAROL));
+    expect(asCarol.error).toMatch(/permission denied/);
+    const asAnon = await attempt('anon', null, RECONFIGURE, args(CAROL));
+    expect(asAnon.error).toMatch(/permission denied/);
+  });
+});

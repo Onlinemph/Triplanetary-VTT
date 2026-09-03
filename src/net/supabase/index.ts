@@ -17,6 +17,7 @@
 export {
   TableClient,
   type ChannelLike,
+  type ConfigureOptions,
   type CreateOptions,
   type JoinExtras,
   type PostgresChangeFilter,

@@ -2855,3 +2855,137 @@ kbd {
     grid-template-columns: 1fr;
   }
 }
+
+/* --- The battle builder --------------------------------------------------- */
+
+.builder {
+  display: grid;
+  grid-template-columns: minmax(280px, 340px) 1fr;
+  grid-template-rows: auto auto;
+  gap: 16px;
+  min-height: 320px;
+}
+
+.builder-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 62vh;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.builder-block {
+  margin-top: 0;
+}
+
+.builder-block:first-child {
+  border-top: none;
+  padding-top: 0;
+}
+
+.builder-mapopts {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.builder-range {
+  width: 130px;
+}
+
+.map-preview {
+  width: 100%;
+  height: auto;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--hair);
+  background: rgba(0, 0, 0, 0.35);
+  margin-top: 6px;
+}
+
+.builder-forces {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  max-height: 62vh;
+  overflow-y: auto;
+  padding-right: 4px;
+  align-content: start;
+}
+
+.force-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.force-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.force-name {
+  flex: 1;
+  padding: 5px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--hair);
+  background: rgba(0, 0, 0, 0.25);
+  font-size: 12.5px;
+  color: inherit;
+}
+
+.force-total {
+  margin: 0 0 4px;
+}
+
+.force-group {
+  margin: 8px 0 2px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+}
+
+.force-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.unit-step {
+  padding: 1px 4px;
+  border-radius: var(--radius-sm);
+}
+
+.unit-step.is-on {
+  background: var(--accent-dim);
+}
+
+.unit-cost {
+  font-size: 10.5px;
+  color: var(--ink-dim);
+  min-width: 18px;
+  text-align: right;
+  margin-right: 4px;
+}
+
+.builder-problem {
+  grid-column: 1 / -1;
+  margin: 0;
+  min-height: 1.4em;
+}
+
+@media (max-width: 900px) {
+  .builder {
+    grid-template-columns: 1fr;
+  }
+  .builder-forces {
+    grid-template-columns: 1fr;
+  }
+}
