@@ -1973,6 +1973,19 @@ export const createApp = (deps: AppDeps): App => {
     }
     if (orbitalMounted === order.battleId) return;
     orbitalMounted = order.battleId;
+    const t = table;
+    if (t !== null) {
+      // Online, the ground battle is not this browser's to build. A refereed
+      // table gets a child table from the referee, and `refreshTable` hops to
+      // it; a quick table has no referee to open one.
+      if (t.mode === 'quick') {
+        act.notify(
+          'The sky is frozen, but a quick table has no referee to fight the ground battle. Host the war as a refereed table to play it through.',
+          'warn',
+        );
+      }
+      return;
+    }
     void mountOrbitalBattle(order);
   };
 
@@ -2243,7 +2256,13 @@ export const createApp = (deps: AppDeps): App => {
       setup: false,
       onExit: () => {
         closeGroundBattle();
-        leaveTable(false);
+        // A battle fought for a frozen sky leads back to the war it froze.
+        const parent = t.table?.parent;
+        if (parent !== undefined) {
+          const password = t.password;
+          closeTable(false);
+          void returnToParent(parent.code, password);
+        } else leaveTable(false);
       },
     });
   };
@@ -2412,8 +2431,54 @@ export const createApp = (deps: AppDeps): App => {
     if (t !== null && t.board !== null && info !== null && info.status !== 'lobby') {
       void mountOgreTable(t);
     }
+    // A fleet table waiting on a ground battle sends everyone to it.
+    if (t !== null && info !== null && info.child !== undefined && t.session !== null) {
+      void hopToChild(t, info.child.code);
+    }
     paintTable();
     render();
+  };
+
+  /**
+   * The frozen sky, online: the referee has opened a ground table for the
+   * battle and named it on this one, so everyone here hops across. The seat
+   * follows the account, the password follows the client, and the war table
+   * is left listening-off but not vacated — it is where everyone comes back.
+   */
+  let hopping = false;
+  const hopToChild = async (from: TablePort, code: string): Promise<void> => {
+    if (!online.available || hopping) return;
+    hopping = true;
+    try {
+      const child = await online.join(code, undefined, tableEvents(), {
+        mode: 'refereed',
+        password: from.password ?? '',
+      });
+      enterTable(child);
+      act.notify(
+        'The sky is frozen. The ground battle is at its own table; the war resumes when it is decided.',
+        'info',
+      );
+    } catch (err) {
+      act.notify(`Could not reach the ground battle: ${reasonOf(err)}`, 'bad');
+    } finally {
+      hopping = false;
+    }
+  };
+
+  const returnToParent = async (code: string, password: string | null): Promise<void> => {
+    if (!online.available) return;
+    try {
+      enterTable(
+        await online.join(code, undefined, tableEvents(), {
+          mode: 'refereed',
+          password: password ?? '',
+        }),
+      );
+    } catch (err) {
+      act.notify(`Could not return to the war: ${reasonOf(err)}`, 'bad');
+      act.newGame();
+    }
   };
 
   const enterTable = (t: TablePort): void => {

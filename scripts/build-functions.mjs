@@ -78,7 +78,11 @@ const SURFACE = [
       'judge',
       'leaveSeat',
       'playComputerSeats',
-      'reclaimSeat, reconfigure',
+      'reclaimSeat',
+      'reconfigure',
+      'resolve',
+      'childSeats',
+      'settleParent',
       'seatOf',
       'tableInfo',
       'takeSeat',
@@ -95,6 +99,9 @@ const SURFACE = [
   { from: 'src/net/kinds.js', values: ['triRules', 'authorOf'] },
   { from: 'src/net/rulesAll.js', values: ['rulesFor', 'isGameKind'] },
   { from: 'src/net/redact.js', values: ['sealDie'] },
+  // The campaign boundary: `OrderOfBattle` and `BattleResult` travel between a
+  // frozen sky and its child table, and this is where their types come from.
+  { from: 'src/campaign/orders.js', values: ['orderOf'] },
   { from: 'src/scenarios/index.js', values: ['buildScenario', 'scenarioById'] },
   // The map every rules call defaults to, and — through the declaration file
   // below — where `GameState`, `Command` and `PlayerId` come from. The engine's

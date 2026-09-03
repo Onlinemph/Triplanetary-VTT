@@ -1250,3 +1250,107 @@ describe('changing a table’s setup from its lobby', () => {
     expect(asAnon.error).toMatch(/permission denied/);
   });
 });
+
+// ---------------------------------------------------------------------------
+// 0007: a child table for the frozen sky
+// ---------------------------------------------------------------------------
+
+describe('a child table for the ground battle', () => {
+  const CHILD_SEATS = JSON.stringify([
+    {
+      seat: 'invader',
+      ordinal: 0,
+      faction: 'Terran',
+      name: 'Carol',
+      kind: 'human',
+      user_id: CAROL,
+      last_seen: '2026-01-01T00:00:00Z',
+    },
+    {
+      seat: 'militia',
+      ordinal: 1,
+      faction: 'Militia',
+      name: 'Computer',
+      kind: 'computer',
+      user_id: null,
+      last_seen: null,
+    },
+  ]);
+  const CREATE_CHILD = 'select public.create_child_game($1, $2, $3, $4, $5, $6, $7, $8, $9) as out';
+  const args = (code = 'GRNDPQ'): unknown[] => [
+    OPEN,
+    code,
+    'assault',
+    9,
+    '{"stackingLimit":5}',
+    '{}',
+    '{"units":{},"rng":{"seed":0}}',
+    1,
+    CHILD_SEATS,
+  ];
+
+  it('opens the child with the parent’s password, host and link, and refuses a second one', async () => {
+    await asReferee(`update public.game_secrets set password = 'v1$x$y' where game_id = '${OPEN}'`);
+    const out = await asReferee(CREATE_CHILD, args());
+    expect(out.error).toBeNull();
+    const made = out.rows[0]!['out'] as { ok: boolean; id?: string };
+    expect(made.ok).toBe(true);
+    const child = await asReferee(
+      `select g.kind, g.status, g.host_id, g.parent_id, g.parent_code, s.password
+         from public.games g join public.game_secrets s on s.game_id = g.id
+        where g.code = 'GRNDPQ'`,
+    );
+    expect(child.rows).toEqual([
+      {
+        kind: 'ogre',
+        status: 'lobby',
+        host_id: CAROL,
+        parent_id: OPEN,
+        parent_code: 'PNTR39',
+        password: 'v1$x$y',
+      },
+    ]);
+    const parent = await asReferee(
+      `select child_id, child_code from public.games where id = '${OPEN}'`,
+    );
+    expect(parent.rows).toEqual([{ child_id: made.id, child_code: 'GRNDPQ' }]);
+    const again = await asReferee(CREATE_CHILD, args('GRNDPR'));
+    expect(again.rows[0]!['out']).toEqual({ ok: false, reason: 'has-child' });
+    // The child's roster is readable to the player seated at it, like any table's.
+    const mine = await rowsFor(
+      CAROL,
+      `select seat from public.seats where game_id = '${made.id}' order by ordinal`,
+    );
+    expect(mine.map((r) => r['seat'])).toEqual(['invader', 'militia']);
+  });
+
+  it('reports a taken code, and a parent that is gone', async () => {
+    const taken = await asReferee(CREATE_CHILD, args('FGKM24'));
+    expect(taken.rows[0]!['out']).toEqual({ ok: false, reason: 'code-taken' });
+    const gone = await asReferee(CREATE_CHILD, [
+      '00000000-0000-4000-8000-000000000000',
+      ...args().slice(1),
+    ]);
+    expect(gone.rows[0]!['out']).toEqual({ ok: false, reason: 'gone' });
+  });
+
+  it('unlinks the child once the result is home', async () => {
+    await asReferee(CREATE_CHILD, args());
+    const out = await asReferee('select public.unlink_child($1) as out', [OPEN]);
+    expect(out.rows[0]!['out']).toEqual({ ok: true });
+    const parent = await asReferee(
+      `select child_id, child_code from public.games where id = '${OPEN}'`,
+    );
+    expect(parent.rows).toEqual([{ child_id: null, child_code: null }]);
+    // The child itself survives, still pointing home.
+    const child = await asReferee(`select parent_code from public.games where code = 'GRNDPQ'`);
+    expect(child.rows).toEqual([{ parent_code: 'PNTR39' }]);
+  });
+
+  it('is the referee’s alone', async () => {
+    const asCarol = await attempt('authenticated', CAROL, CREATE_CHILD, args());
+    expect(asCarol.error).toMatch(/permission denied/);
+    const unlink = await attempt('authenticated', CAROL, 'select public.unlink_child($1)', [OPEN]);
+    expect(unlink.error).toMatch(/permission denied/);
+  });
+});

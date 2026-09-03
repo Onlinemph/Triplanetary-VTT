@@ -56,6 +56,7 @@ import {
   type AnyCommand,
   type AnyState,
   type ConfigureRequest,
+  type OrderOfBattle,
   type CreateRequest,
   type JoinRequest,
   type LoggedCommand,
@@ -80,6 +81,8 @@ import {
   playComputerSeats,
   reclaimSeat,
   reconfigure,
+  childSeats,
+  settleParent,
   rulesFor,
   seatOf,
   tableInfo,
@@ -203,7 +206,8 @@ const callerOf = async (req: Request): Promise<string | null> => {
 // Reading a table
 // ---------------------------------------------------------------------------
 
-const GAME_COLUMNS = 'id, code, kind, scenario_id, fog, status, turn, command_count, host_id';
+const GAME_COLUMNS =
+  'id, code, kind, scenario_id, fog, status, turn, command_count, host_id, parent_id, child_id, parent_code, child_code';
 const SEAT_COLUMNS = 'seat, ordinal, faction, name, kind, user_id, last_seen';
 
 const fail = (what: string, error: { message: string } | null): void => {
@@ -618,7 +622,122 @@ const startAction = async (game: StoredGame, userId: string): Promise<Response> 
 
   const written = await commit(final, game.commandCount, out.logged, seatOf(final, userId), rules);
   if (!written.ok) return refuse('somebody else started this game first');
+  await afterCommit(final, rules);
   return answer(seated(final, userId, Date.now()));
+};
+
+// ---------------------------------------------------------------------------
+// The frozen sky: a child table for the ground battle, and its result back
+// ---------------------------------------------------------------------------
+
+/**
+ * What a committed board may set in motion beyond itself.
+ *
+ * A fleet board waiting on a ground battle gets a child table for it, opened
+ * once and seated from the parent's roster; a finished ground table hands its
+ * result to the parent it was opened for. Both are the referee's own doing,
+ * after the command that caused them has been answered for — a failure here
+ * is logged, never surfaced as a refusal of an order that was accepted.
+ */
+const afterCommit = async (game: StoredGame, rules: KindRules): Promise<void> => {
+  try {
+    const order = rules.handoff?.(game.state) ?? null;
+    if (order !== null && game.childId === undefined && game.status === 'playing') {
+      await openChild(game, order);
+      return;
+    }
+    if (game.parentId !== undefined && game.status === 'finished') await settleChild(game, rules);
+  } catch (err) {
+    console.error('after the command', err instanceof Error ? err.message : String(err));
+  }
+};
+
+const openChild = async (parent: StoredGame, order: OrderOfBattle): Promise<void> => {
+  const rules = rulesFor('ogre');
+  if (!rules.hasScenario(order.scenarioId)) {
+    console.warn(`no ground scenario "${order.scenarioId}" for the child table`);
+    return;
+  }
+  let opening: AnyState;
+  try {
+    opening = rules.seal(
+      rules.build(order.scenarioId, setupFrom(order.seed >>> 0, undefined, undefined, order)),
+    );
+  } catch (err) {
+    console.warn('the ground battle could not be set up', err instanceof Error ? err.message : '');
+    return;
+  }
+  const summary = rules.summary(opening);
+  const now = Date.now();
+  const seats = childSeats(parent, order, summary, now);
+
+  for (let attempt = 0; attempt < CODE_ATTEMPTS; attempt += 1) {
+    const code = codeFrom(crypto.getRandomValues(new Uint8Array(CODE_LENGTH)));
+    const { data, error } = await admin.rpc('create_child_game', {
+      p_parent: parent.id,
+      p_code: code,
+      p_scenario: order.scenarioId,
+      p_seed: order.seed >>> 0,
+      p_options: opening.options,
+      p_fleets: {},
+      p_state: opening,
+      p_turn: summary.turn,
+      p_seats: seats.map(seatToInsert),
+    });
+    fail('opening the ground battle', error);
+    const result = data as { ok: boolean; id?: string; reason?: string } | null;
+    if (result === null) throw new Error('create_child_game answered nothing');
+    if (!result.ok && result.reason === 'code-taken') continue;
+    if (!result.ok) {
+      console.warn('the child table was not opened:', result.reason);
+      return;
+    }
+    const child: StoredGame = {
+      id: result.id ?? '',
+      code,
+      kind: 'ogre',
+      ...(parent.locked !== undefined ? { locked: parent.locked } : {}),
+      scenarioId: order.scenarioId,
+      fog: false,
+      status: 'playing',
+      state: opening,
+      commandCount: 0,
+      seats,
+      hostId: parent.hostId,
+      parentId: parent.id,
+      parentCode: parent.code,
+    };
+    // Every seat is assigned, so the battle begins at once — with the
+    // computer's opening moves, which may even decide it on the spot.
+    const out = playComputerSeats(child, rollDie, undefined, undefined, rules);
+    const written = await commit(out.game, 0, out.logged, null, rules);
+    if (written.ok) await afterCommit(out.game, rules);
+    return;
+  }
+  console.warn('could not find a free join code for the ground battle');
+};
+
+const settleChild = async (child: StoredGame, childRules: KindRules): Promise<void> => {
+  const result = childRules.settle?.(child.state) ?? null;
+  if (result === null || child.parentId === undefined) return;
+  for (let attempt = 0; attempt < COMMAND_ATTEMPTS; attempt += 1) {
+    const loaded = await loadGame('id', child.parentId);
+    if (loaded === null) return;
+    const parent = loaded.game;
+    const rules = rulesOfGame(parent);
+    const out = settleParent(parent, result, rollDie, rules);
+    if (!out.ok) {
+      console.warn('the war refused the ground battle’s result:', out.reason);
+      return;
+    }
+    const written = await commit(out.game, parent.commandCount, out.logged, null, rules);
+    if (!written.ok) continue; // A move landed on the parent in between; judge it again.
+    const { error } = await admin.rpc('unlink_child', { p_parent: parent.id });
+    if (error !== null) console.warn('could not unlink the ground battle', error.message);
+    await afterCommit(out.game, rules);
+    return;
+  }
+  console.warn('the parent table was too busy to take the result');
 };
 
 // ---------------------------------------------------------------------------
@@ -694,7 +813,10 @@ const commandAction = async (
     const logged = [verdict.logged, ...after.logged];
 
     const written = await commit(final, game.commandCount, logged, seat, rules);
-    if (written.ok) return answer({ ok: true, index: final.commandCount, seq });
+    if (written.ok) {
+      await afterCommit(final, rules);
+      return answer({ ok: true, index: final.commandCount, seq });
+    }
   }
 
   return refuse('the table is busy; try that again', 200, seq);

@@ -372,6 +372,11 @@ export class TableClient {
    */
   private password: string | undefined;
 
+  /** The password this table was opened or joined with, for a hop to a linked table. */
+  get secret(): string | undefined {
+    return this.password;
+  }
+
   constructor(
     private readonly supabase: SupabaseLike,
     private readonly session: SessionSink,

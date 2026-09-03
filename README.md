@@ -166,7 +166,10 @@ against the referee's board exactly as it runs against a local one. The
 your own — either board or a fresh one generated from a seed, any mix of
 cybertanks, armour and infantry on both sides, and command-post, breakthrough
 or attrition terms — to fight at this keyboard or to host, and a host can
-change the setup from the lobby until the table begins.
+change the setup from the lobby until the table begins. An **Orbital Drop**
+war hosted as a refereed table hands its ground battles off by itself: when
+the sky freezes the referee opens a linked Ogre table, everyone at the war
+hops across to fight it, and the result comes home as the war's own order.
 
 **From a terminal**, if you have the repository checked out:
 

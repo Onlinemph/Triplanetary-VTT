@@ -21,8 +21,11 @@ import {
   type PlayerId,
   DEFAULT_MAP,
   applyCommand as triApply,
+  activePlayer,
 } from '../engine/index.js';
 import { type BuildOptions, buildScenario, scenarioById } from '../scenarios/index.js';
+import { dropData } from '../scenarios/orbitalDrop.js';
+import type { BattleResult, OrderOfBattle } from '../campaign/orders.js';
 import { aiCommand } from '../ai/driver.js';
 import type { GameState as OgreState } from '../ogre/engine/types.js';
 import type { Command as OgreCommand } from '../ogre/engine/commands.js';
@@ -72,6 +75,15 @@ export interface KindRules {
   /** The orders the computer's seats owe right now, in the order to give them. Empty when none. */
   computerOrders(state: AnyState, computers: ReadonlySet<PlayerId>): readonly AnyCommand[];
   summary(state: AnyState): StateSummary;
+  /**
+   * A battle this board is waiting on — the frozen sky's ground battle — to
+   * be fought at a child table. Null when nothing is pending.
+   */
+  handoff?(state: AnyState): OrderOfBattle | null;
+  /** A finished battle's result, for the table that was waiting on it. */
+  settle?(state: AnyState): BattleResult | null;
+  /** The order that hands a child table's result back to this board. */
+  settleCommand?(state: AnyState, result: BattleResult): AnyCommand;
 }
 
 /** Who an order claims to be from. Both games put it in the same place. */
@@ -107,6 +119,16 @@ export const triRules = (map: GameMap = DEFAULT_MAP): KindRules => ({
     const order = aiCommand(state as TriState, computers, map);
     return order === null ? [] : [order.command];
   },
+  handoff: (state) => {
+    const s = state as TriState;
+    return s.scenarioId === 'orbital-drop' ? dropData(s).pendingGround : null;
+  },
+  settleCommand: (state, result) =>
+    ({
+      type: 'resolveGroundBattle',
+      by: activePlayer(state as TriState),
+      result,
+    }) as AnyCommand,
   summary: (state) => {
     const s = state as TriState;
     const players: Record<PlayerId, { name: string; faction: string }> = {};
