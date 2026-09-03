@@ -10,6 +10,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
+import type { OrderOfBattle } from '../../src/campaign/orders.js';
 import { type Hex, key, neighbors, toOffset } from '../../src/ogre/engine/hex.js';
 import {
   type GameMap,
@@ -165,7 +166,7 @@ describe('a custom battle on a generated board', () => {
           rows,
           ...(kind === 'ogre' ? { craterDensity: 0.3 } : {}),
         };
-        const order = {
+        const order: OrderOfBattle = {
           battleId: 'x',
           seed: 8,
           scenarioId: 'custom',
