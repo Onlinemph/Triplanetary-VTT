@@ -133,7 +133,9 @@ nobody shooting, and six exercises in vector movement graded against par.
 ### Playing with other people, over the internet
 
 Sit at a table, share a six-character code and a password, and play from
-anywhere. There are two arrangements, and the game offers both on the same
+anywhere. **[docs/ONLINE-PLAY.md](docs/ONLINE-PLAY.md)** is the player's
+guide: tables, seats, getting a seat back, custom battles, and how a war
+hands its ground battles off. There are two arrangements, and the game offers both on the same
 screen. Nobody needs an account: the code and the password are what a player
 remembers, and a player who comes back on another browser types the same
 password to take their own seat back.

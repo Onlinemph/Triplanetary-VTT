@@ -21,6 +21,16 @@ export interface ResumeOffer {
   onDiscard(): void;
 }
 
+/** A table this browser has sat at, to be picked up again. */
+export interface TableOffer {
+  /** "Mark III Attack · FGKMNP" */
+  readonly label: string;
+  /** "refereed table, yesterday" */
+  readonly sub: string;
+  onRejoin(): void;
+  onForget(): void;
+}
+
 export interface StartMenuOpts {
   /** Whether a campaign is saved in this browser — it changes the wording. */
   readonly campaignRunning: boolean;
@@ -29,6 +39,8 @@ export interface StartMenuOpts {
   readonly resumeGame?: ResumeOffer | null;
   /** An Ogre battle saved mid-play, if any. */
   readonly resumeBattle?: ResumeOffer | null;
+  /** Online tables this browser has sat at, newest first. */
+  readonly tables?: readonly TableOffer[];
   onTriplanetary(): void;
   onOgre(): void;
   onCampaign(): void;
@@ -77,11 +89,45 @@ export const openStartMenu = (host: HTMLElement, o: StartMenuOpts): Overlay => {
       el('span', { class: 'game-blurb', text: blurb }),
     );
 
+  const tableRow = (t: TableOffer): HTMLElement =>
+    el(
+      'div',
+      { class: 'start-resume start-table' },
+      el('span', { class: 'start-resume-label', text: t.label }),
+      el('span', { class: 'start-resume-what mono', text: t.sub }),
+      button({
+        label: 'Rejoin',
+        variant: 'primary',
+        onClick: () => {
+          overlay.close();
+          t.onRejoin();
+        },
+      }),
+      button({
+        label: 'Forget',
+        variant: 'quiet',
+        title: 'Drop it from this list',
+        onClick: () => {
+          t.onForget();
+          overlay.close();
+          o.onClose?.();
+        },
+      }),
+    );
+
   const body = el(
     'div',
     { class: 'start-menu-wrap' },
     o.resumeGame ? resumeRow('Game', o.resumeGame) : null,
     o.resumeBattle ? resumeRow('Battle', o.resumeBattle) : null,
+    o.tables && o.tables.length > 0
+      ? el(
+          'div',
+          { class: 'start-tables' },
+          el('h3', { class: 'sect-title', text: 'Your tables' }),
+          ...o.tables.map(tableRow),
+        )
+      : null,
     el(
       'div',
       { class: 'start-menu' },

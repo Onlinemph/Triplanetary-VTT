@@ -74,7 +74,12 @@ import { mountCampaignChoice, openWarRoom } from './panels/campaign.js';
 import { createLogPanel } from './panels/logpanel.js';
 import { openHelpDrawer } from './panels/help.js';
 import { type PickerResult, openScenarioPicker } from './panels/scenarioPicker.js';
-import { mountAllGames, openOgrePicker, openStartMenu } from './panels/startMenu.js';
+import {
+  type TableOffer,
+  mountAllGames,
+  openOgrePicker,
+  openStartMenu,
+} from './panels/startMenu.js';
 import { type BuilderCatalogue, openBattleBuilder } from './panels/battleBuilder.js';
 import { createTopBar } from './panels/topbar.js';
 import {
@@ -230,6 +235,98 @@ export const createApp = (deps: AppDeps): App => {
    * is what makes leaving and rejoining resume the same side of the same game.
    */
   let resume: { code: string; seat: PlayerId | null } | null = null;
+
+  /**
+   * The tables this browser has sat at: code, password and the table's own
+   * words for itself, so a player can come back to a game from the start
+   * menu without a link or a memory for six letters. Kept in this browser
+   * only, newest first, a dozen at most; a child table for a frozen sky is
+   * not kept, because the war it belongs to is.
+   */
+  const TABLES_KEY = 'triplanetary-tables-v1';
+  interface KnownTable {
+    readonly code: string;
+    readonly password: string;
+    readonly mode: OnlineMode;
+    readonly title: string;
+    readonly when: number;
+  }
+  const readKnownTables = (): KnownTable[] => {
+    try {
+      const raw = localStorage.getItem(TABLES_KEY);
+      const parsed: unknown = raw === null ? [] : JSON.parse(raw);
+      return Array.isArray(parsed)
+        ? parsed.filter(
+            (k): k is KnownTable =>
+              typeof k === 'object' &&
+              k !== null &&
+              typeof (k as KnownTable).code === 'string' &&
+              typeof (k as KnownTable).password === 'string' &&
+              ((k as KnownTable).mode === 'quick' || (k as KnownTable).mode === 'refereed') &&
+              typeof (k as KnownTable).title === 'string' &&
+              typeof (k as KnownTable).when === 'number',
+          )
+        : [];
+    } catch {
+      return [];
+    }
+  };
+  const writeKnownTables = (list: readonly KnownTable[]): void => {
+    try {
+      localStorage.setItem(TABLES_KEY, JSON.stringify(list.slice(0, 12)));
+    } catch {
+      // Storage blocked: the list simply is not kept.
+    }
+  };
+  let remembered = '';
+  const rememberTable = (t: TablePort): void => {
+    const info = t.table;
+    if (info === null || info.parent !== undefined) return;
+    const title = info.title ?? scenarioName();
+    const stamp = `${info.code}|${title}`;
+    if (stamp === remembered) return;
+    remembered = stamp;
+    const entry: KnownTable = {
+      code: info.code,
+      password: t.password ?? '',
+      mode: t.mode,
+      title,
+      when: Date.now(),
+    };
+    writeKnownTables([entry, ...readKnownTables().filter((k) => k.code !== info.code)]);
+  };
+  const forgetTable = (code: string): void => {
+    writeKnownTables(readKnownTables().filter((k) => k.code !== code));
+    if (remembered.startsWith(`${code}|`)) remembered = '';
+  };
+  const ago = (when: number): string => {
+    const days = Math.floor((Date.now() - when) / 86_400_000);
+    return days <= 0 ? 'today' : days === 1 ? 'yesterday' : `${days} days ago`;
+  };
+  const tableOffers = (): readonly TableOffer[] =>
+    online.available
+      ? readKnownTables().map((k) => ({
+          label: `${k.title} · ${k.code}`,
+          sub: `${k.mode === 'quick' ? 'quick table' : 'refereed table'}, ${ago(k.when)}`,
+          onRejoin: () => void rejoinTable(k),
+          onForget: () => forgetTable(k.code),
+        }))
+      : [];
+  const rejoinTable = async (k: KnownTable): Promise<void> => {
+    if (!online.available) return;
+    const wanted = resume?.code === k.code ? (resume.seat ?? undefined) : undefined;
+    try {
+      enterTable(
+        await online.join(k.code, wanted, tableEvents(), { mode: k.mode, password: k.password }),
+      );
+    } catch (err) {
+      act.notify(
+        `Could not rejoin ${k.code}: ${reasonOf(err)}. If the table is gone, forget it from the start menu.`,
+        'bad',
+      );
+      if (!session && table === null) act.newGame();
+    }
+  };
 
   const online: OnlinePort = deps.online ?? {
     available: false,
@@ -558,6 +655,7 @@ export const createApp = (deps: AppDeps): App => {
               onDiscard: () => clearGameSave(),
             }
           : null,
+        tables: tableOffers(),
         resumeBattle: savedBattle
           ? {
               label: `${savedBattle.name}, turn ${savedBattle.turn}`,
@@ -2414,6 +2512,7 @@ export const createApp = (deps: AppDeps): App => {
     if (t !== null && info !== null) {
       scenarioId = info.scenarioId;
       resume = { code: info.code, seat: t.seat };
+      rememberTable(t);
     }
     const waiting = t !== null && (info === null || info.status === 'lobby');
     if (waiting && lobby === null) {
@@ -2546,8 +2645,11 @@ export const createApp = (deps: AppDeps): App => {
 
   const promptJoin = (code: string | null): void => {
     if (!online.available || joinOverlay !== null) return;
+    // A link to a table this browser already knows brings its password along.
+    const known = code === null ? undefined : readKnownTables().find((k) => k.code === code);
     joinOverlay = openJoinDialog(overlays, {
       code,
+      ...(known ? { password: known.password } : {}),
       wantsPassword: true,
       onJoin: (typed, watchOnly, password) => {
         joinOverlay = null;
@@ -2670,6 +2772,9 @@ export const createApp = (deps: AppDeps): App => {
    */
   const leaveTable = (vacate: boolean): void => {
     if (table === null) return;
+    // Standing up is leaving for good; the table drops off the start menu.
+    const code = table.table?.code;
+    if (vacate && code !== undefined) forgetTable(code);
     closeTable(vacate);
     render();
     act.newGame();
