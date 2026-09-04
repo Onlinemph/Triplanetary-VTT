@@ -2480,6 +2480,9 @@ export const createApp = (deps: AppDeps): App => {
       enterTable(
         await online.host(
           {
+            // A landing is a battle in the ground game; a convoy action is
+            // this one. The referee needs telling which rules to run.
+            ...(isGroundScenario(order.scenarioId) ? { kind: 'ogre' as const } : {}),
             scenarioId: order.scenarioId,
             seed: order.seed,
             options: {},

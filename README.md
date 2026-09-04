@@ -250,11 +250,15 @@ relay server.
 
 ### Two games, one war
 
-This app is linked to its companion,
-[OGRE-VTT](https://github.com/onlinemph/OGRE-VTT), by a campaign over the inner
-Solar System: Triplanetary decides who gets to the ground, and Ogre decides what
+This app holds two complete games, joined by a campaign over the inner Solar
+System: Triplanetary decides who gets to the ground, and Ogre decides what
 happens when they land. The start menu asks which you want: **Triplanetary**,
 **Ogre**, or **Orbital Drop**.
+
+Ogre was once a separate app,
+[OGRE-VTT](https://github.com/onlinemph/OGRE-VTT), whose page now forwards
+here — the engine, the boards and the opponent all moved under `src/ogre/`,
+and the things it never had are here too.
 
 **Orbital Drop is the combined game, and it literally is Triplanetary**: a
 scenario ([docs/ORBITAL-DROP.md](docs/ORBITAL-DROP.md)) in which the space war
@@ -271,9 +275,9 @@ owing one orbital strike. The result resumes the day: a captured base changes
 hands and pays MCr 0.5 a day; a planetary base is an Admin building of 20
 structure points, a rock's a command post on half a map under low gravity, and
 a cybertank keeps its record sheet between battles until the base repairs it.
-**The whole companion game is embedded** — engine, renderer, record sheets and
-seven scenarios, loaded on demand behind its own door — and it is fully
-playable here for its own sake: every battle opens with a deployment step
+**The whole ground game is here** — engine, renderer, record sheets and eight
+scenarios, loaded on demand behind its own door — and it is fully playable for
+its own sake: every battle opens with a deployment step
 inside the printed setup areas, either seat can be handed to the computer
 (whose weight table is learned by self-play — see [docs/AI.md](docs/AI.md)), an
 unfinished battle is saved in the browser and offered on the start menu, and
@@ -287,11 +291,13 @@ transfer is this game: fight it at this keyboard, with the computer flying
 either side, or **host it as an online table** — quick or refereed, like any
 other scenario, with the order of battle riding the table's setup so every
 joiner rebuilds the same battle. A landing is an Ogre battle, **fought right
-here too**, and the result reports straight back to the war room. The **Open
-in the Ogre app** link and the pasteable order/result tokens remain, for
-fighting the ground half on another machine. What lands is whatever tonnage
-got down, at ten tons of hold to the armour unit. See
-[docs/CAMPAIGN.md](docs/CAMPAIGN.md).
+here too**, and the result reports straight back to the war room — or hosted as
+a table of its own, which at a refereed table the referee opens by itself when
+the sky freezes. The pasteable order and result tokens remain, for fighting the
+ground half on a machine that is not online. What lands is whatever tonnage got
+down, at ten tons of hold to the armour unit. See
+[docs/CAMPAIGN.md](docs/CAMPAIGN.md) and
+[docs/OGRE-HANDOFF.md](docs/OGRE-HANDOFF.md).
 
 ---
 
@@ -334,10 +340,10 @@ src/
     movement.ts combat.ts ordnance.ts       the phase rules
     detection.ts logistics.ts reducer.ts
   scenarios/   the rulebook's scenarios, as pure builders + victory checks
-  campaign/    the war with OGRE-VTT: its engine, tables and session, and the
-               battle boundary (orders, token codec, result reader)
-  ogre/        the companion game, embedded: OGRE-VTT's engine, renderer and
-               The Landing, with its shell pruned to a mountable battle view
+  campaign/    the war between the two games: its engine, tables and session,
+               and the battle boundary (orders, token codec, result reader)
+  ogre/        the ground game, whole: engine, renderer, scenarios and AI,
+               with its shell pruned to a mountable battle view
   ai/          the computer opponent: a state in, one command out
   net/         GameSession (command log, undo, save) and the transports
     supabase/  the online referee's contract, rules loop and browser client

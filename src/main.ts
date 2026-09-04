@@ -594,13 +594,6 @@ const online: OnlinePort =
 // The campaign
 // ---------------------------------------------------------------------------
 
-/**
- * Where the companion Ogre app lives, for the "Open in Ogre" link on a ground
- * battle. Overridable at build time for forks and local hacking; the token in
- * the link works against any copy of the app.
- */
-const OGRE_URL = envValue(import.meta.env.VITE_OGRE_URL) || 'https://onlinemph.github.io/OGRE-VTT/';
-
 const CAMPAIGN_KEY = 'triplanetary-campaign-v1';
 
 let campaign: CampaignSession | null = null;
@@ -667,11 +660,6 @@ const campaignDeps: CampaignDeps = {
     }
   },
   orderToken: (order) => encodeOrder(order),
-  ogreUrl: (order) => {
-    const url = new URL(OGRE_URL);
-    url.searchParams.set('battle', encodeOrder(order));
-    return url.toString();
-  },
   parseResult: (text) => decodeResult(text),
   resultFor: (state, history) => {
     // The shell may have wandered off to an ordinary scenario; a game that

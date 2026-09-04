@@ -489,22 +489,14 @@ export const openWarRoom = (
           ),
         );
       } else {
-        const link = el('a', {
-          class: 'btn btn-quiet',
-          text: 'Open in the Ogre app',
-        }) as HTMLAnchorElement;
-        link.href = deps.ogreUrl(order);
-        link.target = '_blank';
-        link.rel = 'noopener';
-        link.title = 'The same battle in the companion app — its result comes back as a token';
         kids.push(
           el('p', {
             class: 'hint',
             text:
               `${describeForce(pending.landed ?? {})} is ashore on ${siteName} against a garrison of ` +
               `${describeForce(state.sites[pending.site]!.garrison)}. The landing is an Ogre battle. ` +
-              `Fight it right here at this keyboard, open it in the companion app, or send the ` +
-              `order token to whoever commands it and paste the result back.`,
+              `Fight it right here at this keyboard, host it as an online table and hand the other ` +
+              `side the code, or send the order token to whoever commands it and paste the result back.`,
           }),
           el(
             'div',
@@ -514,7 +506,16 @@ export const openWarRoom = (
               variant: 'primary',
               onClick: () => hooks.fightGround(order),
             }),
-            link,
+            button({
+              label: 'Host an online table',
+              variant: 'quiet',
+              disabled: hooks.hostOnline === null,
+              title:
+                hooks.hostOnline === null
+                  ? (hooks.onlineReason ?? 'No server')
+                  : 'Open a table for this battle and share the code',
+              onClick: () => hooks.hostOnline?.(order),
+            }),
           ),
         );
       }
