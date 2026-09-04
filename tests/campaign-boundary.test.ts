@@ -52,6 +52,17 @@ describe('the codec', () => {
     expect(() => decodeResult(encodeOrder(ORDER))).toThrow(/battle order/);
     expect(() => decodeOrder('not a token!')).toThrow(/not a campaign token/);
   });
+
+  // A token is copied out of a textarea by hand and pasted into another one,
+  // so it arrives with whatever the selection picked up around it.
+  it('survives whitespace around a pasted token', () => {
+    expect(decodeOrder(`  ${encodeOrder(ORDER)}\n`)).toEqual(ORDER);
+  });
+
+  it('refuses an order with a missing side', () => {
+    const bad = { ...ORDER, sides: [ORDER.sides[0]!] };
+    expect(() => decodeOrder(encodeOrder(bad as OrderOfBattle))).toThrow(/two sides/);
+  });
 });
 
 // ---------------------------------------------------------------------------

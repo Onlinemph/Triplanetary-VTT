@@ -279,7 +279,7 @@ inside the printed setup areas, either seat can be handed to the computer
 unfinished battle is saved in the browser and offered on the start menu, and
 the rules now run to cruise missiles, lasers with a line of sight, the train,
 buildings under ram and overrun, and the Ninja's stealth (see
-[OGRE-VTT's rules mapping](https://github.com/onlinemph/OGRE-VTT/blob/main/docs/RULES-MAPPING.md)
+[docs/OGRE-RULES-MAPPING.md](docs/OGRE-RULES-MAPPING.md)
 for what is transcribed and what is provisional). **The campaign lives here too**: the war room docks
 beside the live chart with the eight sites pinned to their planets and moons,
 is hot-seat, and saves itself in the browser after every order. A contested
@@ -350,7 +350,10 @@ tests/         rules tests, run by vitest
 ```
 
 Start with [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) if you intend to change
-anything.
+anything, and [docs/OGRE-ARCHITECTURE.md](docs/OGRE-ARCHITECTURE.md) if what
+you intend to change is the ground game. The seam between the two — the order
+of battle out, the result back, and what each game may know — is
+[docs/OGRE-HANDOFF.md](docs/OGRE-HANDOFF.md).
 
 ---
 
@@ -400,6 +403,11 @@ CI runs typecheck, tests and a build on Node 20 and 22.
 
 ## Attribution
 
+This project implements **two** Steve Jackson Games titles, and owes both an
+acknowledgement.
+
+### Triplanetary
+
 **Triplanetary** is a trademark of Steve Jackson Games Incorporated. Triplanetary
 is copyright © 1973, 1981 by Marc Miller and copyright © 2018 by Steve Jackson
 Games Incorporated. This project is an **unofficial, fan-made** virtual tabletop.
@@ -419,6 +427,25 @@ to it rather than a replacement:
 - <https://triplanetary.sjgames.com>
 - <https://triplanetary.sjgames.com/howtoplay/> — the publisher's video guide
 
+### Ogre
+
+**Ogre** is a registered trademark of Steve Jackson Games Incorporated. Ogre is
+copyright © 1977–2019 by Steve Jackson Games Incorporated. The ground game here
+is an **unofficial, fan-made** implementation, no more affiliated with or
+endorsed by Steve Jackson Games than the space game is.
+
+The same rule holds for it: **no copyrighted artwork, map images, counters or
+rules text** ships here. Both boards are original reconstructions generated
+from a seed in `src/ogre/engine/mapdata.ts` — see
+[docs/OGRE-ARCHITECTURE.md](docs/OGRE-ARCHITECTURE.md) — and the counters are
+drawn at runtime from unit statistics. What is transcribed, and what is not, is
+audited rule by rule in
+[docs/OGRE-RULES-MAPPING.md](docs/OGRE-RULES-MAPPING.md).
+
+- <https://ogre.sjgames.com>
+
+### Both
+
 If you represent Steve Jackson Games and would like something here changed or
 removed, please open an issue.
 
@@ -429,5 +456,5 @@ removed, please open an issue.
 The code in this repository is offered under the MIT licence — add a `LICENSE`
 file with the MIT text before publishing, so the grant is formal rather than a
 sentence in a README. Whatever licence the code carries covers **the source
-only**: it grants no rights in the _Triplanetary_ game, its rules, its trademarks
+only**: it grants no rights in the _Triplanetary_ or _Ogre_ games, their rules, their trademarks
 or its artwork, which remain the property of Steve Jackson Games Incorporated.

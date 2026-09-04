@@ -81,6 +81,7 @@ import {
   openStartMenu,
 } from './panels/startMenu.js';
 import { type BuilderCatalogue, openBattleBuilder } from './panels/battleBuilder.js';
+import { isGroundScenario } from '../net/kinds.js';
 import { createTopBar } from './panels/topbar.js';
 import {
   type Actions,
@@ -3008,7 +3009,7 @@ export const createApp = (deps: AppDeps): App => {
     // sentence, because a dead parameter wants an explanation.
     const invited = deps.joinCode ?? null;
     if (invited !== null && invited !== '' && online.available) promptJoin(invited);
-    else if (deps.battle && deps.battle.scenarioId === 'landing')
+    else if (deps.battle && isGroundScenario(deps.battle.scenarioId))
       void openGroundBattle(deps.battle);
     else if (deps.battle) promptBattle(deps.battle);
     else if (deps.battleError != null && deps.battleError !== '') {

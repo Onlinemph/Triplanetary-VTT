@@ -11,7 +11,12 @@
 
 import { describe, expect, it } from 'vitest';
 import type { PlayerId } from '../src/engine/index.js';
-import type { AnyState, StateSummary } from '../src/net/kinds.js';
+import {
+  type AnyState,
+  type StateSummary,
+  GROUND_SCENARIO_IDS,
+  isGroundScenario,
+} from '../src/net/kinds.js';
 import { OGRE_RULES, actorOf, asOgreState } from '../src/net/ogreRules.js';
 import { rulesFor } from '../src/net/rulesAll.js';
 import type { LoggedCommand } from '../src/net/supabase/protocol.js';
@@ -277,5 +282,22 @@ describe('changing a ground table’s setup from its lobby', () => {
     const info = tableInfo({ ...table('custom'), state: opening }, 'user-0', 0, rules);
     expect(info.title).toBe('Custom battle');
     expect(info.brief).toEqual(summary.brief);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The list the shell keeps so it need not load the ground engine to recognise one
+// ---------------------------------------------------------------------------
+
+describe('the ground game’s scenario ids', () => {
+  it('are the ids the scenario table actually holds', async () => {
+    const { SCENARIOS } = await import('../src/ogre/scenarios/index.js');
+    expect([...GROUND_SCENARIO_IDS].sort()).toEqual(SCENARIOS.map((s) => s.id).sort());
+  });
+
+  it('are what the inbound door recognises, and nothing else', () => {
+    for (const id of GROUND_SCENARIO_IDS) expect(isGroundScenario(id)).toBe(true);
+    expect(isGroundScenario('bi-planetary')).toBe(false);
+    expect(isGroundScenario('')).toBe(false);
   });
 });
