@@ -24,6 +24,7 @@ import {
   type GameKind,
   type KindRules,
   triRules,
+  isGroundScenario,
 } from '@net/kinds.js';
 import {
   CODE_TAKEN,
@@ -683,8 +684,9 @@ const campaignDeps: CampaignDeps = {
 
 /**
  * A `?battle=` token is an `OrderOfBattle` sent by a campaign running in
- * another browser. A token for a scenario this app does not play (a landing,
- * say, pasted at the wrong app) gets told which app it wanted.
+ * another browser, or by the companion Ogre app. This app plays both games,
+ * so both games' scenarios are accepted; a token naming neither gets a
+ * sentence saying so rather than a half-built battle.
  */
 const battleFrom = (
   token: string | null,
@@ -692,9 +694,9 @@ const battleFrom = (
   if (token === null || token === '') return { battle: null, error: null };
   try {
     const order = decodeOrder(token);
-    // 'landing' is not on this app's scenario list, but it is playable here
-    // all the same: the shell mounts the embedded Ogre view for it.
-    if (order.scenarioId === 'landing' || scenarioById(order.scenarioId)) {
+    // The ground game's scenarios are not on the fleet game's list, but every
+    // one of them is playable here: the shell mounts the embedded Ogre view.
+    if (isGroundScenario(order.scenarioId) || scenarioById(order.scenarioId)) {
       return { battle: order, error: null };
     }
     return {

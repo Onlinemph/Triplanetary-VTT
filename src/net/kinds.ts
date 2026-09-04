@@ -33,6 +33,30 @@ import { redactState, sealDie } from './redact.js';
 
 export type GameKind = 'tri' | 'ogre';
 
+/**
+ * The ground game's scenarios, by id.
+ *
+ * Written out rather than read off the Ogre scenario table, because the point
+ * of the table is that it is loaded on demand — importing it here to answer
+ * "is this one of ours?" would pull the whole ground engine into the first
+ * bundle a player downloads. `tests/supabase-ogre.test.ts` checks this list
+ * against the real table, so a scenario added there and forgotten here fails
+ * a test rather than a hand-off.
+ */
+export const GROUND_SCENARIO_IDS: readonly string[] = [
+  'mark-iii-attack',
+  'mark-v-attack',
+  'crossing',
+  'landing',
+  'assault',
+  'assault-green',
+  'assault-asteroid',
+  'custom',
+];
+
+/** Whether an id names a battle in the ground game. */
+export const isGroundScenario = (id: string): boolean => GROUND_SCENARIO_IDS.includes(id);
+
 /** A board of either game. The referee reads `turn` and `rng` off both. */
 export type AnyState = TriState | OgreState;
 export type AnyCommand = TriCommand | OgreCommand;

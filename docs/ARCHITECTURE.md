@@ -25,6 +25,19 @@ except commands. `src/engine` imports nothing from `src/ui`, `src/render`,
 `src/net` or `src/scenarios`. That is not tidiness for its own sake; it is what
 makes the next four sections possible.
 
+## There are two engines
+
+This document is about the space game. The ground game — Ogre — is a second
+engine of the same shape living under `src/ogre/`, with its own rules, board,
+renderer and opponent, and it obeys the same one rule. It is described in
+[OGRE-ARCHITECTURE.md](OGRE-ARCHITECTURE.md).
+
+The two never import each other. What passes between them is two plain types,
+an order of battle out and a result back, and where that seam sits and why is
+[OGRE-HANDOFF.md](OGRE-HANDOFF.md). Online, both are reached through one
+interface — `KindRules` in `src/net/kinds.ts` — which is how a single referee
+runs either game without knowing which it is holding.
+
 ---
 
 ## The engine is a pure function
