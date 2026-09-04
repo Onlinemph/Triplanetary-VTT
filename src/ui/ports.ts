@@ -345,7 +345,6 @@ export interface CampaignDeps {
   /** The pasteable token a battle order travels as. */
   orderToken(order: OrderOfBattle): string;
   /** The link that opens a ground battle in the companion Ogre app. */
-  ogreUrl(order: OrderOfBattle): string;
   /** Parse a pasted result token. Throws with a sentence worth showing. */
   parseResult(text: string): BattleResult;
   /** The result of a finished battle here, or null while it is undecided. */

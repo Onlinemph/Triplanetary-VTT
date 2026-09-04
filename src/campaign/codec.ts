@@ -7,10 +7,10 @@
  * a token pasted into the wrong box fails with a sentence rather than a
  * half-built battle.
  *
- * This file is duplicated, byte for byte in intent, in OGRE-VTT. The
- * two copies *are* the compatibility contract between the apps — change one
- * and the same change belongs in the other, and both codec tests pin the
- * envelope so an accidental drift fails a build rather than a hand-off.
+ * The envelope is a compatibility contract with every token already in the
+ * wild — pasted into a document, sitting in somebody's clipboard, or on a URL
+ * shared last month. Changing its shape breaks those, so `v` exists to be
+ * bumped rather than ignored, and the codec tests pin the format.
  */
 
 import type { BattleResult, OrderOfBattle } from './orders.js';

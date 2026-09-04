@@ -6,16 +6,14 @@
 > picker keeps its door — and its battle boundary (orders, tokens, the
 > embedded landing) is the plumbing Orbital Drop's ground battles ride.
 
-This app is linked to its companion,
-[OGRE-VTT](https://github.com/onlinemph/OGRE-VTT), by a campaign over the
-inner Solar System: Triplanetary decides who gets to the ground, and Ogre
-decides what happens when they land. **The campaign lives here** —
-`src/campaign/` holds the engine, and the war room is on the scenario screen
-— beside the online play that lets a contested transfer actually be contested
-by somebody on another machine. The original design, written before either
-engine consumed it, is
-[OGRE-VTT's docs/CAMPAIGN.md](https://github.com/onlinemph/OGRE-VTT/blob/main/docs/CAMPAIGN.md);
-this document says what was built and how to play it.
+Two games are joined by a campaign over the inner Solar System: Triplanetary
+decides who gets to the ground, and Ogre decides what happens when they land.
+Both live here — `src/campaign/` holds the war's engine, `src/ogre/` the
+ground game — and the war room is on the scenario screen, beside the online
+play that lets a contested transfer actually be contested by somebody on
+another machine. The design rationale, written before either engine consumed
+it, is [docs/OGRE-HANDOFF.md](OGRE-HANDOFF.md); this document says what was
+built and how to play it.
 
 ## How to play it
 
@@ -48,9 +46,10 @@ clicking a pin brings that site's card into view in the room.
   browser, and offers it as a token everywhere else.
 - **A landing** is an Ogre battle — and it is fought right here too. **Fight
   it here** mounts the embedded Ogre view (see below) and the result reports
-  straight back, exactly as a transfer's does. The **Open in the Ogre app**
-  link and the order/result tokens remain, for fighting the ground half in
-  the companion app or on another machine. What lands is whatever tonnage
+  straight back, exactly as a transfer's does. It can also be **hosted as a
+  table**, and at a refereed table the referee opens one by itself the moment
+  the sky freezes; the order and result tokens remain, for fighting the
+  ground half on a machine that is not online. What lands is whatever tonnage
   actually got down, converted at ten tons of hold to the armour unit — a
   transport lands five armour units, and shipping a Mark V is a
   seventeen-lot convoy operation.
@@ -77,15 +76,17 @@ Here, under `src/campaign/`:
   and what turned back read the same manifest.
 - `session.ts` — the session facade: dispatch, undo, and a save that is a
   seed plus a log, carrying the replay of every battle fought in the war.
-- `orders.ts`, `codec.ts`, `result.ts` — the battle boundary, duplicated
-  verbatim in OGRE-VTT rather than shared; the codec tests on both sides pin
-  the wire format, which is the actual compatibility contract.
+- `orders.ts`, `codec.ts`, `result.ts` — the battle boundary. It stays a
+  boundary although both games are now in one repository, because that is what
+  lets a battle be fought at an online table or on a machine with no network at
+  all; the codec tests pin the wire format, which every token already issued
+  depends on. The rationale is [OGRE-HANDOFF.md](OGRE-HANDOFF.md).
 
-And under `src/ogre/`: **the companion game itself, embedded**. OGRE-VTT's
-engine, renderer and all four scenarios — Mark III Attack, Mark V Attack, The
-Crossing, and The Landing — are ported wholesale (imports made relative,
-nothing else changed — its own rules tests run here under `tests/ogre/` to
-prove it), and its shell is pruned to a mountable battle view
+And under `src/ogre/`: **the ground game itself**. Its engine, renderer and
+eight scenarios — Mark III Attack, Mark V Attack, The Crossing, The Landing,
+the three Orbital Drop assaults and the custom battle — with its rules tests
+running here under `tests/ogre/`, and its shell pruned to a mountable battle
+view
 (`src/ogre/ui/battle.ts`) with the application chrome removed and the ending
 matched to what was fought: a _Report to the campaign_ button when a war room
 in this browser is waiting, a result token for a campaign running somewhere
@@ -95,9 +96,9 @@ palette stays inside the battle, and the whole thing is a set of code-split
 chunks loaded the moment a battle (or the Ogre scenario list) is asked for —
 a player who never leaves space never downloads it.
 
-In OGRE-VTT: the same boundary files, and the original of The Landing — the
-standalone app remains fully playable, and remains the way to fight the
-ground half on a machine that only has the Ogre app.
+The ground game was once a separate app,
+[OGRE-VTT](https://github.com/onlinemph/OGRE-VTT), whose page now forwards
+here; `docs/OGRE-ARCHITECTURE.md` describes the engine it brought with it.
 
 ## The online half
 

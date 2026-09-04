@@ -21,7 +21,7 @@
  *
  * The ship catalogue is derived from this engine's own ship table. The ground
  * catalogue is the campaign's copy of the other game's prices — armour-unit
- * costs transcribed from OGRE-VTT's unit and record-sheet tables (rulebook
+ * costs transcribed from the ground game's unit and record-sheet tables (rulebook
  * 1.07 and the printed record sheets) — because the campaign owns the
  * conversion between the two vocabularies and neither game engine needs to
  * know the other's exists.

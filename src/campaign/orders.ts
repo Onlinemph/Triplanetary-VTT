@@ -1,16 +1,17 @@
 /**
  * The boundary between the campaign and a battle.
  *
- * The campaign itself lives in the companion repository
- * ([OGRE-VTT](https://github.com/onlinemph/OGRE-VTT), `src/campaign/`); what
- * lives here is this app's half of the hand-off. These two types are the whole
- * interface: a battle is *launched* with an `OrderOfBattle` and hands back a
- * `BattleResult`, and nothing else crosses. They are deliberately small — see
- * OGRE-VTT's docs/CAMPAIGN.md, which designed them before either engine
- * consumed them — and they are duplicated verbatim in both repositories rather
- * than shared, because a package the two both depend on would couple their
- * release cycles over forty lines of types. The codec (`codec.ts`) is the
- * compatibility contract, and it is tested.
+ * Both halves of the war live here — the space game, and the ground game under
+ * `src/ogre/` — so these two types are an in-process seam as much as a wire
+ * format. They are kept as a boundary rather than folded away because that is
+ * what lets a battle be fought anywhere: at this keyboard, at an online table
+ * that the referee opens on its own, or on another machine entirely from a
+ * pasted token. A battle is *launched* with an `OrderOfBattle` and hands back
+ * a `BattleResult`, and nothing else crosses.
+ *
+ * They are deliberately small — `docs/OGRE-HANDOFF.md` is the design rationale,
+ * written before either engine consumed them. `codec.ts` is the wire format,
+ * and it is tested.
  *
  * Conventions the types themselves cannot state:
  *
@@ -20,7 +21,7 @@
  *    Ogre it is `UnitClassId` and `OgreTypeId` keys, infantry in squads.
  *  - `terms` is free-form on purpose. A scenario reads the keys it documents
  *    and ignores the rest, which is what lets the campaign grow new terms
- *    without a lockstep change in two repositories.
+ *    without a lockstep change everywhere else.
  */
 
 export interface OrderSide {
