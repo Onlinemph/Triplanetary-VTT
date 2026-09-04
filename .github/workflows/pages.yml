@@ -1,0 +1,89 @@
+name: Deploy to GitHub Pages
+
+on:
+  push:
+  workflow_dispatch:
+
+# This workflow is what publishes the site, and it needs two repository settings
+# to be right or nothing reaches the web:
+#
+#   Settings -> Pages -> Build and deployment -> Source: **GitHub Actions**
+#
+# With Source set to "Deploy from a branch" instead, Pages serves the repository
+# *as-is*. That looks like it works and is not: the root `index.html` is Vite's
+# development entry, whose only script tag points at `/src/main.ts`, and no
+# browser can execute TypeScript. The page loads, `#root` stays empty, and the
+# dark colour-scheme leaves a blank grey screen with no error to go on.
+#
+# The job below only runs on the default branch, so feature branches skip it
+# rather than failing.
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deployment at a time. Queued runs wait rather than cancel, so a push that
+# lands mid-deploy still reaches the site instead of being dropped.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    # Only the default branch is published, whatever it happens to be called.
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      # Pages serves the site from /<repo>/, so the bundle's asset URLs have to
+      # be built with that prefix. `vite.config.ts` reads VITE_BASE for exactly
+      # this reason; a root-served host builds with the default '/'.
+      #
+      # The two Supabase values are read here because Vite bakes them in at
+      # build time — there is no runtime configuration to hand a static site
+      # later. Absent, the build is simply one with online play switched off:
+      # `main.ts` tells the player why the buttons are dead, and the bundler
+      # drops the client library entirely. So a fork with no secrets still gets
+      # a working game rather than a broken one.
+      #
+      # The anon key is meant to be public — it ships inside the page every
+      # player downloads, and grants nothing on its own. It lives in secrets
+      # rather than in the file because *which project* this site talks to is
+      # the repository owner's business, not because the string is sensitive.
+      - name: Build
+        run: npm run build
+        env:
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+          VITE_BASE: /Triplanetary-VTT/
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@v4

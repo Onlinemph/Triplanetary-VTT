@@ -1,0 +1,178 @@
+name: Deploy to Supabase
+
+# The referee half of a deployment.
+#
+# GitHub Pages publishes the game, but the game is only half of online play:
+# the other half is a Postgres schema and an Edge Function living on Supabase,
+# and no static host can serve those. This workflow is how they get there
+# without anybody needing a terminal, a local clone, or Node on their laptop.
+#
+# It is deliberately manual. Pushing a schema migration is not something that
+# should happen because somebody edited a comment, and `db push` against a live
+# game table is not an operation to trigger by accident. Run it from the Actions
+# tab when the schema or the function has actually changed.
+#
+# ## What it needs, once
+#
+# Three repository secrets, under Settings -> Secrets and variables -> Actions:
+#
+#   SUPABASE_ACCESS_TOKEN   supabase.com/dashboard/account/tokens
+#   SUPABASE_PROJECT_REF    the id in your dashboard URL, e.g. abcdefghijklmnop
+#   SUPABASE_DB_PASSWORD    the database password, set when the project was made
+#
+# And two more for the Pages build, which bakes them into the published page:
+#
+#   VITE_SUPABASE_URL       https://<project-ref>.supabase.co
+#   VITE_SUPABASE_ANON_KEY  the anon public key, Project Settings -> API
+#
+# ## What it does not do
+#
+# `supabase config push` is not run here, on purpose. `config.toml` describes
+# the *local* development stack — its `site_url` is `127.0.0.1:5173` — and
+# pushing that at a production project would point the project's auth redirects
+# at a laptop. The one setting the game genuinely needs from that file is
+# anonymous sign-in, which is a single toggle in the dashboard under
+# Authentication -> Sign In / Providers, and a setting rather than a deployment.
+
+on:
+  workflow_dispatch:
+    inputs:
+      migrations:
+        description: "Push database migrations"
+        type: boolean
+        default: true
+      function:
+        description: "Deploy the game Edge Function"
+        type: boolean
+        default: true
+      verify:
+        description: "Attack the live project afterwards and report"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+# One deployment at a time. A second run queues rather than racing the first
+# through `db push`.
+concurrency:
+  group: supabase-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: schema and referee
+    runs-on: ubuntu-latest
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      # Fail here, with a sentence, rather than three steps later with the
+      # CLI's own message about an empty project ref.
+      - name: Check the secrets are set
+        run: |
+          missing=""
+          [ -n "$SUPABASE_ACCESS_TOKEN" ] || missing="$missing SUPABASE_ACCESS_TOKEN"
+          [ -n "${{ secrets.SUPABASE_PROJECT_REF }}" ] || missing="$missing SUPABASE_PROJECT_REF"
+          [ -n "$SUPABASE_DB_PASSWORD" ] || missing="$missing SUPABASE_DB_PASSWORD"
+          if [ -n "$missing" ]; then
+            echo "::error::missing repository secret(s):$missing"
+            echo "Add them under Settings -> Secrets and variables -> Actions."
+            exit 1
+          fi
+
+      - name: Install
+        run: npm ci
+
+      - name: Link the project
+        run: npx supabase link --project-ref "${{ secrets.SUPABASE_PROJECT_REF }}"
+
+      # Idempotent: the CLI tracks which migrations a project has already run,
+      # so this applies what is new and nothing else.
+      - name: Push migrations
+        if: inputs.migrations
+        run: npx supabase db push
+
+      # Bundles the engine for Deno, verifies the committed declaration file
+      # still matches, imports the bundle and judges a real command through it —
+      # then ships it. The smoke test is the reason this is one script: a bundle
+      # that deploys and then throws on import fails in production.
+      - name: Build and deploy the Edge Function
+        if: inputs.function
+        run: npm run functions:deploy
+
+      - name: What to do next
+        run: |
+          echo "### Deployed" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- migrations: ${{ inputs.migrations }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- edge function: ${{ inputs.function }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Anonymous sign-in must be on for players to join without an" >> "$GITHUB_STEP_SUMMARY"
+          echo "account: Authentication -> Sign In / Providers -> Anonymous." >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Then re-run *Deploy to GitHub Pages* so the published site is" >> "$GITHUB_STEP_SUMMARY"
+          echo "built with VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY." >> "$GITHUB_STEP_SUMMARY"
+
+  # The half of the testing that needs a project to exist.
+  #
+  # `tests/supabase-schema.test.ts` proves the policies in PostgreSQL, but it
+  # cannot prove *Supabase*: PostgREST's schema exposure, Realtime's row
+  # authorisation, and whether the platform reads the settings we think it
+  # does. This runs those attacks against the live project, as two real
+  # anonymous accounts holding real JWTs.
+  #
+  # It runs here rather than from a developer's machine for a practical reason
+  # as much as a tidy one: a session behind a restrictive egress policy cannot
+  # reach `*.supabase.co` at all, and a runner can. The results land in the job
+  # log and the run summary either way.
+  verify:
+    name: attack the live project
+    needs: deploy
+    if: ${{ !cancelled() && inputs.verify && needs.deploy.result == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci
+
+      # The anon key, deliberately. The script refuses a `sb_secret_` or a
+      # service-role JWT: every case in it asserts a denial by attempting the
+      # thing and finding it refused, and a key that bypasses row level
+      # security is not refused — the suite would go green while proving the
+      # opposite of what it claims.
+      - name: Probe
+        env:
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+        run: |
+          set -o pipefail
+          npm run verify:supabase 2>&1 | tee probe.log
+        continue-on-error: true
+
+      - name: Report
+        run: |
+          {
+            echo "### Live probe"
+            echo ""
+            echo '```'
+            cat probe.log 2>/dev/null || echo "the probe produced no output"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          # The probe's own exit code decides the job. `continue-on-error`
+          # above is only so the summary is written before the failure lands.
+          grep -q "passed against the live project" probe.log || exit 1
+          grep -q "FAIL" probe.log && exit 1
+          exit 0

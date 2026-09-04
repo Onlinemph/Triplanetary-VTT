@@ -1,0 +1,45 @@
+{
+  "name": "triplanetary-vtt",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "A rules-accurate virtual tabletop for Triplanetary (Steve Jackson Games, 3rd edition)",
+  "scripts": {
+    "dev": "vite",
+    "build": "npm run typecheck && vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.functions.json --noEmit",
+    "map:build": "tsx tools/build-map.ts",
+    "tune:ai": "tsx scripts/tune-ai.ts",
+    "lint": "eslint . --ext .ts",
+    "format": "prettier --write \"**/*.{ts,html,css,json,md}\"",
+    "server": "tsx server/index.ts",
+    "server:dev": "tsx watch server/index.ts",
+    "functions:build": "node scripts/build-functions.mjs",
+    "functions:check": "node scripts/build-functions.mjs --check",
+    "functions:typecheck": "deno check --sloppy-imports supabase/functions/game/index.ts",
+    "functions:deploy": "npm run functions:build && supabase functions deploy game",
+    "verify:supabase": "node scripts/verify-supabase.mjs"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "^0.5.7",
+    "@types/node": "^22.10.2",
+    "@types/ws": "^8.18.1",
+    "@typescript-eslint/eslint-plugin": "^8.18.0",
+    "@typescript-eslint/parser": "^8.18.0",
+    "esbuild": "^0.28.2",
+    "eslint": "^8.57.1",
+    "prettier": "^3.4.2",
+    "supabase": "^2.115.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.5",
+    "vitest": "^2.1.8",
+    "ws": "^8.21.3"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.112.3"
+  }
+}

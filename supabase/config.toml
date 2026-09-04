@@ -1,0 +1,84 @@
+# Supabase project configuration.
+#
+# Only the settings this project actually depends on are written out. Every
+# other field is left to the CLI's default on purpose: a config file that
+# restates 400 defaults hides the half-dozen lines that are a decision.
+#
+# The decisions are all in the same direction — expose as little as possible
+# through the Data API, because the Data API is the surface a player's browser
+# can reach directly. Everything that changes a game goes through the Edge
+# Function instead, which holds the service role.
+
+project_id = "triplanetary-vtt"
+
+[api]
+enabled = true
+port = 54321
+
+# `graphql_public` is dropped. pg_graphql honours row level security like
+# PostgREST does, so it would be safe, but it is a second query language over
+# the same tables and nothing in this project speaks it. Less surface, no cost.
+schemas = ["public"]
+extra_search_path = ["public"]
+
+# A fog game's `views.state` is a whole board. One row is the answer to every
+# legitimate query a client makes here, so the cap only ever bites a mistake.
+max_rows = 200
+
+# New tables are not reachable through `anon`/`authenticated` without an
+# explicit GRANT. This is already the cloud default; it is pinned because the
+# whole security model in 0002_policies.sql assumes it, and a project that
+# quietly flipped back to the legacy behaviour would publish the next table
+# somebody adds.
+auto_expose_new_tables = false
+
+[db]
+port = 54322
+shadow_port = 54320
+major_version = 17
+
+[db.migrations]
+enabled = true
+
+# Fog games depend on this: the referee rewrites each seat's `views` row and the
+# seat hears about it here rather than by polling. Row level security decides
+# what actually arrives — see the "What streams" section of 0002_policies.sql.
+[realtime]
+enabled = true
+
+[studio]
+enabled = true
+port = 54323
+
+[auth]
+enabled = true
+site_url = "http://127.0.0.1:5173"
+additional_redirect_urls = ["http://localhost:5173"]
+jwt_expiry = 3600
+enable_refresh_token_rotation = true
+
+# A friend following a link should be able to sit down without inventing a
+# password. An anonymous sign-in still produces a real account with a stable
+# `sub`, which is all the schema wants: `seats.user_id` is only ever compared
+# with `auth.uid()`, never shown to anybody or emailed.
+enable_anonymous_sign_ins = true
+
+[auth.rate_limit]
+# The join flow's one abusable move is minting accounts, so this is the number
+# that matters. Everything downstream of it needs a valid seat.
+anonymous_users = 30
+sign_in_sign_ups = 30
+token_refresh = 150
+
+[edge_runtime]
+enabled = true
+policy = "per_worker"
+deno_version = 2
+
+# Nothing in this project stores a file or reads an analytics table, and a
+# disabled service is one that cannot be misconfigured.
+[storage]
+enabled = false
+
+[analytics]
+enabled = false
