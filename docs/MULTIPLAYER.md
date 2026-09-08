@@ -480,9 +480,22 @@ browser that sits down at a ground table. The fingerprint that catches drift
 covers both boards — where every ship is with what left in it, or where every
 counter is with how much of it is still working.
 
-What a quick table cannot do is play a seat. The computer's seat is the
-referee's, so a ground table with one is refereed-only and the host dialog
-says why; two people at a quick table play each other.
+A quick table has no referee to play a seat, so a browser does. The setup
+frozen at `tri_host` names the computer's seats by player id
+(`setup.computers`; the shell turns the host dialog's ordinals into ids by
+building the board once), and every browser reads the same list. The one that
+plays them is the browser of the person in the lowest occupied seat
+(`QuickTable.drives`): it sits the computer down with a key of its own
+(`tri_sit`, name "Computer") and gives its orders through `tri_play` exactly
+as it gives its own, re-planning after every move and skipping what the rules
+refuse (`QuickTable.playComputers`, from `KindRules.computerOrders`). The
+schema is untouched — a seat is played by whoever holds its key — so two
+browsers cannot both play the computer even when a stale roster makes both
+think they should, and a driver that vanishes leaves a claim that ages out in
+five minutes for the next human's browser to take over. Nobody can sit in the
+computer's chair; `sitAnywhere` skips it and `sit` refuses it. A war's ground
+battle at a quick table lists as the computer's every side nobody at the war
+is playing, the base's militia first among them.
 
 `schema.sql` is written to be re-pasted, and this change is why that matters:
 an install from before both games were carried gains `tri_tables.kind` with an

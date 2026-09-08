@@ -32,6 +32,15 @@ the taste.
 - _goal_ — hexes of ground (not crow's flight: craters and water are not
   ground) to the objective, or to the nearest enemy cybertank when
   defending, or to the exit edge when leaving is the goal;
+- _exit goals_ — a scenario that is about leaving says so in its data
+  (`exitEdge`, `exitSide`, and `exitUnits` when only some counters have to
+  make it). The counters that have to go head for the edge and walk off it;
+  the rest of their side stays with them; the other side goes for them. A
+  breakthrough in the custom battle sends the whole attacking force; The
+  Train sends the train (which also opens its speed up a step a turn, since
+  the speed is set before it moves) with the escort alongside and the
+  raiders after it. A "D" is worth nothing against the train, and the fire
+  planner knows it;
 - _standoff_ — how far inside its own reach the nearest enemy would be,
   for a gun that would rather hold at its range than walk in;
 - _in reach_ — what the enemies inside its range are worth;

@@ -35,6 +35,17 @@
  * than letting this module pretend. The move list rebuilds the board including
  * the ships the fog is hiding, so there is nowhere here to keep a secret.
  *
+ * ## The computer's seats
+ *
+ * There is no referee to play a seat handed to the computer, so a browser at
+ * the table does: the setup names the computer's seats (`setup.computers`),
+ * and the human in the lowest seat that is actually occupied plays them, by
+ * sitting the computer down with a key of its own and giving its orders
+ * through `tri_play` exactly as it gives its own. The database's rules are
+ * unchanged — a seat is played by whoever holds its key — so two browsers
+ * cannot both play the computer, and if the one that was goes away, the seat
+ * ages out and the next human takes it over.
+ *
  * ## Drift
  *
  * Each move is stored with a fingerprint of the board the sender ended up
@@ -51,6 +62,7 @@ import {
   type GameKind,
   type KindRules,
   type StateSummary,
+  authorOf,
   triRules,
 } from '../kinds.js';
 import type { ChannelLike, RulesSource, SessionSink } from './client.js';
@@ -118,6 +130,11 @@ export interface QuickSetup {
    * Opaque JSON on the wire, like the fleets: `buildScenario` validates it.
    */
   readonly order?: unknown;
+  /**
+   * The seats the computer plays, by player id. Frozen with the rest of the
+   * setup so every browser at the table agrees whose they are.
+   */
+  readonly computers?: readonly string[];
 }
 
 export interface QuickListing {
@@ -237,6 +254,10 @@ const groundDigest = (state: GroundBoard): string => {
 
 const RETRY_MS = 2_000;
 const RENEW_MS = 60_000;
+/** `tri_sit`'s idea of a seat gone quiet, matched here rather than guessed at. */
+const STALE_MS = 5 * 60_000;
+/** A beat between the computer's orders, so a person can follow them. */
+const PACE_MS = 150;
 
 interface Held {
   readonly code: string;
@@ -260,6 +281,16 @@ export class QuickTable {
   private mine: PlayerId | null = null;
   private catching = false;
   private closed = false;
+  /** The computer's seats this browser has sat down in, with keys of its own. */
+  private readonly driven = new Set<PlayerId>();
+  private inFlight: Promise<number> | null = null;
+  private driveTimer: ReturnType<typeof setTimeout> | null = null;
+  /**
+   * Play the computer's seats on this browser's own initiative, a beat after
+   * every change to the board. Off, a caller drives them with
+   * {@link playComputers}; the tests do, so they can count what was played.
+   */
+  autoplay = true;
 
   /**
    * A per-browser secret, made once and never sent anywhere but the seat
@@ -434,8 +465,10 @@ export class QuickTable {
    */
   async sitAnywhere(): Promise<PlayerId | null> {
     const held = this.require();
-    const stale = Date.now() - 5 * 60_000;
+    const stale = Date.now() - STALE_MS;
+    const computers = this.computers();
     for (const seat of this.seats()) {
+      if (computers.includes(seat)) continue;
       const claim = held.info.seats[seat];
       const at = claim === undefined ? null : Date.parse(claim.at);
       if (claim === undefined || Number.isNaN(at) || (at ?? 0) < stale) {
@@ -449,6 +482,10 @@ export class QuickTable {
   /** Take a side. Omitting one gives up whatever this browser was holding. */
   async sit(seat: PlayerId | null): Promise<void> {
     const held = this.require();
+    if (seat !== null && this.computers().includes(seat)) {
+      this.events.onRefused?.('The computer holds that seat.');
+      return;
+    }
     if (seat === null) {
       await this.rpc('tri_stand', {
         p_code: held.code,
@@ -469,6 +506,7 @@ export class QuickTable {
     }
     this.events.onSeat?.(this.mine);
     await this.refresh();
+    this.scheduleDrive();
   }
 
   // -------------------------------------------------------------------------
@@ -485,30 +523,38 @@ export class QuickTable {
    * is where running them happens.
    */
   async send(cmd: AnyCommand): Promise<boolean> {
-    const held = this.require();
     if (this.mine === null) {
       this.events.onRefused?.('You are not sitting at this table.');
       return false;
     }
+    return this.play(this.mine, this.key, cmd, true);
+  }
+
+  /** One order from one seat, with the key that holds it. */
+  private async play(
+    seat: PlayerId,
+    key: string,
+    cmd: AnyCommand,
+    report: boolean,
+  ): Promise<boolean> {
+    const held = this.require();
+    const refuse = (reason: string): false => {
+      if (report) this.events.onRefused?.(reason);
+      return false;
+    };
 
     const rules = this.ruleset();
     const board = this.board;
-    if (board === null) {
-      this.events.onRefused?.('There is no board yet.');
-      return false;
-    }
-    const signed = { ...cmd, by: this.mine } as AnyCommand;
+    if (board === null) return refuse('There is no board yet.');
+    const signed = { ...cmd, by: seat } as AnyCommand;
     const applied = rules.apply(board, signed, 0);
-    if (!applied.ok) {
-      this.events.onRefused?.(applied.reason);
-      return false;
-    }
+    if (!applied.ok) return refuse(applied.reason);
 
     const answer = (await this.rpc('tri_play', {
       p_code: held.code,
       p_password: held.password,
-      p_seat: this.mine,
-      p_key: this.key,
+      p_seat: seat,
+      p_key: key,
       p_cmd: signed,
       p_after: this.index,
       // Computed after the fact: the die comes from Postgres, so the board
@@ -521,12 +567,126 @@ export class QuickTable {
     if (!answer.ok) {
       // Somebody moved first. Not an error — read their move and try again.
       await this.catchUp();
-      this.events.onRefused?.('Somebody else moved first — the board has caught up.');
-      return false;
+      return refuse('Somebody else moved first — the board has caught up.');
     }
 
     await this.catchUp();
     return true;
+  }
+
+  // -------------------------------------------------------------------------
+  // The computer's seats
+  // -------------------------------------------------------------------------
+
+  /** The seats the computer plays at this table, by player id. */
+  computers(): readonly PlayerId[] {
+    const named = this.held?.info.setup.computers;
+    if (!Array.isArray(named)) return [];
+    const seats = this.seats();
+    return named.filter((s): s is PlayerId => typeof s === 'string' && seats.includes(s));
+  }
+
+  /**
+   * Whether this browser is the one that plays the computer: it holds a seat,
+   * and no person in a lower seat has been heard from lately. Every browser
+   * at the table can work this out from the same roster, so they agree —
+   * and where a stale roster makes two of them think so, the seat's own key
+   * settles it, because only one of them can be holding it.
+   */
+  drives(): boolean {
+    const held = this.held;
+    if (!held || this.mine === null) return false;
+    const seats = this.seats();
+    const computers = this.computers();
+    const stale = Date.now() - STALE_MS;
+    for (const seat of seats.slice(0, Math.max(0, seats.indexOf(this.mine)))) {
+      if (computers.includes(seat)) continue;
+      const claim = held.info.seats[seat];
+      if (claim === undefined) continue;
+      const at = Date.parse(claim.at);
+      if (!Number.isNaN(at) && at >= stale) return false;
+    }
+    return true;
+  }
+
+  /**
+   * Give the computer's orders until it has none to give: its plan for the
+   * decision the board is waiting on, one order at a time through the same
+   * call a person's browser uses, re-planned whenever the board changes and
+   * skipping what the rules refuse — the ground game's planner may name a
+   * target the previous order destroyed. Resolves to how many were played.
+   * Idempotent while running: a second call joins the first.
+   */
+  playComputers(): Promise<number> {
+    if (this.inFlight) return this.inFlight;
+    this.inFlight = this.driveComputers().finally(() => {
+      this.inFlight = null;
+    });
+    return this.inFlight;
+  }
+
+  private async driveComputers(): Promise<number> {
+    let played = 0;
+    for (let round = 0; round < 400 && !this.closed && this.held; round++) {
+      if (!this.drives()) break;
+      const computers = this.computers();
+      const board = this.board;
+      if (computers.length === 0 || board === null) break;
+      const rules = this.ruleset();
+      if (rules.summary(board).finished) break;
+      const orders = rules.computerOrders(board, new Set(computers));
+      if (orders.length === 0) break;
+      let moved = false;
+      for (const order of orders) {
+        if (this.closed) break;
+        const seat = authorOf(order);
+        if (!computers.includes(seat)) continue;
+        if (!(await this.holdComputer(seat))) continue;
+        if (await this.play(seat, this.computerKey(seat), order, false)) {
+          moved = true;
+          played += 1;
+          if (this.autoplay && PACE_MS > 0) await pause(PACE_MS);
+        }
+        // Refused: the board changed under the plan; the next order may still stand.
+      }
+      // A plan the rules refused wholesale would loop forever; ask again only
+      // when something changed.
+      if (!moved) break;
+    }
+    return played;
+  }
+
+  /** Sit the computer down in its seat, with a key that is this browser's for it. */
+  private async holdComputer(seat: PlayerId): Promise<boolean> {
+    if (this.driven.has(seat)) return true;
+    const held = this.require();
+    try {
+      await this.rpc('tri_sit', {
+        p_code: held.code,
+        p_password: held.password,
+        p_seat: seat,
+        p_key: this.computerKey(seat),
+        p_name: 'Computer',
+      });
+    } catch {
+      // Another browser is playing it, and recently enough to still be.
+      return false;
+    }
+    this.driven.add(seat);
+    return true;
+  }
+
+  private computerKey(seat: PlayerId): string {
+    return `${this.key}:computer:${seat}`;
+  }
+
+  private scheduleDrive(): void {
+    if (!this.autoplay || this.closed || !this.held) return;
+    if (this.driveTimer) clearTimeout(this.driveTimer);
+    this.driveTimer = setTimeout(() => {
+      this.driveTimer = null;
+      void this.playComputers().catch(() => undefined);
+    }, PACE_MS);
   }
 
   /** Take the table back to just before a move. */
@@ -543,7 +703,18 @@ export class QuickTable {
   }
 
   async leave(): Promise<void> {
-    if (this.held && this.mine !== null) await this.sit(null);
+    if (this.held) {
+      const held = this.held;
+      for (const seat of this.driven) {
+        await this.rpc('tri_stand', {
+          p_code: held.code,
+          p_password: held.password,
+          p_key: this.computerKey(seat),
+        }).catch(() => undefined);
+      }
+      this.driven.clear();
+      if (this.mine !== null) await this.sit(null);
+    }
     this.close();
   }
 
@@ -551,6 +722,8 @@ export class QuickTable {
     this.closed = true;
     if (this.renew) clearInterval(this.renew);
     this.renew = null;
+    if (this.driveTimer) clearTimeout(this.driveTimer);
+    this.driveTimer = null;
     if (this.channel) void this.supabase.removeChannel(this.channel);
     this.channel = null;
     this.events.onLink?.('offline');
@@ -623,6 +796,7 @@ export class QuickTable {
     const sealed = this.ruleset().seal(state);
     this.board = sealed;
     this.session.adoptSnapshot(sealed);
+    this.scheduleDrive();
   }
 
   /** The seats this game has, in the order they move. */
@@ -670,6 +844,17 @@ export class QuickTable {
     // every minute. A closed tab stops saying it and the chair frees itself.
     this.renew = setInterval(() => {
       if (this.held && this.mine !== null) void this.sit(this.mine).catch(() => undefined);
+      const held = this.held;
+      if (!held) return;
+      for (const seat of this.driven) {
+        void this.rpc('tri_sit', {
+          p_code: held.code,
+          p_password: held.password,
+          p_seat: seat,
+          p_key: this.computerKey(seat),
+          p_name: 'Computer',
+        }).catch(() => undefined);
+      }
     }, RENEW_MS);
   }
 
@@ -767,6 +952,8 @@ const CODE_LENGTH = 6;
 
 /** What `tri_host` says when the code somebody worked out is already standing. */
 export const CODE_TAKEN = 'code-taken';
+
+const pause = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 const randomKey = (): string => {
   const bytes = new Uint8Array(16);

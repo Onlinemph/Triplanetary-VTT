@@ -2121,8 +2121,6 @@ export const createApp = (deps: AppDeps): App => {
         void openOgreScenario(id, battleSeed, ai);
       },
       onCustom: () => void openCustomBuilder(),
-      // A ground table needs the referee: it keeps the board and plays the
-      // computer's seat, so a quick table cannot hold one.
       ...(online.available
         ? {
             onHost: (id: string, battleSeed: number, computer: number | null) => {
@@ -2289,22 +2287,13 @@ export const createApp = (deps: AppDeps): App => {
 
   /** Open a refereed table for a printed Ogre scenario, and share the code. */
   /**
-   * Which arrangements a ground table may use.
-   *
-   * Both, until somebody hands a seat to the computer: a quick table has no
-   * referee, and the computer's seat is the referee's to play. Rather than
-   * open a table with a chair nobody is ever in, the choice narrows and says
-   * why.
+   * Which arrangements a ground table may use: both. A seat handed to the
+   * computer is the referee's to play at a refereed table, and at a quick
+   * table the browser of the person in the lowest occupied seat plays it.
    */
-  const groundModes = (
-    computer: number | null,
-  ): { modes: readonly OnlineMode[]; note?: string } => {
-    if (!online.available) return { modes: ['refereed'] };
-    if (computer === null) return { modes: online.modes };
-    return {
-      modes: ['refereed'],
-      note: 'A seat given to the computer needs a refereed table: the referee is what plays it. Choose hot seat instead to open a quick table.',
-    };
+  const groundModes = (computer: number | null): { modes: readonly OnlineMode[] } => {
+    void computer;
+    return { modes: online.available ? online.modes : ['refereed'] };
   };
 
   const hostOgreTable = async (
@@ -2642,9 +2631,15 @@ export const createApp = (deps: AppDeps): App => {
     try {
       const info = from.table;
       if (info === null) return;
+      // A side of the battle nobody at the war is playing — a base's militia,
+      // a power whose seat is empty — is the computer's, and one of the
+      // browsers at the battle plays it.
+      const computers = order.sides
+        .map((s) => s.player)
+        .filter((p) => !info.seats.some((s) => s.seat === p && s.kind === 'human'));
       enterTable(
         await online.battleTable(
-          { code: info.code, password: from.password },
+          { code: info.code, password: from.password, computers },
           order,
           tableEvents(),
         ),

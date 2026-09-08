@@ -465,6 +465,9 @@ const build = (opts: ScenarioBuildOptions): GameState => {
       // Where a cybertank heads once the post is down — or, in a breakthrough,
       // from the start.
       ogreEscapeEdge: terms.victory === 'breakthrough' ? ground.farEdge : ground.homeEdge,
+      // In a breakthrough the whole attacking force is trying to leave, and
+      // the computer reads that here (`exitSide` defaults to the first mover).
+      ...(terms.victory === 'breakthrough' ? { exitEdge: ground.farEdge } : {}),
     },
   });
 

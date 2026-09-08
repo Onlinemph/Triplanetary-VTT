@@ -29,7 +29,7 @@ import { type Odds, oddsChance, oddsFor } from '../engine/crt.js';
 import { OGRE_WEAPONS, type OgreWeaponKind, ogreType } from '../engine/ogres.js';
 import { baseTerrain, defenseMultiplier, entryCost } from '../engine/terrain.js';
 import { mobilityOf } from '../engine/mobility.js';
-import { unitClass } from '../engine/units.js';
+import { TRAIN_MAX_SPEED, unitClass } from '../engine/units.js';
 import type { Command } from '../engine/commands.js';
 import {
   type AttackerRef,
@@ -141,8 +141,20 @@ interface Ctx {
   /** The enemy cybertank that matters most to what we guard. */
   readonly enemyOgre: OgreUnit | null;
   readonly edge: Edge | null;
+  /**
+   * A scenario in which one side's goal is to leave: by which edge, who,
+   * and — when only some counters have to get there (the train) — which.
+   */
+  readonly exit: ExitGoal | null;
   readonly threat: Map<string, number>;
   readonly fields: Map<string, ReadonlyMap<string, number>>;
+}
+
+interface ExitGoal {
+  readonly edge: Edge;
+  readonly side: PlayerId;
+  /** The counters that have to get off; null means the whole side. */
+  readonly units: readonly string[] | null;
 }
 
 const makeCtx = (state: GameState, map: GameMap, player: PlayerId, w: Weights): Ctx => {
@@ -162,6 +174,7 @@ const makeCtx = (state: GameState, map: GameMap, player: PlayerId, w: Weights): 
     guard,
     enemyOgre: enemyOgre && isOgre(enemyOgre) ? enemyOgre : null,
     edge: escapeEdge(state),
+    exit: exitGoalOf(state),
     threat: new Map(),
     fields: new Map(),
   };
@@ -202,6 +215,40 @@ const guardOf = (state: GameState, player: PlayerId): Hex | null => {
 const escapeEdge = (state: GameState): Edge | null => {
   const raw = state.scenarioData['ogreEscapeEdge'];
   return raw === 'north' || raw === 'south' || raw === 'east' || raw === 'west' ? raw : null;
+};
+
+/**
+ * The scenario's exit goal, when it has one: `exitEdge` with `exitSide`
+ * (the first mover when unsaid) and, optionally, `exitUnits`. A breakthrough
+ * sets the edge for a whole side; the train scenario names the one counter
+ * that has to reach it.
+ */
+const exitGoalOf = (state: GameState): ExitGoal | null => {
+  const raw = state.scenarioData['exitEdge'];
+  if (raw !== 'north' && raw !== 'south' && raw !== 'east' && raw !== 'west') return null;
+  const side = state.scenarioData['exitSide'];
+  const units = state.scenarioData['exitUnits'];
+  return {
+    edge: raw,
+    side: typeof side === 'string' ? side : (state.playerOrder[0] ?? ''),
+    units: Array.isArray(units) ? units.filter((u): u is string => typeof u === 'string') : null,
+  };
+};
+
+/** True when this counter is one of those that has to get off the map. */
+const mustExit = (ctx: Ctx, u: Unit): boolean =>
+  ctx.exit !== null &&
+  u.owner === ctx.exit.side &&
+  (ctx.exit.units === null || ctx.exit.units.includes(u.id));
+
+/** The counters still on the board that have to get off, whichever side asks. */
+const exitUnitsOnBoard = (ctx: Ctx): Unit[] => {
+  const exit = ctx.exit;
+  if (!exit) return [];
+  return Object.values(ctx.state.units).filter(
+    (u) =>
+      onBoard(u) && u.owner === exit.side && (exit.units === null || exit.units.includes(u.id)),
+  );
 };
 
 const edgeDistance = (map: GameMap, h: Hex, edge: Edge): number => {
@@ -386,6 +433,8 @@ const onOgreRoad = (ctx: Ctx, h: Hex): boolean => {
 /** The fraction of a kill a disable is worth, for this target. */
 const disableWorth = (ctx: Ctx, target: Unit | undefined): number => {
   if (!target || target.kind !== 'unit') return 0;
+  // "A D result does not affect the train" (7.11).
+  if (target.classId === 'TRAIN') return 0;
   if (target.disabled !== 'none') return ctx.w['fire.disableDisabled'];
   return unitClass(target.classId).kind === 'infantry'
     ? ctx.w['fire.disableInfantry']
@@ -540,6 +589,21 @@ const planMovement = (ctx0: Ctx): Command[] => {
     }
   }
 
+  // A train opens up a step a turn until it is at full speed (9.02): the
+  // speed is set before it moves, and the move below is planned at the new
+  // speed.
+  for (const t of ctx.own) {
+    if (t.kind !== 'unit' || t.classId !== 'TRAIN' || !canAct(t)) continue;
+    if (t.trainSpeedSet || t.moveUsed > 0) continue;
+    const speed = t.trainSpeed ?? 0;
+    if (speed >= TRAIN_MAX_SPEED) continue;
+    out.push({ type: 'setTrainSpeed', by: player, unit: t.id, change: 1 });
+    ctx = withState(ctx, {
+      ...ctx.state,
+      units: { ...ctx.state.units, [t.id]: { ...t, trainSpeed: speed + 1, trainSpeedSet: true } },
+    });
+  }
+
   const movers = ctx.own
     .filter(
       (u) => canAct(u) && !isInertOgre(u, ctx.state.turn) && !(u.kind === 'unit' && u.ridingOn),
@@ -612,7 +676,7 @@ const moveFor = (ctx: Ctx, u: Unit): Command | null => {
   }
 
   // Off the map, when that is the goal and the edge is one step away.
-  if (goal.kind === 'edge' && isOgre(u)) {
+  if (goal.kind === 'edge') {
     const step = neighbors(u.pos).find((n) => !inBounds(map, n) && edgeStep(map, n, goal.edge));
     if (step) return { type: 'moveUnit', by: player, unit: u.id, path: [step] };
     if (best.hex !== u.pos && edgeDistance(map, best.hex, goal.edge) === 0) {
@@ -643,6 +707,14 @@ const edgeStep = (map: GameMap, off: Hex, edge: Edge): boolean => {
 };
 
 const goalFor = (ctx: Ctx, u: Unit): Goal => {
+  // A scenario about leaving: the counters that have to go head for the
+  // edge; the rest of their side stays with them; the other side goes for
+  // them. A train with an escort, or a breakthrough force.
+  if (ctx.exit) {
+    if (mustExit(ctx, u)) return { kind: 'edge', edge: ctx.exit.edge };
+    const leaving = nearestOf(exitUnitsOnBoard(ctx), u.pos);
+    if (leaving) return { kind: 'hex', hex: leaving.pos };
+  }
   if (ctx.attacker) {
     // An assault that wants the base intact hunts the garrison down rather
     // than sitting on the base shooting it.
@@ -690,7 +762,9 @@ const scoreHex = (
     score -=
       d * (ctx.attacker ? w['move.goalAttacker'] : w['move.goalDefender']) * w[`move.goal.${role}`];
   } else if (goal.kind === 'edge') {
-    score -= edgeDistance(map, h, goal.edge) * w['move.edge'] * w[`move.goal.${role}`];
+    const perHex =
+      ctx.exit && ctx.exit.units !== null && mustExit(ctx, u) ? w['move.exit'] : w['move.edge'];
+    score -= edgeDistance(map, h, goal.edge) * perHex * w[`move.goal.${role}`];
   }
 
   // Hold at own range: a gun that outranges the enemy does not walk into him.
@@ -1209,7 +1283,10 @@ const planSetup = (ctx0: Ctx): Command[] => {
   if (!zone) return [done];
   let ctx = ctx0;
   const front = frontOf(ctx);
-  const anchor = ctx.attacker ? ctx.objective : (ctx.guard ?? ctx.objective);
+  // In a scenario about leaving, both sides form up on the counters that
+  // have to go: the escort around them, the ambush where they will come.
+  const leaving = nearestOf(exitUnitsOnBoard(ctx), myCentre(ctx) ?? { q: 0, r: 0 });
+  const anchor = leaving?.pos ?? (ctx.attacker ? ctx.objective : (ctx.guard ?? ctx.objective));
   const inZone = new Set(zone.hexes);
   const out: Command[] = [];
 

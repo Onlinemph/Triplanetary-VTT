@@ -617,6 +617,142 @@ describe('the code a battle is worked out to be at', () => {
   });
 });
 
+describe('the computer at a quick table', () => {
+  const held = (): { sink: SessionSink; board: () => AnyState | null } => {
+    let board: AnyState | null = null;
+    return {
+      sink: {
+        adoptSnapshot: (state) => {
+          board = state;
+        },
+      },
+      board: () => board,
+    };
+  };
+  const rules: RulesSource = (kind) => (kind === 'ogre' ? OGRE_RULES : triRules());
+  const ground = (name: string): { table: QuickTable; board: () => AnyState | null } => {
+    const s = held();
+    const table = new QuickTable(backend(), s.sink, {}, name, rules);
+    // The tests drive the computer by hand, so they can count what it played.
+    table.autoplay = false;
+    return { table, board: s.board };
+  };
+
+  it('seats the computer, keeps people out of its chair, and plays it from the human’s browser', async () => {
+    // The defence deploys first in Mark III; hand that seat to the computer.
+    const opening = OGRE_RULES.build('mark-iii-attack', { seed: 7 });
+    const computer = actorOf(asOgreState(opening));
+    const other = OGRE_RULES.summary(opening).playerOrder.find((p) => p !== computer)!;
+
+    const ann = ground('Ann');
+    const code = await ann.table.host({
+      scenarioId: 'mark-iii-attack',
+      kind: 'ogre',
+      password: 'pw',
+      setup: { seed: 7, computers: [computer] },
+    });
+    // Hosting seated Ann in the chair that is not the computer's.
+    expect(ann.table.computers()).toEqual([computer]);
+    expect(ann.table.seat).toBe(other);
+    expect(ann.table.drives()).toBe(true);
+    expect(ann.table.index).toBe(0);
+
+    // The computer sets its side up, through tri_play, signed by its seat.
+    const played = await ann.table.playComputers();
+    expect(played).toBeGreaterThan(0);
+    expect(ann.table.index).toBe(played);
+    const rows = await db.query<{ seat: string; idx: number }>(
+      'select seat, idx from tri_moves where code = $1 order by idx',
+      [code],
+    );
+    expect(rows.rows.length).toBe(played);
+    for (const row of rows.rows) expect(row.seat).toBe(computer);
+    // And it stopped where its decision ended: the board waits on Ann now.
+    expect(actorOf(asOgreState(ann.board()!))).toBe(other);
+    // Asking again with nothing to give plays nothing.
+    expect(await ann.table.playComputers()).toBe(0);
+
+    // A second browser sees the same board, cannot take the computer's chair,
+    // and — Ann being in the lower seat — does not drive.
+    const bob = ground('Bob');
+    await bob.table.join(code, 'pw');
+    expect(fingerprint(bob.board()!)).toBe(fingerprint(ann.board()!));
+    expect(await bob.table.sitAnywhere()).toBeNull();
+    expect(bob.table.drives()).toBe(false);
+    expect(await bob.table.playComputers()).toBe(0);
+    let refused = '';
+    const carl = new QuickTable(
+      backend(),
+      { adoptSnapshot: () => undefined },
+      {
+        onRefused: (why) => {
+          refused = why;
+        },
+      },
+      'Carl',
+      rules,
+    );
+    carl.autoplay = false;
+    await carl.join(code, 'pw');
+    await carl.sit(computer);
+    expect(refused).toMatch(/computer/i);
+    expect(carl.seat).toBeNull();
+
+    // Standing up gives the computer's chair back with Ann's own.
+    await ann.table.leave();
+    const after = await db.query<{ seats: Record<string, unknown> }>(
+      'select seats from tri_tables where code = $1',
+      [code],
+    );
+    expect(Object.keys(after.rows[0]!.seats)).toEqual([]);
+  });
+
+  it('is played by the next human when the one in the lower seat is not there', async () => {
+    const opening = OGRE_RULES.build('mark-iii-attack', { seed: 7 });
+    const computer = actorOf(asOgreState(opening));
+    const ann = ground('Ann');
+    const code = await ann.table.host({
+      scenarioId: 'mark-iii-attack',
+      kind: 'ogre',
+      password: 'pw',
+      setup: { seed: 7, computers: [computer] },
+    });
+    // Ann's claim ages out; the schema's five minutes, wound forward.
+    await db.query(
+      `update tri_tables set seats = (
+         select jsonb_object_agg(k, jsonb_set(v, '{at}', to_jsonb(now() - interval '6 minutes')))
+           from jsonb_each(seats) as e(k, v)
+       ) where code = $1`,
+      [code],
+    );
+    const bob = ground('Bob');
+    await bob.table.join(code, 'pw');
+    // Bob is given Ann's stale chair, and with it the computer to play.
+    expect(await bob.table.sitAnywhere()).toBe(ann.table.seat);
+    expect(bob.table.drives()).toBe(true);
+    expect(await bob.table.playComputers()).toBeGreaterThan(0);
+  });
+
+  it('carries the computer’s seats into a war’s ground battle', async () => {
+    const opening = OGRE_RULES.build('mark-iii-attack', { seed: 3 });
+    const computer = actorOf(asOgreState(opening));
+    const ann = ground('Ann');
+    const code = codeFor('QQQQQQ', 'drop-4-mars');
+    await ann.table.host({
+      scenarioId: 'mark-iii-attack',
+      kind: 'ogre',
+      password: 'pw',
+      code,
+      listed: false,
+      setup: { seed: 3, computers: [computer] },
+    });
+    const bob = ground('Bob');
+    await bob.table.join(code, 'pw');
+    expect(bob.table.computers()).toEqual([computer]);
+    expect(bob.table.table?.setup.computers).toEqual([computer]);
+  });
+});
+
 /** A ground client with somewhere to put the board, for the code tests. */
 const ground2 = (name: string): QuickTable =>
   new QuickTable(backend(), { adoptSnapshot: () => undefined }, {}, name, (kind) =>

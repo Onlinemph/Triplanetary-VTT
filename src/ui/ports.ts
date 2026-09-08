@@ -302,7 +302,12 @@ export type OnlinePort =
        * first to arrive opens the table and the rest join it.
        */
       battleTable(
-        parent: { readonly code: string; readonly password: string | null },
+        parent: {
+          readonly code: string;
+          readonly password: string | null;
+          /** Sides of the battle nobody at the war plays, by player id: the computer's. */
+          readonly computers?: readonly string[];
+        },
         order: OrderOfBattle,
         events: TableEvents,
       ): Promise<TablePort>;

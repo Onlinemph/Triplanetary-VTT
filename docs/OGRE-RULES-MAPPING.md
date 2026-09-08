@@ -240,8 +240,20 @@ not affect the train" (7.11, `combat.targetIgnoresD`); and a ram against it is
 resolved at the Size Table's train column — an Ogre or Superheavy wrecks it, a
 lighter unit attacks at 1-2 (a GEV at 1-1) and dies doing it (9.05,
 `ram.ramTrain`). Its defence, size, capacity and victory value are placeholders
-flagged `unconfirmed`. No scenario on the table fields it yet — it is not in
-`units.SELECTABLE_CLASSES` either, so only the tests exercise it.
+flagged `unconfirmed`. It is set up on the rails and nowhere else
+(`setup.standable`), and it cannot enter a hex the enemy holds, so a counter on
+the line stops it until the line is cleared (5.03, `movement.stepInfo`).
+
+**The Train** (`src/ogre/scenarios/train.ts`) is the scenario that fields it:
+an original, like The Crossing, since the rulebook's own train scenario is not
+to hand. The train comes on at the west end of the green map's line with six
+squads aboard and an escort of twelve counters formed up around it; the
+raiders have twelve armour units and twelve squads anywhere in the eastern
+half; the train wins by leaving at the east end inside twelve turns, and a
+side's win is complete when it kept half its value. The computer plays either
+seat: the train opens up a step a turn and runs, the escort stays with it, the
+raiders go for it (`docs/AI.md`, "exit goals"). It is not in
+`units.SELECTABLE_CLASSES`, so the builder does not offer it.
 
 ### 10 – Cruise missiles (shape transcribed, numbers provisional)
 
@@ -362,7 +374,7 @@ engine's shape.
 
 | Section                     | What is missing                                                                        | Notes                                                                                                                                                                                                                                                |
 | --------------------------- | -------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **9 – The train**           | The printed numbers, and a scenario to run it in                                       | The mechanics are in, flagged provisional; see above.                                                                                                                                                                                                |
+| **9 – The train**           | The printed numbers, and the printed scenario                                          | The mechanics are in, flagged provisional, and an original scenario fields them (The Train); see above.                                                                                                                                              |
 | **10 – Cruise missiles**    | The printed flight, defence and blast numbers                                          | The mechanics are in, flagged provisional; see above.                                                                                                                                                                                                |
 | **12 – Lasers**             | The printed attack and defence values                                                  | The mechanics are in, flagged provisional; see above.                                                                                                                                                                                                |
 | **13 – Optional rules**     | The printed numbers for mines, camouflage, dummies, bridges and the Superheavy's sheet | Terrain damage (13.01), bridges (13.02), the hidden-information trio (13.04–13.06) and the Superheavy record sheet (13.07) are all in, the last five from their shape.                                                                               |
