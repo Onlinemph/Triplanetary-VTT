@@ -106,8 +106,20 @@ interface Draft {
   victory: CustomVictory;
   turnLimit: number | null;
   centralLimit: number | null;
+  /** The hidden-information rules (13.04-13.06). */
+  minefields: number;
+  camouflage: boolean;
+  dummies: number;
   sides: [DraftSide, DraftSide];
 }
+
+/**
+ * The most minefields and dummies the builder offers a side. The same
+ * numbers as `HIDDEN_LIMITS` in `src/ogre/scenarios/custom.ts`, kept here
+ * rather than imported so the builder does not pull the ground game's
+ * scenario table into the main bundle; the scenario clamps to its own copy.
+ */
+const HIDDEN_LIMITS = { minefields: 12, dummies: 8 } as const;
 
 const TERRAIN_COLOURS: Readonly<Record<string, string>> = {
   clear: '#5a5238',
@@ -157,6 +169,9 @@ const draftOf = (order: OrderOfBattle, newSeed: () => number): Draft => {
         : 'command-post',
     turnLimit: num(t['turnLimit']),
     centralLimit: num(t['centralLimit']),
+    minefields: num(t['minefields']) ?? 0,
+    camouflage: t['camouflage'] === true,
+    dummies: num(t['dummies']) ?? 0,
     sides: [side(a, 'Paneuropean Federation'), side(b, 'North American Combine')],
   };
 };
@@ -195,6 +210,9 @@ export const orderOf = (d: Draft, battleId: string): OrderOfBattle => ({
     ...(d.map.kind === 'ogre' && d.centralLimit !== null && d.centralLimit > 0
       ? { centralLimit: d.centralLimit }
       : {}),
+    ...(d.minefields > 0 ? { minefields: d.minefields } : {}),
+    ...(d.camouflage ? { camouflage: true } : {}),
+    ...(d.dummies > 0 ? { dummies: d.dummies } : {}),
   },
 });
 
@@ -598,6 +616,57 @@ export const openBattleBuilder = (host: HTMLElement, o: BattleBuilderOpts): Over
               { min: '0', title: 'Attack strength the defence may set up in the Central Area' },
             )
           : null,
+      ),
+      el(
+        'div',
+        { class: 'scenario-options builder-block' },
+        el('h3', { class: 'sect-title', text: 'Hidden information' }),
+        el('p', {
+          class: 'hint',
+          text: 'Optional rules 13.04–13.06. A battle with any of these needs a referee online: a quick table relays the moves, and the moves give the secrets away.',
+        }),
+        numberField(
+          'Minefields a side',
+          d.minefields > 0 ? d.minefields : null,
+          'none',
+          (n) => {
+            d.minefields = Math.max(0, Math.min(HIDDEN_LIMITS.minefields, n ?? 0));
+          },
+          {
+            min: '0',
+            max: String(HIDDEN_LIMITS.minefields),
+            title:
+              'Laid secretly during the setup; the first enemy unit onto one stops and is attacked',
+          },
+        ),
+        chips(
+          'Camouflage',
+          [
+            { value: 'off', label: 'Off', title: 'Every counter is face up' },
+            {
+              value: 'on',
+              label: 'On',
+              title: 'Every counter is face down until it moves, fires, is fired on or is spotted',
+            },
+          ],
+          d.camouflage ? 'on' : 'off',
+          (v) => {
+            d.camouflage = v === 'on';
+          },
+        ),
+        numberField(
+          'Dummies a side',
+          d.dummies > 0 ? d.dummies : null,
+          'none',
+          (n) => {
+            d.dummies = Math.max(0, Math.min(HIDDEN_LIMITS.dummies, n ?? 0));
+          },
+          {
+            min: '0',
+            max: String(HIDDEN_LIMITS.dummies),
+            title: 'Face-down counters that are nothing at all, removed when revealed',
+          },
+        ),
       ),
       o.onApply
         ? null

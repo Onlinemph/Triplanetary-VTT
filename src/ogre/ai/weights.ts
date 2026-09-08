@@ -115,6 +115,13 @@ export const WEIGHT_SPEC = {
     'Against standing off the line between the enemy and what we guard',
   ),
   ...perRole('move.block', 0, 0, 20, 'For standing on the enemy cybertank’s shortest road'),
+  'move.mine': spec(30, 0, 100, 'Against ending in a hex known to be mined by the enemy'),
+  'move.threatUnknown': spec(
+    2,
+    0,
+    8,
+    'Fire an unidentified enemy counter is assumed to put on a hex within two',
+  ),
 
   // --- The second (GEV) movement phase -----------------------------------
   'second.threat': spec(
@@ -148,6 +155,7 @@ export const WEIGHT_SPEC = {
   'fire.worthAttack': spec(3, 0, 10, 'Target worth per point of its attack strength'),
   'fire.worthLaser': spec(30, 0, 100, 'Extra worth of a laser'),
   'fire.worthCp': spec(400, 100, 1000, 'Worth of a command post'),
+  'fire.worthUnknown': spec(6, 0, 30, 'Worth of an unidentified enemy counter as a target'),
   'fire.ogreMain': spec(8, 0, 30, 'Worth of a main battery'),
   'fire.ogreSecondary': spec(4, 0, 30, 'Worth of a secondary battery'),
   'fire.ogreMissile': spec(1, 0, 30, 'Worth of an external missile still mounted'),

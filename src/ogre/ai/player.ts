@@ -67,6 +67,7 @@ import { canOverrun, overrunActor, overrunUnits, previewOverrunAttack } from '..
 import { reactionTurn, reserveEntryHexes, reservesOf } from '../engine/reserves.js';
 import { launchCheck, loadedCrawlers } from '../engine/missiles.js';
 import { legalSetupHexes, zoneOf } from '../engine/setup.js';
+import { isUnknown, mineAt, minefieldsLeft } from '../engine/concealment.js';
 import { DEFAULT_WEIGHTS, type Role, type Weights, roleOf } from './weights.js';
 
 export { DEFAULT_WEIGHTS, BASE_WEIGHTS, WEIGHT_SPEC, WEIGHT_KEYS } from './weights.js';
@@ -251,6 +252,12 @@ const threatAt = (ctx: Ctx, h: Hex): number => {
     if (!canAct(e) || isInertOgre(e, state.turn + 1)) continue;
     const move = moveOf(state, e);
     const d = distance(e.pos, h);
+    // A face-down enemy counter (13.05) could be anything; it is assumed to
+    // put a little fire on the hexes near it, and no more is known.
+    if (isUnknown(e)) {
+      if (d <= 2) total += ctx.w['move.threatUnknown'];
+      continue;
+    }
     if (isOgre(e)) {
       for (const w of e.weapons) {
         if (!isFireable(e, w) || OGRE_WEAPONS[w.kind].antipersonnelOnly) continue;
@@ -275,6 +282,7 @@ const threatAt = (ctx: Ctx, h: Hex): number => {
 const worth = (ctx: Ctx, u: Unit): number => {
   if (isOgre(u)) return ogreType(u.typeId).vp;
   const cls = unitClass(u.classId);
+  if (cls.id === 'UNK') return ctx.w['fire.worthUnknown'];
   if (cls.id === 'CP') return ctx.w['fire.worthCp'] * prizeShare(ctx);
   return (
     victoryValue(u) +
@@ -710,6 +718,10 @@ const scoreHex = (
   score += cover * w[`move.cover.${role}`];
   if (hazard === 'stuck') score -= w['move.hazardStuck'];
   if (hazard === 'disable') score -= w['move.hazardDisable'];
+  // A minefield the side knows about (13.04): its own it passes freely; the
+  // enemy's, once revealed, it stays out of.
+  const mine = mineAt(state, h);
+  if (mine && mine.owner !== ctx.player) score -= w['move.mine'];
   if (isOgre(u) && baseTerrain(terrain) === 'water') score -= w['move.ogreWater'];
 
   // Between the cybertank and what we guard, and on its road if that pays.
@@ -1199,10 +1211,47 @@ const planSetup = (ctx0: Ctx): Command[] => {
   const front = frontOf(ctx);
   const anchor = ctx.attacker ? ctx.objective : (ctx.guard ?? ctx.objective);
   const inZone = new Set(zone.hexes);
+  const out: Command[] = [];
+
+  // Minefields (13.04) go on the enemy's road to what we guard: the zone
+  // hexes that lie between where they come from and where they are going,
+  // spread out so one counter does not find two.
+  let minesToLay = minefieldsLeft(ctx.state, player);
+  if (minesToLay > 0) {
+    const laid: Hex[] = [];
+    const candidates = zone.hexes
+      .map((k) => {
+        const comma = k.indexOf(',');
+        return { q: Number(k.slice(0, comma)), r: Number(k.slice(comma + 1)) };
+      })
+      .filter((h) => {
+        const t = terrainAt(map, h, ctx.state.terrainOverrides);
+        return t !== 'crater' && t !== 'water' && !mineAt(ctx.state, h);
+      });
+    while (minesToLay > 0 && candidates.length > 0) {
+      let best: Hex | null = null;
+      let bestScore = -Infinity;
+      for (const h of candidates) {
+        if (laid.some((m) => eq(m, h))) continue;
+        let s = 0;
+        if (front.length > 0) s -= front.reduce((m, f) => Math.min(m, distance(h, f)), Infinity);
+        if (anchor) s -= distance(h, anchor);
+        if (laid.some((m) => distance(m, h) <= 1)) s -= 3;
+        if (s > bestScore + 1e-9) {
+          best = h;
+          bestScore = s;
+        }
+      }
+      if (!best) break;
+      laid.push(best);
+      out.push({ type: 'layMinefield', by: player, at: best });
+      minesToLay -= 1;
+    }
+  }
+
   const units = ctx.own
     .filter((u) => inZone.has(key(u.pos)) && canAct(u))
     .sort((a, b) => victoryValue(b) - victoryValue(a) || a.id.localeCompare(b.id));
-  const out: Command[] = [];
   for (const u of units) {
     const infantry = isInfantry(u);
     const score = (h: Hex): number => {

@@ -90,7 +90,16 @@ export interface CustomTerms {
   readonly turnLimit: number | null;
   /** The cratered map's Central Area ceiling; null means none. */
   readonly centralLimit: number | null;
+  /** 13.04: minefields each side lays during the setup. */
+  readonly minefields: number;
+  /** 13.05: every counter face down once the counters are down. */
+  readonly camouflage: boolean;
+  /** 13.06: dummy counters per side. */
+  readonly dummies: number;
 }
+
+/** The most of each the builder offers; the engine takes any number. */
+export const HIDDEN_LIMITS = { minefields: 12, dummies: 8 } as const;
 
 export const VICTORY_NAMES: Readonly<Record<CustomVictory, string>> = {
   'command-post': 'Command post',
@@ -149,6 +158,8 @@ export const readTerms = (raw: Readonly<Record<string, unknown>>): CustomTerms =
   const victory = raw['victory'];
   const turnLimit = asNumber(raw['turnLimit']);
   const centralLimit = asNumber(raw['centralLimit']);
+  const minefields = asNumber(raw['minefields']);
+  const dummies = asNumber(raw['dummies']);
   return {
     map: readMapSpec(raw['map']),
     victory:
@@ -157,6 +168,10 @@ export const readTerms = (raw: Readonly<Record<string, unknown>>): CustomTerms =
         : 'command-post',
     turnLimit: turnLimit !== undefined && turnLimit > 0 ? Math.floor(turnLimit) : null,
     centralLimit: centralLimit !== undefined && centralLimit > 0 ? Math.floor(centralLimit) : null,
+    minefields:
+      minefields === undefined ? 0 : clamp(Math.floor(minefields), 0, HIDDEN_LIMITS.minefields),
+    camouflage: raw['camouflage'] === true,
+    dummies: dummies === undefined ? 0 : clamp(Math.floor(dummies), 0, HIDDEN_LIMITS.dummies),
   };
 };
 
@@ -427,6 +442,10 @@ const build = (opts: ScenarioBuildOptions): GameState => {
       // on the one, real stacking and overrun combat on the other (5.02, 6.00).
       stackingLimit: terms.map.kind === 'gev' ? 5 : 1,
       overrunCombat: terms.map.kind === 'gev',
+      // The hidden-information rules (13.04-13.06), when the terms ask for them.
+      ...(terms.minefields > 0 ? { minefields: terms.minefields } : {}),
+      ...(terms.camouflage ? { camouflage: true } : {}),
+      ...(terms.dummies > 0 ? { dummies: terms.dummies } : {}),
       ...opts.options,
     },
     scenarioData: {
@@ -768,6 +787,11 @@ export const describeCustom = (order: OrderOfBattle): string[] => {
       (terms.turnLimit === null ? '' : `, ${terms.turnLimit} turns`) +
       (terms.centralLimit === null ? '' : `; ${terms.centralLimit} attack points forward`),
   ];
+  const hidden: string[] = [];
+  if (terms.minefields > 0) hidden.push(`${terms.minefields} minefields a side`);
+  if (terms.camouflage) hidden.push('camouflage');
+  if (terms.dummies > 0) hidden.push(`${terms.dummies} dummies a side`);
+  if (hidden.length > 0) lines.push(`Hidden: ${hidden.join(', ')}`);
   if (attacker) lines.push(`${attacker.faction} (attacking): ${describeForces(attacker.forces)}`);
   if (defender) lines.push(`${defender.faction} (defending): ${describeForces(defender.forces)}`);
   return lines;

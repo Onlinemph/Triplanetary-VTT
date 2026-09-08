@@ -205,27 +205,9 @@ which is where its battles get fought.
 
 ## Hidden information in the ground game
 
-Ogre in its basic form has none, which is why there is no fog-of-war machinery
-on the ground side and no redaction layer. Both players see the whole board,
-and that is the game as printed.
-
-That is a claim the code makes, not just a remark. In `src/net/ogreRules.ts`
-the rules answer
-
-```ts
-redact: (state) => state,
-```
-
-— identity — and their `summary` reports `fog: false`, so a ground table is
-never opened as a fog table: the referee writes no per-seat views for it
-(`viewsForAll` in `src/net/supabase/referee.ts` is only reached when
-`game.fog`), and every client holds the whole command log and recomputes the
-whole state. Compare `src/net/redact.ts`, which is the fleet game's four
-hundred lines of the opposite. This document is the standing note that the
-identity is a fact about the rules implemented, not about Ogre.
-
-Three optional rules do introduce hidden information, and each would need the
-server to hold the secret rather than the client:
+Ogre in its basic form has none: both players see the whole board, and that
+is the game as printed. Three optional rules change that, and all three are
+in (`src/ogre/engine/concealment.ts`):
 
 | Rule              | What is hidden                                          |
 | ----------------- | ------------------------------------------------------- |
@@ -233,16 +215,32 @@ server to hold the secret rather than the client:
 | 13.05 Camouflage  | What each `?` counter actually is.                      |
 | 13.06 Dummy units | Which counters are nothing at all.                      |
 
-None of them are implemented yet. When they are, the honest implementation is
-the same one every hidden-information game needs: the server owns the state and
-filters what it sends per player, and clients hold a _view_ rather than
-something they can recompute from the log. That trades away the property that
-makes everything else here simple, so it is worth doing for public games with
-strangers and not worth doing for a table of friends. Note what it costs
-concretely: `redact` stops being identity, `summary` starts reporting
-`fog: true` for those games, and a ground client moves off the replay path onto
-the snapshot path — the same three changes, in the same three places, that the
-fleet game already made.
+A battle with none of them on is exactly what it was: in `src/net/ogreRules.ts`
+`redact` returns the state it was given, `summary` reports `fog: false`, the
+referee writes no per-seat views, and every client holds the whole command
+log and recomputes the whole state. A battle with any of them on is a fog
+table, and takes the same three changes, in the same three places, that the
+fleet game made: `redact` is `redactOgreState(state, seat)` — own counters
+and mines whole, the enemy's face-down counters as `UNK` stand-ins with the
+real id, owner and hex, the enemy's unrevealed mines gone — `summary` reports
+`fog: true`, and the referee sends each seat its view (`viewsForAll` in
+`src/net/supabase/referee.ts`) rather than the log, so a ground client at
+such a table is on the snapshot path. A quick table refuses to host one
+(`QuickTable.host`): it relays the moves, and the moves give the secrets
+away.
+
+The computer is held to the same rule. At a table, `computerOrders` plans on
+`redactOgreState(state, seat)`; in the browser and in the headless simulator
+the plan is made against the same view. A face-down enemy counter is worth a
+little and feared a little (`fire.worthUnknown`, `move.threatUnknown`), a
+known enemy minefield is avoided (`move.mine`), and the computer lays its own
+mines on the enemy's road to what it guards.
+
+At a local table — solo, or two players at one keyboard — the board is held
+whole, and the renderer does the hiding per viewer: a face-down enemy counter
+is drawn as a `?`, an enemy minefield is not drawn until it has gone off. Two
+players at one keyboard are trusting each other not to look, which is what a
+table of friends does anyway.
 
 ### The seat check the ground game needs
 

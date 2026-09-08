@@ -130,6 +130,12 @@ export interface ConventionalUnit {
    * not on the board.
    */
   readonly offMap?: 'north' | 'south' | 'east' | 'west' | 'reserve';
+  /**
+   * Face down (13.05, 13.06): the enemy sees a counter in the hex and not
+   * what it is, until it moves, fires, is fired on or is spotted. See
+   * `concealment.ts`.
+   */
+  readonly concealed?: boolean;
 }
 
 /** One targetable component on an Ogre's record sheet. */
@@ -184,9 +190,22 @@ export interface OgreUnit {
    * is off the board and out of play, but still its owner's.
    */
   readonly offMap?: 'north' | 'south' | 'east' | 'west' | 'reserve';
+  /** Face down (13.05): see `ConventionalUnit.concealed`. */
+  readonly concealed?: boolean;
 }
 
 export type Unit = ConventionalUnit | OgreUnit;
+
+/**
+ * A minefield (13.04): laid secretly during the setup, revealed the first
+ * time an enemy unit runs onto it, and there until engineers clear it.
+ */
+export interface Minefield {
+  readonly id: string;
+  readonly owner: PlayerId;
+  readonly pos: Hex;
+  readonly revealed: boolean;
+}
 
 export const isOgre = (u: Unit): u is OgreUnit => u.kind === 'ogre';
 
@@ -385,6 +404,8 @@ export interface SetupState {
   readonly order: readonly PlayerId[];
   readonly index: number;
   readonly zones: Readonly<Record<PlayerId, SetupZone>>;
+  /** Minefields each side has still to lay (13.04). */
+  readonly mines?: Readonly<Record<PlayerId, number>>;
 }
 
 // ---------------------------------------------------------------------------
@@ -426,6 +447,12 @@ export interface GameOptions {
   readonly terrainDamage: boolean;
   /** 13.07: a Superheavy takes partial damage on its own record sheet. */
   readonly superheavyRecordSheet: boolean;
+  /** 13.04: minefields each side with a setup area may lay, secretly, while setting up. */
+  readonly minefields?: number;
+  /** 13.05: every counter is face down once the counters are down, until revealed. */
+  readonly camouflage?: boolean;
+  /** 13.06: dummy counters per side — face down, nothing at all, gone when revealed. */
+  readonly dummies?: number;
   /** Warn before a move that would strand or expose a unit. Interface only. */
   readonly confirmRiskyMoves: boolean;
   /**
@@ -498,6 +525,8 @@ export interface GameState {
   readonly setup?: SetupState | null;
   /** Cruise missiles in flight, by id. */
   readonly missiles?: Readonly<Record<string, CruiseMissile>>;
+  /** Minefields on the map (13.04), laid and hidden; see `concealment.ts`. */
+  readonly mines?: readonly Minefield[];
 
   readonly victory: VictoryState | null;
   /** Free-form per-scenario bookkeeping (entry edges, objectives, timers). */

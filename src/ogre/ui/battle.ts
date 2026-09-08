@@ -72,6 +72,7 @@ import { GameSession } from '../net/session.js';
 import { LANDING, mapOf, scenarioById } from '../scenarios/index.js';
 import { readBattleResult } from '../campaign/result.js';
 import { aiPlan, decisionKey } from '../ai/player.js';
+import { isUnknown, minefieldsLeft, redactOgreState } from '../engine/concealment.js';
 import { button, el, row, setChildren } from './dom.js';
 import '../ogre.css';
 
@@ -167,6 +168,8 @@ interface UiState {
   strike: number | null;
   /** A loaded crawler aiming: the next hex clicked is where the missile goes. */
   aiming: UnitId | null;
+  /** Laying minefields during the setup: the next zone hex clicked gets one. */
+  laying: boolean;
   showHexNumbers: boolean;
   helpOpen: boolean;
 }
@@ -214,6 +217,7 @@ export const createOgreBattle = (opts: OgreBattleOptions): OgreBattle => {
     placing: null,
     strike: null,
     aiming: null,
+    laying: false,
     showHexNumbers: false,
     helpOpen: false,
   };
@@ -458,6 +462,12 @@ export const createOgreBattle = (opts: OgreBattleOptions): OgreBattle => {
 
     // --- Deployment: pick up a counter, put it down --------------------
     if (s.state.setup) {
+      if (ui.laying) {
+        dispatch({ type: 'layMinefield', by: me(), at: h });
+        if (minefieldsLeft(s.state, me()) <= 0) ui.laying = false;
+        draw();
+        return;
+      }
       const selected = selectedUnit();
       if (selected && selected.owner === me() && mine.every((u) => u.id !== selected.id)) {
         if (zoneOf(s.state, me())?.hexes.includes(`${h.q},${h.r}`)) {
@@ -767,7 +777,12 @@ export const createOgreBattle = (opts: OgreBattleOptions): OgreBattle => {
     const player = me();
     const k = decisionKey(session.state);
     if (!aiPlanned || aiPlanned.key !== k) {
-      aiPlanned = { key: k, commands: aiPlan(session.state, session.map, player) };
+      // The computer plans on its own view of the board: with camouflage or
+      // minefields in play it sees what its seat would see, and no more.
+      aiPlanned = {
+        key: k,
+        commands: aiPlan(redactOgreState(session.state, player), session.map, player),
+      };
     }
     for (let guard = 0; guard < 400; guard++) {
       const cmd = aiPlanned.commands.shift();
@@ -1034,6 +1049,33 @@ export const createOgreBattle = (opts: OgreBattleOptions): OgreBattle => {
             l.used > l.max ? 'bad' : l.used === l.max ? 'warn' : '',
           ),
         ),
+        minefieldsLeft(state, actor) > 0
+          ? el(
+              'div',
+              { class: 'chips' },
+              row('Minefields', `${minefieldsLeft(state, actor)} to lay`, 'warn'),
+              button(
+                ui.laying ? 'Laying — click a hex' : 'Lay a minefield',
+                () => {
+                  ui.laying = !ui.laying;
+                  draw();
+                },
+                { class: ui.laying ? 'chip active' : 'chip' },
+              ),
+            )
+          : null,
+        state.options.camouflage === true || (state.options.dummies ?? 0) > 0
+          ? el(
+              'p',
+              { class: 'note' },
+              (state.options.camouflage === true
+                ? 'Camouflage is on: every counter goes face down when the setup ends, and the enemy sees a ? until it fires, is fired on, or ends a movement phase next to an enemy. '
+                : '') +
+                ((state.options.dummies ?? 0) > 0
+                  ? `Each side has ${state.options.dummies} dummy counters — nothing at all, removed the moment they are revealed. Yours are marked DUM; put them where a real counter would worry the enemy.`
+                  : ''),
+            )
+          : null,
         button('Ready', endPhase, { class: 'primary' }),
       ),
     );
@@ -1200,6 +1242,31 @@ export const createOgreBattle = (opts: OgreBattleOptions): OgreBattle => {
   const unitCard = (state: GameState, u: Unit): HTMLElement => {
     const owner = state.players[u.owner]!;
     const rows: HTMLElement[] = [];
+    // Face down to this seat (13.05, 13.06): the side and the hex, nothing else.
+    if (isUnknown(u) || (u.concealed === true && u.owner !== me())) {
+      return el(
+        'section',
+        { class: 'card' },
+        el(
+          'div',
+          { class: 'card-head', style: `--accent:${owner.color}` },
+          el('span', { class: 'swatch' }),
+          el('strong', {}, 'Unidentified counter'),
+          el('span', { class: 'dim' }, owner.name),
+        ),
+        row('Hex', hexLabel(u.pos)),
+        el(
+          'p',
+          { class: 'note' },
+          'Face down. It shows itself when it fires or is fired on, or when a movement phase ends with one of your units next to it. It may be nothing at all.',
+        ),
+      );
+    }
+    if (u.kind === 'unit' && u.classId === 'DUM') {
+      rows.push(row('Status', u.concealed ? 'Face down — a dummy' : 'Revealed', 'warn'));
+    } else if (u.concealed === true) {
+      rows.push(row('Status', 'Face down to the enemy', 'warn'));
+    }
     if (isOgre(u)) {
       const type = ogreType(u.typeId);
       rows.push(row('Treads', `${u.treads} / ${type.treads}`));

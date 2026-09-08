@@ -54,6 +54,7 @@ import {
   withUnit,
 } from './state.js';
 import { applyDamageToUnit, checkOgreDeath } from './combat.js';
+import { revealWithin } from './concealment.js';
 
 export const CRUISE_MISSILE = {
   /** Hexes flown per fire phase. */
@@ -237,6 +238,8 @@ const detonate = (state: GameState, map: GameMap, id: string): GameState => {
   const credit = missile.owner;
 
   next = log(next, 'bad', `The cruise missile detonates over ${labelOf(gz)}.`, [gz]);
+  // Everything under the blast is seen for what it is (13.05).
+  next = revealWithin(next, gz, CRUISE_MISSILE.blast[CRUISE_MISSILE.blast.length - 1]!.range);
 
   for (const u of Object.values(next.units)
     .filter((u) => onBoard(u) && eq(u.pos, gz))

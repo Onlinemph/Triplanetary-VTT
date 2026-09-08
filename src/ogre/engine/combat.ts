@@ -542,7 +542,7 @@ const targetIsNinja = (state: GameState, target: TargetRef): boolean => {
   return !!u && isOgre(u) && u.typeId === 'NINJA';
 };
 
-const markAttackersSpent = (
+export const markAttackersSpent = (
   state: GameState,
   attackers: readonly AttackerRef[],
   target: TargetRef,

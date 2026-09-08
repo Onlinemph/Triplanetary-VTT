@@ -350,6 +350,26 @@ export class QuickTable {
      */
     code?: string;
   }): Promise<string> {
+    // A table with a secret needs a referee to keep it. The database refuses
+    // the fleet game's fog itself; the ground game's hidden-information
+    // options are the same refusal, made here because the database does not
+    // read Ogre options.
+    if (opts.setup !== undefined) {
+      const rules = await this.rulesSource(opts.kind ?? 'tri');
+      if (rules.hasScenario(opts.scenarioId)) {
+        const built = rules.build(opts.scenarioId, {
+          seed: (opts.setup.seed as number) ?? 1,
+          options: opts.setup.options,
+          fleets: opts.setup.fleets as never,
+          order: opts.setup.order as never,
+        });
+        if (rules.summary(built).fog) {
+          throw new Error(
+            'A hidden-information battle needs the refereed mode — this one relays moves, and the move list gives the secrets away. Play it hot-seat, solo, or on a refereed table.',
+          );
+        }
+      }
+    }
     const code = (await this.rpc('tri_host', {
       p_password: opts.password,
       p_scenario: opts.scenarioId,
