@@ -219,6 +219,15 @@ export interface SetTrainSpeedCommand extends CommandBase {
   readonly change: 1 | -1;
 }
 
+/**
+ * Lay one minefield during the setup (13.04), inside the layer's own area.
+ * The hex is hidden from the other side until something runs onto it.
+ */
+export interface LayMinefieldCommand extends CommandBase {
+  readonly type: 'layMinefield';
+  readonly at: Hex;
+}
+
 export type Command =
   | MoveUnitCommand
   | RamCommand
@@ -239,7 +248,8 @@ export type Command =
   | PlaceUnitCommand
   | FinishSetupCommand
   | LaunchCruiseMissileCommand
-  | SetTrainSpeedCommand;
+  | SetTrainSpeedCommand
+  | LayMinefieldCommand;
 
 export type CommandType = Command['type'];
 

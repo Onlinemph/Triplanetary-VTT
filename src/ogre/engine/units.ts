@@ -53,7 +53,11 @@ export type UnitClassId =
   | 'INF'
   | 'MAR'
   | 'HWT'
-  | 'CE';
+  | 'CE'
+  // Hidden information (13.05, 13.06): a face-down enemy counter as a side
+  // sees it, and a counter that is nothing at all.
+  | 'UNK'
+  | 'DUM';
 
 export type StatName = 'attack' | 'range' | 'defense' | 'move' | 'secondMove' | 'size' | 'vp';
 
@@ -507,7 +511,48 @@ export const UNIT_CLASSES: Readonly<Record<UnitClassId, UnitClass>> = {
     vp: 4,
     note: 'Specialist infantry: "worth double victory points (i.e., 4 VP per squad)" and traded for regular infantry 2-for-1 (15.01).',
   },
+
+  UNK: {
+    id: 'UNK',
+    name: 'Unidentified counter',
+    abbr: '?',
+    kind: 'armor',
+    mobility: 'immobile',
+    attack: 0,
+    range: 0,
+    defense: 1,
+    move: 0,
+    size: 1,
+    armorUnits: 0,
+    vp: 0,
+    note: 'Not a unit: a concealed enemy counter as a side sees it (13.05, 13.06). The real counter is whatever the referee holds; this is the placeholder a view carries so the engine can answer questions about the hex. The defence is a stand-in for previews.',
+  },
+
+  DUM: {
+    id: 'DUM',
+    name: 'Dummy',
+    abbr: 'DUM',
+    kind: 'armor',
+    mobility: 'lightTracked',
+    attack: 0,
+    range: 0,
+    defense: 0,
+    move: 3,
+    size: 1,
+    armorUnits: 0,
+    vp: 0,
+    note: 'Provisional. 13.06 is implemented from its shape: a face-down counter that moves like a light vehicle and is removed the moment it is revealed. Its movement is a placeholder to correct against the printed rule.',
+    unconfirmed: ['move'],
+  },
 };
+
+// --- Hidden information (Section 13) --------------------------------------
+// Neither of these is a unit anyone buys. `UNK` is what a concealed enemy
+// counter looks like in a side's *view* of the board (13.05): the id, the
+// owner and the hex are real, the face is not, and the engine that answers a
+// client's questions has to be able to hold it. `DUM` is a dummy counter
+// (13.06): placed and moved like a counter, worth nothing, removed the moment
+// it is revealed.
 
 /** The Heavy Weapons Team's one-shot missile (3.02.2). */
 export const HEAVY_WEAPON = { attack: 3, range: 4 } as const;

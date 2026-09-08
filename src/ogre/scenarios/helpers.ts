@@ -8,7 +8,7 @@
  * a seed rather than the only one, and a new seed is a new battle plan.
  */
 
-import { type Hex, key, toOffset } from '../engine/hex.js';
+import { type Hex, key, parseKey, toOffset } from '../engine/hex.js';
 import { type GameMap, allHexes, areaOf, terrainAt } from '../engine/map.js';
 import { type RngState, nextInt, shuffle } from '../engine/rng.js';
 import { type UnitClassId, unitClass } from '../engine/units.js';
@@ -158,4 +158,39 @@ export const withSetup = (
   wanted: boolean | undefined,
   order: readonly PlayerId[],
   zones: Readonly<Record<PlayerId, SetupZone>>,
-): GameState => (wanted ? { ...state, setup: { order, index: 0, zones } } : state);
+): GameState => {
+  if (!wanted) return state;
+  // The hidden-information options (13.04-13.06) need the setup step: the
+  // mines are laid in it, the dummies are placed in it, and the counters go
+  // face down when it ends.
+  const minefields = state.options.minefields ?? 0;
+  const dummies = state.options.dummies ?? 0;
+  let next = state;
+  const mines: Record<PlayerId, number> = {};
+  for (const player of order) {
+    const zone = zones[player];
+    if (!zone) continue;
+    if (minefields > 0) mines[player] = minefields;
+    for (let i = 0; i < dummies; i++) {
+      const at = dummyHex(next, zone, i);
+      if (!at) break;
+      next = withUnit(next, makeUnit(`${player}-dum-${i + 1}`, player, 'DUM', at));
+    }
+  }
+  return {
+    ...next,
+    setup: { order, index: 0, zones, ...(minefields > 0 ? { mines } : {}) },
+  };
+};
+
+/**
+ * Somewhere in the zone for a dummy to start: free ground, spread across
+ * the zone rather than bunched at one end, so that where the seed put them
+ * says nothing. The players move them where they like during the setup.
+ */
+const dummyHex = (state: GameState, zone: SetupZone, index: number): Hex | null => {
+  const hexes = zone.hexes.map(parseKey).filter((h) => isFree(state, h));
+  if (hexes.length === 0) return null;
+  const step = Math.max(1, Math.floor(hexes.length / 7));
+  return hexes[(index * step * 3 + 5) % hexes.length] ?? null;
+};

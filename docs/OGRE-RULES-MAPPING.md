@@ -288,6 +288,23 @@ attack and defence values are placeholders flagged `unconfirmed` in
 13.01 damage to terrain — hexes at defence 4, degrading to rubble, cutting
 roads — is implemented behind `GameOptions.terrainDamage`.
 
+The three rules that hide something are implemented from their shape, in
+`src/ogre/engine/concealment.ts`, each behind an option and each needing the
+setup step (they are laid, placed and turned face down in it):
+
+| Rule              | Where                                                                                                                                                                                                                                                                                                                                                                                |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 13.04 Minefields  | `GameOptions.minefields` a side, laid secretly in the setup (`layMinefield`, own area, one to a hex); the first enemy unit onto one stops there and is attacked (`concealment.tripMinefield`); the field is then revealed and stays, attacking every later enemy entrant. The layer's own side passes freely.                                                                        |
+| 13.05 Camouflage  | `GameOptions.camouflage`: every counter that moves is face down once the counters are down (`concealAll`; a post or a laser is not); the enemy sees a `?` — which side, not what — until it fires, is fired on, rams, is rammed or overrun, is under a blast or strike, or ends a movement phase next to an enemy (`revealUnit`, `spotAdjacent`). Moving does not by itself show it. |
+| 13.06 Dummy units | `GameOptions.dummies` a side, class `DUM`: placed and moved like a counter, face down, nothing at all; removed the moment it is revealed. A shot at one is spent; a ram or overrun at a hex of dummies calls the bluff and fights nothing.                                                                                                                                           |
+| The view          | `redactOgreState(state, seat)`: own counters and mines whole, the enemy's face-down counters as `UNK` stand-ins with the real id, owner and hex, the enemy's unrevealed mines gone. What the referee sends each seat, and what the computer decides against.                                                                                                                         |
+
+The numbers are provisional and flagged in `MINEFIELD`: a minefield attacks a
+conventional unit at 4 and takes two tread units off a cybertank on a 4 or
+better; a dummy moves at 3 like a light tracked vehicle; camouflage is broken
+by a movement phase ending with an enemy adjacent. Correct them against the
+printed text.
+
 ### 14 – Advanced units (partial)
 
 | Rule                                                            | Where                  |
@@ -325,14 +342,14 @@ record sheets carried in from the last battle (`assault.applyOgreRecord`).
 Each of these is a self-contained addition; none of them require changing the
 engine's shape.
 
-| Section                     | What is missing                                                                  | Notes                                                                                                                                                           |
-| --------------------------- | -------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **9 – The train**           | The printed numbers, and a scenario to run it in                                 | The mechanics are in, flagged provisional; see above.                                                                                                           |
-| **10 – Cruise missiles**    | The printed flight, defence and blast numbers                                    | The mechanics are in, flagged provisional; see above.                                                                                                           |
-| **12 – Lasers**             | The printed attack and defence values                                            | The mechanics are in, flagged provisional; see above.                                                                                                           |
-| **13 – Optional rules**     | Mines, camouflage, dummies, bridge destruction, Superheavy record sheets (13.07) | Terrain damage (13.01) is in. `GameOptions.superheavyRecordSheet` is a stub — declared, defaulted false, read nowhere.                                          |
-| **14 – Advanced units**     | The LAD deployment sequence                                                      | Both units' statistics are in, and the Ninja's stealth.                                                                                                         |
-| **15 – Combat engineering** | The engineering itself                                                           | Entrenchments, mine handling, Vulcan tasks. The Vulcan's record sheet — the two manipulator arms at D2 (15.02) — and the unfinished-Ogre rule (15.02.2) are in. |
+| Section                     | What is missing                                                                                             | Notes                                                                                                                                                                                              |
+| --------------------------- | ----------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **9 – The train**           | The printed numbers, and a scenario to run it in                                                            | The mechanics are in, flagged provisional; see above.                                                                                                                                              |
+| **10 – Cruise missiles**    | The printed flight, defence and blast numbers                                                               | The mechanics are in, flagged provisional; see above.                                                                                                                                              |
+| **12 – Lasers**             | The printed attack and defence values                                                                       | The mechanics are in, flagged provisional; see above.                                                                                                                                              |
+| **13 – Optional rules**     | The printed numbers for mines, camouflage and dummies; bridge destruction; Superheavy record sheets (13.07) | Terrain damage (13.01) and the hidden-information trio (13.04–13.06) are in, the latter from their shape. `GameOptions.superheavyRecordSheet` is a stub — declared, defaulted false, read nowhere. |
+| **14 – Advanced units**     | The LAD deployment sequence                                                                                 | Both units' statistics are in, and the Ninja's stealth.                                                                                                                                            |
+| **15 – Combat engineering** | The engineering itself                                                                                      | Entrenchments, mine handling, Vulcan tasks. The Vulcan's record sheet — the two manipulator arms at D2 (15.02) — and the unfinished-Ogre rule (15.02.2) are in.                                    |
 
 ---
 

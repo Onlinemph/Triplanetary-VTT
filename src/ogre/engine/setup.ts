@@ -37,7 +37,12 @@ import { mobilityOf } from './mobility.js';
 import { hexLoad } from './movement.js';
 
 /** The orders the reducer admits while the counters are still going down. */
-export const SETUP_COMMANDS: ReadonlySet<string> = new Set(['placeUnit', 'finishSetup', 'resign']);
+export const SETUP_COMMANDS: ReadonlySet<string> = new Set([
+  'placeUnit',
+  'finishSetup',
+  'layMinefield',
+  'resign',
+]);
 
 export const zoneOf = (state: GameState, player: PlayerId): SetupZone | undefined =>
   state.setup?.zones[player];

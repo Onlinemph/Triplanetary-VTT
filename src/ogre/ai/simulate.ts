@@ -13,6 +13,7 @@ import {
   setupActor,
 } from '../engine/types.js';
 import { overrunActor } from '../engine/overrun.js';
+import { redactOgreState } from '../engine/concealment.js';
 import { type ScenarioDef, mapOf } from '../scenarios/types.js';
 import type { OrderOfBattle } from '../../campaign/orders.js';
 import { aiPlan, decisionKey } from './player.js';
@@ -87,7 +88,11 @@ export const playFrom = (
     const who = setupActor(s) ?? overrunActor(s) ?? activePlayer(s);
     const k = decisionKey(s);
     if (!plan || plan.key !== k) {
-      plan = { key: k, commands: aiPlan(s, mapOf(def, s), who, weightsFor(who)) };
+      // Against its own view: a side with camouflage on plans on what it can see.
+      plan = {
+        key: k,
+        commands: aiPlan(redactOgreState(s, who), mapOf(def, s), who, weightsFor(who)),
+      };
     }
     const cmd = plan.commands.shift();
     if (!cmd) throw new Error(`the AI had nothing to say at ${k} in ${def.id}`);

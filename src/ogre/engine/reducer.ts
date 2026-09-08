@@ -46,7 +46,23 @@ import {
   wouldOverstack,
 } from './movement.js';
 import { unitsAt } from './types.js';
-import { resetFireFlags, resolveAttack, resolveOrbitalStrike } from './combat.js';
+import {
+  markAttackersSpent,
+  resetFireFlags,
+  resolveAttack,
+  resolveOrbitalStrike,
+  targetHex,
+} from './combat.js';
+import {
+  concealAll,
+  isDummy,
+  layMinefield,
+  mineStopOn,
+  revealAt,
+  revealUnit,
+  spotAdjacent,
+  tripMinefield,
+} from './concealment.js';
 import { resolveRam } from './ram.js';
 import {
   beginOverrun,
@@ -122,10 +138,25 @@ const route = (state: GameState, cmd: Command, map: GameMap): ApplyResult => {
   switch (cmd.type) {
     case 'moveUnit':
       return doMove(state, cmd.unit, cmd.path, map);
-    case 'ram':
-      return inertGuard(state, cmd.unit) ?? doRam(state, cmd.unit, cmd.target, map);
-    case 'reduceInfantry':
-      return inertGuard(state, cmd.unit) ?? doReduceInfantry(state, cmd.unit, cmd.target);
+    case 'ram': {
+      const guard = inertGuard(state, cmd.unit);
+      if (guard) return guard;
+      // A ram at a hex of dummies calls the bluff instead: nothing to hit.
+      const called = bluffCalled(state, cmd.target);
+      if (called) return { state: called, result: ok('That was a dummy.') };
+      const out = doRam(state, cmd.unit, cmd.target, map);
+      return out.result.ok
+        ? { ...out, state: revealAt(revealUnit(out.state, cmd.unit), cmd.target) }
+        : out;
+    }
+    case 'reduceInfantry': {
+      const guard = inertGuard(state, cmd.unit);
+      if (guard) return guard;
+      const out = doReduceInfantry(state, cmd.unit, cmd.target);
+      return out.result.ok
+        ? { ...out, state: revealUnit(revealUnit(out.state, cmd.unit), cmd.target) }
+        : out;
+    }
     case 'mount':
       return doMount(state, cmd.unit, cmd.carrier);
     case 'dismount':
@@ -134,18 +165,31 @@ const route = (state: GameState, cmd: Command, map: GameMap): ApplyResult => {
       return doSplit(state, cmd.unit, cmd.squads);
     case 'combineInfantry':
       return doCombine(state, cmd.units);
-    case 'overrun':
-      return (
-        inertGuard(state, cmd.unit) ?? wrap(state, beginOverrun(state, map, cmd.unit, cmd.target))
-      );
-    case 'overrunAttack':
-      return wrap(state, resolveOverrunAttack(state, map, cmd.attackers, cmd.target));
+    case 'overrun': {
+      const guard = inertGuard(state, cmd.unit);
+      if (guard) return guard;
+      const called = bluffCalled(state, cmd.target);
+      if (called) return { state: called, result: ok('That was a dummy.') };
+      // Everybody in the hex is seen the moment the fight starts; so is the
+      // mover, and a minefield under the hex goes off under it.
+      const out = wrap(state, beginOverrun(state, map, cmd.unit, cmd.target));
+      if (!out.result.ok) return out;
+      let next = revealAt(revealUnit(out.state, cmd.unit), cmd.target);
+      next = tripMinefield(next, map, cmd.unit);
+      return { state: next, result: out.result };
+    }
+    case 'overrunAttack': {
+      const out = wrap(state, resolveOverrunAttack(state, map, cmd.attackers, cmd.target));
+      return out.result.ok ? { ...out, state: revealShooters(out.state, cmd.attackers) } : out;
+    }
     case 'overrunRam':
       return wrap(state, overrunRam(state, map, cmd.unit, cmd.target));
     case 'endFireRound':
       return wrap(state, endOverrunRound(state, map));
     case 'attack':
       return doAttack(state, cmd.attackers, cmd.target, map);
+    case 'layMinefield':
+      return wrap(state, layMinefield(state, map, cmd.by, cmd.at));
     case 'endPhase':
       return { state: advancePhase(state, map), result: ok() };
     case 'resign':
@@ -160,12 +204,28 @@ const route = (state: GameState, cmd: Command, map: GameMap): ApplyResult => {
       if (typeof side === 'string' && cmd.by !== side) {
         return { state, result: fail('the fleet overhead is not yours') };
       }
-      return wrap(state, resolveOrbitalStrike(state, map, cmd.strike, cmd.target));
+      // A strike called on a dummy finds nothing there; the strike is kept.
+      if (cmd.target.kind === 'unit') {
+        const t = state.units[cmd.target.unit];
+        if (t && t.concealed && isDummy(t)) {
+          return { state: revealUnit(state, t.id), result: ok('That was a dummy.') };
+        }
+      }
+      const out = wrap(state, resolveOrbitalStrike(state, map, cmd.strike, cmd.target));
+      if (!out.result.ok) return out;
+      const where = targetHex(out.state, cmd.target);
+      return { ...out, state: where ? revealAt(out.state, where) : out.state };
     }
     case 'placeUnit':
       return wrap(state, placeUnit(state, map, cmd.unit, cmd.at));
-    case 'finishSetup':
-      return wrap(state, finishSetup(state));
+    case 'finishSetup': {
+      const out = wrap(state, finishSetup(state));
+      // The counters are down: with camouflage on, or dummies in play, every
+      // side's counters go face down now (13.05, 13.06).
+      return out.result.ok && out.state.setup === null
+        ? { ...out, state: concealAll(out.state) }
+        : out;
+    }
     case 'launchCruiseMissile':
       return wrap(state, launchMissile(state, map, cmd.unit, cmd.target));
     case 'setTrainSpeed':
@@ -281,10 +341,45 @@ const doMove = (
     }
   }
 
-  const { state: next, plan } = applyMove(state, map, unitId, path);
-  return plan.ok
-    ? { state: next, result: ok() }
-    : { state, result: fail(plan.reason ?? 'illegal move') };
+  // A minefield the mover does not know about stops it where it is (13.04):
+  // the path is cut there, the rest of the plan is judged as given, and the
+  // mines go off once the counter is in the hex.
+  const stop = mineStopOn(state, unit, path);
+  const walked = stop >= 0 ? path.slice(0, stop + 1) : path;
+  const { state: moved, plan } = applyMove(state, map, unitId, walked);
+  if (!plan.ok) return { state, result: fail(plan.reason ?? 'illegal move') };
+  // Moving does not by itself turn a counter face up (13.05): what does is
+  // ending the phase next to an enemy, which `advancePhase` asks about.
+  let next = moved;
+  if (stop >= 0) {
+    next = updateAnyUnit(next, unitId, () => ({ movementEnded: true }));
+    next = tripMinefield(next, map, unitId);
+    return {
+      state: next,
+      result: ok(stop + 1 < path.length ? 'Stopped short: a minefield.' : undefined),
+    };
+  }
+  return { state: next, result: ok() };
+};
+
+/**
+ * A hex that holds nothing but the enemy's dummies: the bluff is called, the
+ * dummies come off, and there is nothing to fight. Null when the hex holds
+ * anything real, or nothing at all.
+ */
+const bluffCalled = (state: GameState, target: { q: number; r: number }): GameState | null => {
+  const here = unitsAt(state, target).filter((u) => u.owner !== activePlayer(state));
+  if (here.length === 0 || !here.every((u) => u.concealed && isDummy(u))) return null;
+  let next = state;
+  for (const u of here) next = revealUnit(next, u.id);
+  return next;
+};
+
+/** Attackers are seen firing (13.05). */
+const revealShooters = (state: GameState, attackers: readonly { unit: string }[]): GameState => {
+  let next = state;
+  for (const a of attackers) next = revealUnit(next, a.unit);
+  return next;
 };
 
 const doRam = (
@@ -489,10 +584,29 @@ const doAttack = (
     if (u.owner !== activePlayer(state)) return { state, result: fail('not your unit') };
   }
 
+  // A shot at a dummy is a shot spent on nothing (13.06): the guns are
+  // marked fired, the counter comes off, and the log says what it was.
+  if (target.kind === 'unit') {
+    const t = state.units[target.unit];
+    if (t && t.concealed && isDummy(t)) {
+      const spent = markAttackersSpent(state, attackers, target);
+      return {
+        state: revealShooters(revealUnit(spent, t.id, ' The shot is wasted.'), attackers),
+        result: ok('That was a dummy.'),
+      };
+    }
+  }
+
   const outcome = resolveAttack(state, map, attackers, target);
-  return outcome.resolution
-    ? { state: outcome.state, result: ok() }
-    : { state, result: fail(outcome.reason ?? 'that attack is not legal') };
+  if (!outcome.resolution) {
+    return { state, result: fail(outcome.reason ?? 'that attack is not legal') };
+  }
+  // Firing reveals the shooters; being fired on, and spillover, reveals the
+  // hex (13.05).
+  let next = revealShooters(outcome.state, attackers);
+  const where = targetHex(next, target);
+  if (where) next = revealAt(next, where);
+  return { state: next, result: ok() };
 };
 
 const doResign = (state: GameState, by: string): ApplyResult => {
@@ -524,7 +638,7 @@ export const advancePhase = (state: GameState, map: GameMap): GameState => {
 
     case 'movement': {
       // Step 3 of the sequence happens here, before anybody shoots.
-      const settled = resolvePendingHazards(state, player);
+      const settled = spotAdjacent(resolvePendingHazards(state, player), player);
       // Cruise missiles still in the air take their next leg as the fire
       // phase opens (10.03), before any new launch.
       return flyMissiles({ ...settled, phase: 'fire' }, map, player);
@@ -534,7 +648,7 @@ export const advancePhase = (state: GameState, map: GameMap): GameState => {
       return beginMovementPhase({ ...state, phase: 'gevMovement' }, map, player, 'gevMovement');
 
     case 'gevMovement': {
-      const settled = resolvePendingHazards(state, player);
+      const settled = spotAdjacent(resolvePendingHazards(state, player), player);
       return startNextPlayerTurn(settled, map);
     }
   }

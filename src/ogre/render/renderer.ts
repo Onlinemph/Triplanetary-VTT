@@ -33,6 +33,7 @@ import {
   onBoard,
 } from '../engine/types.js';
 import { unitAbbr } from '../engine/state.js';
+import { isUnknown, minesOf } from '../engine/concealment.js';
 import { Camera, type Inset } from './camera.js';
 import {
   type BoardPalette,
@@ -181,6 +182,7 @@ export class MapRenderer {
     this.drawZone(view, size);
     this.drawOverlays(state, view, size);
     this.drawBuildings(state, view, size);
+    this.drawMines(state, view, size);
     this.drawUnits(state, view, size);
     this.drawMissiles(state, size);
     if (view.aim) this.drawAim(view.aim, size);
@@ -742,6 +744,45 @@ export class MapRenderer {
   }
 
   // -------------------------------------------------------------------------
+  // Minefields (13.04)
+  // -------------------------------------------------------------------------
+
+  /**
+   * A minefield the viewer knows about: their own, or one that has gone off.
+   * A view from the referee has already had the rest taken out; a board held
+   * whole at a local table is filtered here, so a hot seat shows each player
+   * only what they laid.
+   */
+  private drawMines(state: GameState, view: RenderView, size: number): void {
+    const ctx = this.ctx;
+    for (const m of minesOf(state)) {
+      if (!m.revealed && view.viewer !== null && m.owner !== view.viewer) continue;
+      const c = toPixel(m.pos, size);
+      const r = size * 0.42;
+      ctx.beginPath();
+      ctx.moveTo(c.x, c.y - r);
+      ctx.lineTo(c.x + r * 0.87, c.y + r * 0.5);
+      ctx.lineTo(c.x - r * 0.87, c.y + r * 0.5);
+      ctx.closePath();
+      ctx.fillStyle = rgba(
+        m.revealed ? THEME.hazard : (state.players[m.owner]?.color ?? '#888'),
+        0.55,
+      );
+      ctx.fill();
+      ctx.strokeStyle = rgba('#000000', 0.6);
+      ctx.lineWidth = Math.max(1, size * 0.04);
+      ctx.stroke();
+      if (size >= LOD.counterLabelMin) {
+        ctx.fillStyle = '#fff';
+        ctx.font = `700 ${Math.round(size * 0.22)}px ${THEME.font}`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('M', c.x, c.y + r * 0.1);
+      }
+    }
+  }
+
+  // -------------------------------------------------------------------------
   // Counters
   // -------------------------------------------------------------------------
 
@@ -779,6 +820,11 @@ export class MapRenderer {
     const disabled = u.kind === 'unit' && u.disabled !== 'none';
     const selected = view.selected === u.id;
     const queued = view.attackers.includes(u.id);
+    // Face down to this viewer (13.05, 13.06): the side is known, the face is
+    // not. A view from the referee carries a `?` stand-in already; a board held
+    // whole at a local table is hidden here, per viewer.
+    const faceDown =
+      isUnknown(u) || (u.concealed === true && view.viewer !== null && u.owner !== view.viewer);
 
     ctx.save();
     ctx.shadowColor = 'rgba(0,0,0,0.55)';
@@ -807,6 +853,16 @@ export class MapRenderer {
     const ink = inkOn(color);
     ctx.textAlign = 'center';
 
+    if (faceDown) {
+      if (size >= LOD.counterLabelMin) {
+        ctx.fillStyle = ink;
+        ctx.font = `700 ${Math.round(size * 0.5)}px ${THEME.font}`;
+        ctx.textBaseline = 'middle';
+        ctx.fillText('?', c.x, c.y + h * 0.05);
+      }
+      return;
+    }
+
     if (size >= LOD.counterLabelMin) {
       ctx.fillStyle = ink;
       ctx.font = `600 ${Math.round(size * (ogre ? 0.3 : 0.28))}px ${THEME.font}`;
@@ -816,6 +872,24 @@ export class MapRenderer {
 
     if (ogre) this.drawOgreBar(u, c, w, h, size, ink);
     else if (size >= LOD.counterTextMin) this.drawStats(u, c, h, size, ink);
+
+    // One of the viewer's own, still face down to the enemy: a dashed rim.
+    if (u.concealed === true) {
+      ctx.save();
+      roundRect(
+        ctx,
+        c.x - w / 2 - size * 0.05,
+        c.y - h / 2 - size * 0.05,
+        w + size * 0.1,
+        h + size * 0.1,
+        r,
+      );
+      ctx.strokeStyle = rgba('#ffffff', 0.7);
+      ctx.lineWidth = Math.max(1, size * 0.04);
+      ctx.setLineDash([size * 0.12, size * 0.1]);
+      ctx.stroke();
+      ctx.restore();
+    }
 
     // An Ogre still assembling: hatched over, with the turn it wakes.
     if (ogre && u.activatesOn !== undefined && state.turn < u.activatesOn) {

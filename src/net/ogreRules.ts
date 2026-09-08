@@ -1,13 +1,19 @@
 /**
  * The ground game, as the referee sees it.
  *
- * Ogre is the easier of the two to referee: no hidden information, so every
- * seat sees the whole board and the log streams as commands; strictly one
- * player acting at a time, with the reducer itself refusing anybody else —
- * the deployment step and an overrun both hand the decision to somebody
- * other than the phasing player, and `applyCommand` already asks the right
- * question. The referee need only know who that is, to say which seat the
- * computer owes orders for.
+ * Ogre is the easier of the two to referee: in its basic form no hidden
+ * information, so every seat sees the whole board and the log streams as
+ * commands; strictly one player acting at a time, with the reducer itself
+ * refusing anybody else — the deployment step and an overrun both hand the
+ * decision to somebody other than the phasing player, and `applyCommand`
+ * already asks the right question. The referee need only know who that is,
+ * to say which seat the computer owes orders for.
+ *
+ * The three optional rules that hide something — minefields (13.04),
+ * camouflage (13.05), dummies (13.06) — turn a ground table into a fog
+ * table: `summary.fog` is true, `redact` is the view in
+ * `src/ogre/engine/concealment.ts`, and the referee sends each seat its view
+ * rather than the log, exactly as it does for the fleet game.
  */
 
 import type { PlayerId } from '../engine/index.js';
@@ -16,6 +22,7 @@ import { type GameState as OgreState, activePlayer, setupActor } from '../ogre/e
 import type { Command as OgreCommand } from '../ogre/engine/commands.js';
 import { applyCommand } from '../ogre/engine/reducer.js';
 import { overrunActor } from '../ogre/engine/overrun.js';
+import { hasHiddenInformation, redactOgreState } from '../ogre/engine/concealment.js';
 import { CUSTOM_ID, describeCustom, mapOf, scenarioById } from '../ogre/scenarios/index.js';
 import { orderOf } from '../campaign/orders.js';
 import { readBattleResult } from '../ogre/campaign/result.js';
@@ -56,14 +63,15 @@ export const ogreRules = (): KindRules => ({
     const s = state as OgreState;
     return s.rng.seed === 0 ? s : { ...s, rng: { seed: 0 } };
   },
-  redact: (state) => state,
+  redact: (state, seat) => redactOgreState(state as OgreState, seat),
   computerOrders: (state, computers) => {
     const s = state as OgreState;
     if (s.victory) return [];
     const who = actorOf(s);
     if (!computers.has(who)) return [];
     const def = scenarioById(s.scenarioId);
-    return def ? aiPlan(s, mapOf(def, s), who) : [];
+    // The computer decides against its own view, never the whole board.
+    return def ? aiPlan(redactOgreState(s, who), mapOf(def, s), who) : [];
   },
   // A ground table fought for a frozen sky reports its result the way a
   // battle fought in the browser does; the parent's rules turn it into an order.
@@ -86,7 +94,7 @@ export const ogreRules = (): KindRules => ({
       brief: s.scenarioId === CUSTOM_ID && order ? describeCustom(order) : def ? [def.blurb] : [],
       turn: s.turn,
       finished: s.victory !== null,
-      fog: false,
+      fog: hasHiddenInformation(s.options),
       playerOrder: s.playerOrder,
       players,
     };
