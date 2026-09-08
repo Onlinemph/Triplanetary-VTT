@@ -22,3 +22,6 @@ supabase/.temp/
 
 # The AI tuner's checkpoints
 .tune/
+
+# The war tuner's checkpoints
+.tune-war/

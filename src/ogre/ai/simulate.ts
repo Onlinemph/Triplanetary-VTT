@@ -14,6 +14,7 @@ import {
 } from '../engine/types.js';
 import { overrunActor } from '../engine/overrun.js';
 import { type ScenarioDef, mapOf } from '../scenarios/types.js';
+import type { OrderOfBattle } from '../../campaign/orders.js';
 import { aiPlan, decisionKey } from './player.js';
 import { DEFAULT_WEIGHTS, type Weights } from './weights.js';
 
@@ -51,10 +52,31 @@ export const playGame = (
   seed: number,
   weightsFor: WeightsFor = sameWeights(),
   opts: { readonly maxTurns?: number; readonly maxCommands?: number } = {},
-): GameResult => {
+): GameResult => playFrom(def, def.build({ seed, setup: true }), weightsFor, opts).result;
+
+/**
+ * A campaign's battle, fought headless from the order that minted it — the
+ * seed, the forces and the terms the freeze wrote down — with the computer
+ * in every seat. The war's simulator lives on this; the state comes back
+ * with the result so the campaign can read the record sheets off it.
+ */
+export const playOrder = (
+  def: ScenarioDef,
+  order: OrderOfBattle,
+  weightsFor: WeightsFor = sameWeights(),
+  opts: { readonly maxTurns?: number; readonly maxCommands?: number } = {},
+): { readonly state: GameState; readonly result: GameResult } =>
+  playFrom(def, def.build({ seed: order.seed, order, setup: true }), weightsFor, opts);
+
+/** The loop itself, from any starting board. */
+export const playFrom = (
+  def: ScenarioDef,
+  start: GameState,
+  weightsFor: WeightsFor = sameWeights(),
+  opts: { readonly maxTurns?: number; readonly maxCommands?: number } = {},
+): { readonly state: GameState; readonly result: GameResult } => {
   const maxTurns = opts.maxTurns ?? 40;
   const cap = opts.maxCommands ?? 20000;
-  const start = def.build({ seed, setup: true });
   let s: GameState = start;
   let plan: { key: string; commands: ReturnType<typeof aiPlan> } | null = null;
   let commands = 0;
@@ -86,9 +108,9 @@ export const playGame = (
   for (const u of Object.values(s.units)) {
     if (u.destroyed) lost[u.owner] = (lost[u.owner] ?? 0) + victoryValueOf(u);
   }
-  return {
+  const result: GameResult = {
     scenario: def.id,
-    seed,
+    seed: seedOf(start),
     turns: s.turn,
     commands,
     refused,
@@ -99,6 +121,13 @@ export const playGame = (
     points,
     lost,
   };
+  return { state: s, result };
+};
+
+/** The seed a board was built from, for the record; the rng carries it. */
+const seedOf = (state: GameState): number => {
+  const seed = (state.rng as { readonly seed?: unknown }).seed;
+  return typeof seed === 'number' ? seed : 0;
 };
 
 const victoryValueOf = (u: GameState['units'][string]): number => {

@@ -220,7 +220,13 @@ in the browser. Where this implementation adapts or defers the printed text:
   rammed or overrun (Ogre 11.04) by the landed force, but not struck from
   orbit (§6.01). "Captured intact" is read from the battle's victory level.
 - **The computer opponent** plays either seat of a ground battle with a
-  weight table learned by self-play; `docs/AI.md` describes it.
+  weight table learned by self-play, and — from a general staff above the
+  pilot — the war itself: it garrisons its bases, buys and loads a landing
+  at the yard nearest the target, sails it under escort, silences the
+  hexside, declares, lands the day after, and hands the battle to the
+  ground game's computer. `docs/AI.md` describes both. A computer seat's
+  garrisons are as secret as anyone's: the staff never reads an enemy
+  ledger, and under fog of war each seat is sent only its own.
 - **Overlays** are rolled and placed by the same seed that builds the battle
   rather than by the players: on a dead world each of the 1d6 overlays is a
   crater or a ridge hexside on the toss of a coin; a rock gets 2d6 ridges.

@@ -45,6 +45,7 @@ import { DEFAULT_MAP } from '../src/engine/map.js';
 import { SCENARIOS, buildScenario } from '../src/scenarios/index.js';
 import { nextCommand } from '../src/ai/index.js';
 import { aiHasMove, driveAi, stepAi } from '../src/ai/driver.js';
+import { skyFrozen } from '../src/ai/war/index.js';
 import { brakingRoom, escapable, safeCourses, solvent } from '../src/ai/navigate.js';
 import { bodiesVisited, combatForbidden, errandFor } from '../src/ai/objectives.js';
 
@@ -110,6 +111,10 @@ const play = (scenarioId: string, seed: number, turnCap = 25): Run => {
       break;
     }
     if (state.victory) break;
+    // Orbital Drop §4.05: with the landers down the sky is frozen, and the
+    // computer rightly says nothing until the ground battle is fought. That
+    // is the war simulator's business (`tests/ai-war.test.ts`), not a stall.
+    if (skyFrozen(state)) break;
     if (state === before) {
       wedged = `turn ${state.turn}, ${state.phase} phase`;
       break;

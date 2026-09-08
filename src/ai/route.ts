@@ -107,6 +107,12 @@ export type Arrival =
   | 'flyby';
 
 export interface RouteRequest {
+  /**
+   * Fuel the whole route may spend, when less than the tank. A wave with no
+   * hurry is flown to leave points for the orbit, the landing and the
+   * unexpected; the fastest route through a full tank leaves none.
+   */
+  readonly maxBurns?: number;
   readonly goal: Hex;
   readonly arrival: Arrival;
   /** For `'orbit'`. */
@@ -255,7 +261,9 @@ export const routeTo = (
   const drift = request.goalVelocity ?? { q: 0, r: 0 };
   const goalAt = (turns: number): Hex =>
     add(request.goal, { q: drift.q * turns, r: drift.r * turns });
-  const fuel = hasUnlimitedFuel(ship) ? Infinity : ship.fuel;
+  const fuel = hasUnlimitedFuel(ship)
+    ? Infinity
+    : Math.min(ship.fuel, request.maxBurns ?? ship.fuel);
   const scanners = hasScanners(state, ship);
   const leashed = isLeashed(state, ship);
 

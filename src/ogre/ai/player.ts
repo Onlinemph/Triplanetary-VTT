@@ -275,7 +275,7 @@ const threatAt = (ctx: Ctx, h: Hex): number => {
 const worth = (ctx: Ctx, u: Unit): number => {
   if (isOgre(u)) return ogreType(u.typeId).vp;
   const cls = unitClass(u.classId);
-  if (cls.id === 'CP') return ctx.w['fire.worthCp'];
+  if (cls.id === 'CP') return ctx.w['fire.worthCp'] * prizeShare(ctx);
   return (
     victoryValue(u) +
     printedAttack(u) * ctx.w['fire.worthAttack'] +
@@ -636,6 +636,12 @@ const edgeStep = (map: GameMap, off: Hex, edge: Edge): boolean => {
 
 const goalFor = (ctx: Ctx, u: Unit): Goal => {
   if (ctx.attacker) {
+    // An assault that wants the base intact hunts the garrison down rather
+    // than sitting on the base shooting it.
+    if (wantsGarrisonCleared(ctx)) {
+      const quarry = nearestOf(ctx.enemies, u.pos);
+      if (quarry) return { kind: 'hex', hex: quarry.pos };
+    }
     if (ctx.objective) return { kind: 'hex', hex: ctx.objective };
     if (ctx.edge && isOgre(u)) return { kind: 'edge', edge: ctx.edge };
     // Nothing left to take: hunt the nearest enemy.
@@ -734,7 +740,7 @@ const ramFor = (ctx: Ctx, u: Unit, options: readonly { hex: Hex }[]): Command | 
     if (!legal) continue;
     let value = 0;
     for (const v of unitsAt(state, e.pos).filter((x) => x.owner !== player)) {
-      if (v.kind === 'unit' && v.classId === 'CP') value += w['ram.cp'];
+      if (v.kind === 'unit' && v.classId === 'CP') value += w['ram.cp'] * prizeShare(ctx);
       else if (isOgre(v)) value += overrun ? w['ram.ogreOverrun'] : w['ram.ogre'];
       else if (isInfantry(v)) value += overrun ? w['ram.infantryOverrun'] : 0;
       else value += victoryValue(v) * w['ram.armour'];
@@ -895,12 +901,40 @@ const targetsOf = (ctx: Ctx): Target[] => {
     if (b.destroyed || b.owner === ctx.player) continue;
     out.push({
       ref: { kind: 'building', building: b.id },
-      value: ctx.w['fire.buildingValue'],
+      value: ctx.w['fire.buildingValue'] * prizeShare(ctx),
       hex: b.pos,
     });
   }
   return out;
 };
+
+/**
+ * Orbital Drop §6.02: the base is "captured intact" only when the garrison
+ * is gone, and a razed base is a ruin nobody gets paid for. In an assault
+ * the scenario says so (`prizeIntact`), and every post and building is then
+ * worth only a share of its usual value — enough to finish it when nothing
+ * else will win, not enough to shoot at first.
+ */
+const prizeShare = (ctx: Ctx): number => {
+  if (ctx.state.scenarioData['prizeIntact'] !== true) return 1;
+  // While the garrison stands — on the map or still to come from the reserve
+  // — the prize is not shot at; the garrison is hunted instead. Only after
+  // `fire.prizePatience` turns of that does razing the base become a way to
+  // win, at the share the weight gives it.
+  if (garrisonStands(ctx) && ctx.state.turn <= ctx.w['fire.prizePatience']) return 0;
+  return ctx.w['fire.prize'];
+};
+
+/** Is any defender left to hunt, on the board or waiting off it? */
+const garrisonStands = (ctx: Ctx): boolean =>
+  ctx.enemies.some((u) => u.kind !== 'unit' || u.classId !== 'CP') ||
+  Object.values(ctx.state.units).some(
+    (u) => u.owner !== ctx.player && !u.destroyed && u.offMap === 'reserve',
+  );
+
+/** Orbital Drop §6.02: take the base intact, which means clearing the garrison first. */
+const wantsGarrisonCleared = (ctx: Ctx): boolean =>
+  ctx.state.scenarioData['prizeIntact'] === true && prizeShare(ctx) === 0;
 
 const unitTargets = (ctx: Ctx, e: Unit): Target[] => {
   const out: Target[] = [];
@@ -991,7 +1025,8 @@ const expectedValue = (
   if (t.ref.kind === 'building') {
     const done = (p.structureDamage ?? 0) >= p.defenseStrength;
     return (
-      (done ? w['fire.buildingDone'] : (p.structureDamage ?? 0) * w['fire.buildingSp']) -
+      (done ? w['fire.buildingDone'] : (p.structureDamage ?? 0) * w['fire.buildingSp']) *
+        prizeShare(ctx) -
       attackers.length * w['fire.buildingGunCost']
     );
   }

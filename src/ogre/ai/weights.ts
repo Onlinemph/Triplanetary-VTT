@@ -168,6 +168,18 @@ export const WEIGHT_SPEC = {
   'fire.buildingSp': spec(3, 0, 12, 'Per structure point knocked off a building'),
   'fire.buildingGunCost': spec(1, 0, 4, 'Cost of a gun spent on a building'),
   'fire.buildingValue': spec(60, 0, 200, 'Worth of a building as a strike or missile target'),
+  'fire.prize': spec(
+    0.2,
+    0,
+    1,
+    'Worth of the base the campaign wants taken intact, as a share of any other post or building',
+  ),
+  'fire.prizePatience': spec(
+    16,
+    4,
+    40,
+    'Turns an assault hunts the garrison before razing the base becomes a way to win',
+  ),
   'fire.disableInfantry': spec(0.45, 0, 1, 'A disable on infantry, as a fraction of a kill'),
   'fire.disableArmour': spec(0.4, 0, 1, 'A disable on armour, as a fraction of a kill'),
   'fire.disableDisabled': spec(1, 0, 1.5, 'A disable on something already disabled'),
