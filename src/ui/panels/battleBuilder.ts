@@ -110,6 +110,9 @@ interface Draft {
   minefields: number;
   camouflage: boolean;
   dummies: number;
+  /** 13.01/13.02 and 13.07. */
+  terrainDamage: boolean;
+  superheavySheets: boolean;
   sides: [DraftSide, DraftSide];
 }
 
@@ -172,6 +175,8 @@ const draftOf = (order: OrderOfBattle, newSeed: () => number): Draft => {
     minefields: num(t['minefields']) ?? 0,
     camouflage: t['camouflage'] === true,
     dummies: num(t['dummies']) ?? 0,
+    terrainDamage: t['terrainDamage'] === true,
+    superheavySheets: t['superheavySheets'] === true,
     sides: [side(a, 'Paneuropean Federation'), side(b, 'North American Combine')],
   };
 };
@@ -213,6 +218,8 @@ export const orderOf = (d: Draft, battleId: string): OrderOfBattle => ({
     ...(d.minefields > 0 ? { minefields: d.minefields } : {}),
     ...(d.camouflage ? { camouflage: true } : {}),
     ...(d.dummies > 0 ? { dummies: d.dummies } : {}),
+    ...(d.terrainDamage ? { terrainDamage: true } : {}),
+    ...(d.superheavySheets ? { superheavySheets: true } : {}),
   },
 });
 
@@ -665,6 +672,39 @@ export const openBattleBuilder = (host: HTMLElement, o: BattleBuilderOpts): Over
             min: '0',
             max: String(HIDDEN_LIMITS.dummies),
             title: 'Face-down counters that are nothing at all, removed when revealed',
+          },
+        ),
+        el('h3', { class: 'sect-title', text: 'Optional rules' }),
+        chips(
+          'Terrain damage',
+          [
+            { value: 'off', label: 'Off', title: 'Hexes and bridges are not targets' },
+            {
+              value: 'on',
+              label: 'On',
+              title:
+                'Towns and forests can be shot to rubble (13.01) and bridges dropped (13.02); engineers can blow one',
+            },
+          ],
+          d.terrainDamage ? 'on' : 'off',
+          (v) => {
+            d.terrainDamage = v === 'on';
+          },
+        ),
+        chips(
+          'Superheavy sheets',
+          [
+            { value: 'off', label: 'Off', title: 'A Superheavy is one counter, destroyed by an X' },
+            {
+              value: 'on',
+              label: 'On',
+              title:
+                'A Superheavy fights on a record sheet of two guns, two AP and three tread units (13.07)',
+            },
+          ],
+          d.superheavySheets ? 'on' : 'off',
+          (v) => {
+            d.superheavySheets = v === 'on';
           },
         ),
       ),

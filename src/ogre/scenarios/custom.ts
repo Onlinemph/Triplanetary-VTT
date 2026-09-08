@@ -96,6 +96,10 @@ export interface CustomTerms {
   readonly camouflage: boolean;
   /** 13.06: dummy counters per side. */
   readonly dummies: number;
+  /** 13.01, 13.02: hexes and bridges may be shot. */
+  readonly terrainDamage: boolean;
+  /** 13.07: Superheavies fight on a record sheet. */
+  readonly superheavySheets: boolean;
 }
 
 /** The most of each the builder offers; the engine takes any number. */
@@ -172,6 +176,8 @@ export const readTerms = (raw: Readonly<Record<string, unknown>>): CustomTerms =
       minefields === undefined ? 0 : clamp(Math.floor(minefields), 0, HIDDEN_LIMITS.minefields),
     camouflage: raw['camouflage'] === true,
     dummies: dummies === undefined ? 0 : clamp(Math.floor(dummies), 0, HIDDEN_LIMITS.dummies),
+    terrainDamage: raw['terrainDamage'] === true,
+    superheavySheets: raw['superheavySheets'] === true,
   };
 };
 
@@ -446,6 +452,8 @@ const build = (opts: ScenarioBuildOptions): GameState => {
       ...(terms.minefields > 0 ? { minefields: terms.minefields } : {}),
       ...(terms.camouflage ? { camouflage: true } : {}),
       ...(terms.dummies > 0 ? { dummies: terms.dummies } : {}),
+      ...(terms.terrainDamage ? { terrainDamage: true } : {}),
+      ...(terms.superheavySheets ? { superheavyRecordSheet: true } : {}),
       ...opts.options,
     },
     scenarioData: {
@@ -792,6 +800,10 @@ export const describeCustom = (order: OrderOfBattle): string[] => {
   if (terms.camouflage) hidden.push('camouflage');
   if (terms.dummies > 0) hidden.push(`${terms.dummies} dummies a side`);
   if (hidden.length > 0) lines.push(`Hidden: ${hidden.join(', ')}`);
+  const optional: string[] = [];
+  if (terms.terrainDamage) optional.push('terrain and bridges may be shot');
+  if (terms.superheavySheets) optional.push('Superheavy record sheets');
+  if (optional.length > 0) lines.push(`Optional rules: ${optional.join(', ')}`);
   if (attacker) lines.push(`${attacker.faction} (attacking): ${describeForces(attacker.forces)}`);
   if (defender) lines.push(`${defender.faction} (defending): ${describeForces(defender.forces)}`);
   return lines;

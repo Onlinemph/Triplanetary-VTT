@@ -165,7 +165,7 @@ export const stepInfo = (
   }
 
   const mobility = mobilityOf(unit);
-  const route = routeBetween(map, from, to, state.routesCut);
+  const route = routeBetween(map, from, to, state.routesCut, state.bridgesDown);
   const side = sideFeatureBetween(map, from, to, state.sideOverrides);
   const fromTerrain = terrainAt(map, from, state.terrainOverrides);
   const toTerrain = terrainAt(map, to, state.terrainOverrides);
@@ -197,7 +197,8 @@ export const stepInfo = (
     const canWalkThroughInfantry =
       allInfantry &&
       ((isOgre(unit) && apRemaining(unit) > 0) ||
-        (unit.kind === 'unit' && unit.classId === 'SHVY'));
+        // On its record sheet (13.07) the Superheavy needs an AP weapon left.
+        (unit.kind === 'unit' && unit.classId === 'SHVY' && (unit.sheet?.ap ?? 1) > 0));
 
     if (canWalkThroughInfantry) {
       // 6.06: not a ram, and it does not count against the ramming limit.
@@ -538,6 +539,9 @@ export const beginMovementPhase = (
       onRouteAllPhase: isRouteHex(map, u.pos),
       movementEnded,
       ...(phase === 'movement' ? { ramsThisTurn: 0, rammedOgreThisTurn: false } : {}),
+      // "may not ... mount and dismount on the same turn" (5.11.3) is about
+      // one turn: a rider that mounted last turn may get off this one.
+      ...(phase === 'movement' && u.kind === 'unit' ? { mountedThisTurn: false } : {}),
       ...(phase === 'movement' && u.kind === 'unit' && u.trainSpeed !== undefined
         ? { trainSpeedSet: false }
         : {}),
@@ -642,8 +646,13 @@ export const canMount = (
   rider: Unit,
   carrier: Unit,
 ): { ok: boolean; reason?: string } => {
-  if (rider.kind !== 'unit' || unitClass(rider.classId).kind !== 'infantry') {
-    return { ok: false, reason: 'only infantry ride' };
+  // Infantry ride (5.11); so does the Light Artillery Drone, palletised, as
+  // one squad's worth of room (14.01).
+  if (
+    rider.kind !== 'unit' ||
+    (unitClass(rider.classId).kind !== 'infantry' && rider.classId !== 'LAD')
+  ) {
+    return { ok: false, reason: 'only infantry and the drone ride' };
   }
   if (ridingSomething(rider)) return { ok: false, reason: 'already aboard something' };
   if (carrier.kind !== 'unit') return { ok: false, reason: 'Ogres do not give lifts' };

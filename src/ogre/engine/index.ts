@@ -27,4 +27,5 @@ export * from './setup.js';
 export * from './reserves.js';
 export * from './missiles.js';
 export * from './concealment.js';
+export * from './engineering.js';
 export * from './reducer.js';

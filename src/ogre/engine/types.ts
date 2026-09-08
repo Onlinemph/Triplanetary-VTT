@@ -136,6 +136,11 @@ export interface ConventionalUnit {
    * `concealment.ts`.
    */
   readonly concealed?: boolean;
+  /**
+   * A Superheavy's record sheet (13.07), once it has taken damage under that
+   * option. Absent means the full sheet; see `engineering.ts`.
+   */
+  readonly sheet?: { readonly guns: number; readonly ap: number; readonly treads: number };
 }
 
 /** One targetable component on an Ogre's record sheet. */
@@ -262,7 +267,9 @@ export type TargetRef =
   | { readonly kind: 'ogreWeapon'; readonly unit: UnitId; readonly weapon: string }
   | { readonly kind: 'ogreTreads'; readonly unit: UnitId }
   | { readonly kind: 'building'; readonly building: string }
-  | { readonly kind: 'terrain'; readonly hex: Hex };
+  | { readonly kind: 'terrain'; readonly hex: Hex }
+  /** A bridge (13.02): the crossing between `hex` and its neighbour `toward`. */
+  | { readonly kind: 'bridge'; readonly hex: Hex; readonly toward: Hex };
 
 /** One attacking gun: a whole conventional unit, or one weapon on an Ogre. */
 export interface AttackerRef {
@@ -527,6 +534,10 @@ export interface GameState {
   readonly missiles?: Readonly<Record<string, CruiseMissile>>;
   /** Minefields on the map (13.04), laid and hidden; see `concealment.ts`. */
   readonly mines?: readonly Minefield[];
+  /** Bridges dropped (13.02, 15), by canonical hexside key; see `engineering.ts`. */
+  readonly bridgesDown?: readonly string[];
+  /** Hexes combat engineers have entrenched (15), by hex key. */
+  readonly entrenched?: readonly string[];
 
   readonly victory: VictoryState | null;
   /** Free-form per-scenario bookkeeping (entry edges, objectives, timers). */

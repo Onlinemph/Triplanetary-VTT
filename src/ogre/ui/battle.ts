@@ -23,7 +23,7 @@
  * out through `onProgress`, which is how the shell autosaves a battle.
  */
 
-import { type Hex, eq, label as hexLabel } from '../engine/hex.js';
+import { type Hex, distance, eq, label as hexLabel } from '../engine/hex.js';
 import { terrainAt } from '../engine/map.js';
 import { TERRAIN_LABELS } from '../engine/terrain.js';
 import { OGRE_WEAPONS, movementForTreads, ogreType } from '../engine/ogres.js';
@@ -46,7 +46,7 @@ import {
   setupActor,
   unitsAt,
 } from '../engine/types.js';
-import { isFireable, movementAllowance, unitName } from '../engine/state.js';
+import { attackerRange, isFireable, movementAllowance, unitName } from '../engine/state.js';
 import { reachable } from '../engine/movement.js';
 import {
   canStillFire,
@@ -73,6 +73,15 @@ import { LANDING, mapOf, scenarioById } from '../scenarios/index.js';
 import { readBattleResult } from '../campaign/result.js';
 import { aiPlan, decisionKey } from '../ai/player.js';
 import { isUnknown, minefieldsLeft, redactOgreState } from '../engine/concealment.js';
+import {
+  SUPERHEAVY_GUN,
+  bridgesNear,
+  canRide,
+  engineerTasks,
+  entrenchedAt,
+  sheetOf,
+} from '../engine/engineering.js';
+import { canDismount, canMount } from '../engine/movement.js';
 import { button, el, row, setChildren } from './dom.js';
 import '../ogre.css';
 
@@ -593,7 +602,13 @@ export const createOgreBattle = (opts: OgreBattleOptions): OgreBattle => {
 
   /** True when two target references point at the same counter or building. */
   const sameThing = (a: TargetRef, b: TargetRef | null): boolean => {
-    if (!b || a.kind === 'terrain' || b.kind === 'terrain') return false;
+    if (!b) return false;
+    if (a.kind === 'terrain' || b.kind === 'terrain') return false;
+    if (a.kind === 'bridge' || b.kind === 'bridge') {
+      return (
+        a.kind === 'bridge' && b.kind === 'bridge' && eq(a.hex, b.hex) && eq(a.toward, b.toward)
+      );
+    }
     if (a.kind === 'building' || b.kind === 'building') {
       return a.kind === 'building' && b.kind === 'building' && a.building === b.building;
     }
@@ -602,7 +617,7 @@ export const createOgreBattle = (opts: OgreBattleOptions): OgreBattle => {
 
   /** Where the current target stands, so the panel can list its neighbours. */
   const targetHex = (state: GameState, t: TargetRef): Hex | null => {
-    if (t.kind === 'terrain') return t.hex;
+    if (t.kind === 'terrain' || t.kind === 'bridge') return t.hex;
     if (t.kind === 'building') return state.buildings[t.building]?.pos ?? null;
     const u = state.units[t.unit];
     return u ? u.pos : null;
@@ -629,7 +644,9 @@ export const createOgreBattle = (opts: OgreBattleOptions): OgreBattle => {
             ? `the ${state.buildings[c.building]?.kind ?? 'building'}`
             : c.kind === 'terrain'
               ? hexLabel(c.hex)
-              : unitName(state.units[c.unit]!),
+              : c.kind === 'bridge'
+                ? `the bridge ${hexLabel(c.hex)}–${hexLabel(c.toward)}`
+                : unitName(state.units[c.unit]!),
           () => {
             ui.target = c;
             draw();
@@ -1267,6 +1284,24 @@ export const createOgreBattle = (opts: OgreBattleOptions): OgreBattle => {
     } else if (u.concealed === true) {
       rows.push(row('Status', 'Face down to the enemy', 'warn'));
     }
+    const sheet = sheetOf(state, u);
+    if (sheet) {
+      rows.push(row('Guns', `${sheet.guns} × ${SUPERHEAVY_GUN}/3`, sheet.guns < 2 ? 'warn' : ''));
+      rows.push(row('Antipersonnel', String(sheet.ap), sheet.ap < 2 ? 'warn' : ''));
+      rows.push(row('Tread units', `${sheet.treads} of 3`, sheet.treads < 3 ? 'warn' : ''));
+    }
+    if (u.kind === 'unit' && u.classId === 'LAD' && u.ridingOn) {
+      rows.push(row('Carried', 'palletised; set it down to deploy', 'warn'));
+    } else if (u.kind === 'unit' && u.classId === 'LAD' && u.firedThisPhase && u.movementEnded) {
+      rows.push(row('Setting up', 'fires from next turn', 'warn'));
+    }
+    if (
+      u.kind === 'unit' &&
+      entrenchedAt(state, u.pos) &&
+      unitClass(u.classId).kind === 'infantry'
+    ) {
+      rows.push(row('Entrenched', 'defends as in forest'));
+    }
     if (isOgre(u)) {
       const type = ogreType(u.typeId);
       rows.push(row('Treads', `${u.treads} / ${type.treads}`));
@@ -1413,7 +1448,45 @@ export const createOgreBattle = (opts: OgreBattleOptions): OgreBattle => {
           dispatch({ type: 'reduceInfantry', by: me(), unit: u.id, target: inf.id }),
         ),
       ),
+      ...rideButtons(state, u),
+      ...engineerTasks(state, session.map, u).map((t) =>
+        button(t.label, () =>
+          dispatch({
+            type: 'engineer',
+            by: me(),
+            unit: u.id,
+            task: t.task,
+            ...(t.toward ? { toward: t.toward } : {}),
+          }),
+        ),
+      ),
     );
+  };
+
+  /**
+   * Mounting and dismounting (5.11; the drone too, 14.01): a rider in a hex
+   * with one of its own vehicles may climb aboard for the whole phase, and a
+   * rider aboard may get off.
+   */
+  const rideButtons = (state: GameState, u: Unit): HTMLElement[] => {
+    if (!canRide(u) || u.kind !== 'unit') return [];
+    if (u.ridingOn) {
+      const carrier = state.units[u.ridingOn];
+      return canDismount(u).ok && state.phase === 'movement'
+        ? [
+            button(`Dismount from ${carrier ? unitName(carrier) : 'the vehicle'}`, () =>
+              dispatch({ type: 'dismount', by: me(), unit: u.id }),
+            ),
+          ]
+        : [];
+    }
+    return unitsAt(state, u.pos)
+      .filter((c) => c.owner === u.owner && c.id !== u.id && canMount(state, u, c).ok)
+      .map((c) =>
+        button(`Mount ${unitName(c)}`, () =>
+          dispatch({ type: 'mount', by: me(), unit: u.id, carrier: c.id }),
+        ),
+      );
   };
 
   // ---------------------------------------------------------------------
@@ -1520,10 +1593,59 @@ export const createOgreBattle = (opts: OgreBattleOptions): OgreBattle => {
       );
     }
 
+    // Bridges in reach of every queued gun (13.02), when terrain may be shot.
+    if (ui.attackers.length > 0 && state.options.terrainDamage) {
+      const shooters = ui.attackers
+        .map((a) => state.units[a.unit])
+        .filter((s): s is Unit => s !== undefined);
+      const reach = Math.min(
+        ...ui.attackers.map((a) => {
+          const s = state.units[a.unit];
+          return s ? attackerRange(s, a) : 0;
+        }),
+      );
+      const from = shooters[0];
+      const bridges = from ? bridgesNear(state, session.map, from.pos, reach) : [];
+      const inReach = bridges.filter((b) =>
+        shooters.every(
+          (s) =>
+            distance(s.pos, b.hex) <=
+            attackerRange(
+              s,
+              ui.attackers.find((a) => a.unit === s.id)!,
+            ),
+        ),
+      );
+      if (inReach.length > 0) {
+        kids.push(
+          el(
+            'div',
+            { class: 'chips targets' },
+            ...inReach.map((b) =>
+              button(
+                `Bridge ${hexLabel(b.hex)}–${hexLabel(b.toward)}`,
+                () => {
+                  ui.target = { kind: 'bridge', hex: b.hex, toward: b.toward };
+                  draw();
+                },
+                {
+                  class: sameThing({ kind: 'bridge', hex: b.hex, toward: b.toward }, ui.target)
+                    ? 'chip on'
+                    : 'chip',
+                },
+              ),
+            ),
+          ),
+        );
+      }
+    }
+
     const target = ui.target;
     if (target && ui.attackers.length > 0) {
       const targetUnit =
-        target.kind === 'terrain' || target.kind === 'building' ? null : state.units[target.unit];
+        target.kind === 'terrain' || target.kind === 'building' || target.kind === 'bridge'
+          ? null
+          : state.units[target.unit];
       const chips = hexTargetChips(state);
       if (chips) kids.push(el('h3', {}, 'Target'), chips);
       if (targetUnit && isOgre(targetUnit)) {
@@ -1604,7 +1726,9 @@ export const createOgreBattle = (opts: OgreBattleOptions): OgreBattle => {
       { class: 'shot' },
       target.kind === 'building'
         ? row('Target', `the ${state.buildings[target.building]?.kind ?? 'building'}`)
-        : null,
+        : target.kind === 'bridge'
+          ? row('Target', `the bridge ${hexLabel(target.hex)}–${hexLabel(target.toward)}`)
+          : null,
       row('Odds', preview.treadAttack ? '1 to 1 (treads)' : describeOdds(preview.odds)),
       row('Strength', `${preview.attackStrength} against ${preview.defenseStrength}`),
       preview.treadAttack

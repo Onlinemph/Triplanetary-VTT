@@ -305,12 +305,30 @@ better; a dummy moves at 3 like a light tracked vehicle; camouflage is broken
 by a movement phase ending with an enemy adjacent. Correct them against the
 printed text.
 
+The rest of Section 13 that is in, and the engineering of Section 15, again
+from their shape (`src/ogre/engine/engineering.ts`):
+
+| Rule                          | Where                                                                                                                                                                                                                                                                                                                                                                                                        |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 13.02 Bridges                 | A road or rail crossing a stream is a target of its own (`TargetRef` kind `bridge`) when terrain damage is in play: defence 4 (`BRIDGE`), an X drops it (`demolishBridge`, `GameState.bridgesDown`), a D does nothing; the route is gone across that hexside only (`routeBetween`).                                                                                                                          |
+| 13.07 Superheavy record sheet | `GameOptions.superheavyRecordSheet`: a Superheavy carries two guns of 3, two AP and three tread units (`SUPERHEAVY_SHEET`); an X takes one of them on a die (1-2 gun, 3-4 tread, 5-6 AP), a D a tread unit (`applySheetDamage`); it shoots with the guns and moves on the tread units it has left, walks through infantry only with an AP left, and is destroyed when it has neither a gun nor a tread unit. |
+| 15 Combat engineering         | `engineer` order, movement phase, a Combat Engineer counter that has not moved: entrench its hex (infantry there defend as in forest, `GameState.entrenched`), clear the minefield it stands in (13.04), or drop the bridge on a neighbouring hexside — the whole phase spent.                                                                                                                               |
+
+The numbers are provisional: the bridge's defence, the sheet's components and
+the die that picks one, the drone's stowage. Correct them against the printed
+text.
+
 ### 14 – Advanced units (partial)
 
 | Rule                                                            | Where                  |
 | --------------------------------------------------------------- | ---------------------- |
 | 14.02 The Ninja: −1 to every die rolled against it              | `combat.resolveAttack` |
 | 14.02 The Ninja's weapons do not combine with other units' fire | `combat.previewAttack` |
+
+The drone's deployment is implemented from its shape: it rides any vehicle
+that carries infantry, as one squad's worth of room (`movement.canMount`),
+and the turn it is set down it is setting up and may not fire
+(`reducer.doDismount`). The printed sequence is still to be checked.
 
 ### Setup
 
@@ -342,14 +360,14 @@ record sheets carried in from the last battle (`assault.applyOgreRecord`).
 Each of these is a self-contained addition; none of them require changing the
 engine's shape.
 
-| Section                     | What is missing                                                                                             | Notes                                                                                                                                                                                              |
-| --------------------------- | ----------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **9 – The train**           | The printed numbers, and a scenario to run it in                                                            | The mechanics are in, flagged provisional; see above.                                                                                                                                              |
-| **10 – Cruise missiles**    | The printed flight, defence and blast numbers                                                               | The mechanics are in, flagged provisional; see above.                                                                                                                                              |
-| **12 – Lasers**             | The printed attack and defence values                                                                       | The mechanics are in, flagged provisional; see above.                                                                                                                                              |
-| **13 – Optional rules**     | The printed numbers for mines, camouflage and dummies; bridge destruction; Superheavy record sheets (13.07) | Terrain damage (13.01) and the hidden-information trio (13.04–13.06) are in, the latter from their shape. `GameOptions.superheavyRecordSheet` is a stub — declared, defaulted false, read nowhere. |
-| **14 – Advanced units**     | The LAD deployment sequence                                                                                 | Both units' statistics are in, and the Ninja's stealth.                                                                                                                                            |
-| **15 – Combat engineering** | The engineering itself                                                                                      | Entrenchments, mine handling, Vulcan tasks. The Vulcan's record sheet — the two manipulator arms at D2 (15.02) — and the unfinished-Ogre rule (15.02.2) are in.                                    |
+| Section                     | What is missing                                                                        | Notes                                                                                                                                                                                                                                                |
+| --------------------------- | -------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **9 – The train**           | The printed numbers, and a scenario to run it in                                       | The mechanics are in, flagged provisional; see above.                                                                                                                                                                                                |
+| **10 – Cruise missiles**    | The printed flight, defence and blast numbers                                          | The mechanics are in, flagged provisional; see above.                                                                                                                                                                                                |
+| **12 – Lasers**             | The printed attack and defence values                                                  | The mechanics are in, flagged provisional; see above.                                                                                                                                                                                                |
+| **13 – Optional rules**     | The printed numbers for mines, camouflage, dummies, bridges and the Superheavy's sheet | Terrain damage (13.01), bridges (13.02), the hidden-information trio (13.04–13.06) and the Superheavy record sheet (13.07) are all in, the last five from their shape.                                                                               |
+| **14 – Advanced units**     | The printed LAD deployment sequence                                                    | Both units' statistics are in, and the Ninja's stealth; the drone rides a vehicle as one squad and sets up the turn it is set down (`engineering.ts`), from the rule's shape.                                                                        |
+| **15 – Combat engineering** | The Vulcan's tasks, and the printed engineering numbers                                | Entrenching, mine clearing and bridge demolition are in (`engineer`), from the rule's shape. The Vulcan's record sheet — the two manipulator arms at D2 (15.02) — and the unfinished-Ogre rule (15.02.2) are in; its repair and salvage work is not. |
 
 ---
 

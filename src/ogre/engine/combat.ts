@@ -18,6 +18,7 @@
  *    at half strength and one step down the results (7.12).
  */
 
+import { BRIDGE, applySheetDamage, bridgeStands, demolishBridge, sheetOf } from './engineering.js';
 import { distance, eq, key } from './hex.js';
 import { type GameMap, terrainAt } from './map.js';
 import { rollDie } from './rng.js';
@@ -83,6 +84,8 @@ export const targetHex = (state: GameState, target: TargetRef) => {
       return state.buildings[target.building]?.pos ?? null;
     case 'terrain':
       return target.hex;
+    case 'bridge':
+      return target.hex;
   }
 };
 
@@ -106,6 +109,8 @@ export const describeTarget = (state: GameState, target: TargetRef): string => {
       return state.buildings[target.building]?.kind ?? 'a building';
     case 'terrain':
       return 'the hex itself';
+    case 'bridge':
+      return 'the bridge';
   }
 };
 
@@ -270,6 +275,24 @@ export const previewAttack = (
     };
   }
 
+  // --- A bridge (13.02) ----------------------------------------------------
+  if (target.kind === 'bridge') {
+    if (!state.options.terrainDamage) return denyPreview('terrain damage is not in play');
+    if (!bridgeStands(state, map, target.hex, target.toward)) {
+      return denyPreview('there is no bridge standing there');
+    }
+    const odds = oddsFor(total, BRIDGE.defense);
+    return {
+      ok: true,
+      attackStrength: total,
+      defenseStrength: BRIDGE.defense,
+      odds,
+      treadAttack: false,
+      treadHitOn: 5,
+      summary: `${describeOdds(odds)} against the bridge`,
+    };
+  }
+
   // --- Terrain -----------------------------------------------------------
   if (target.kind === 'terrain') {
     if (!state.options.terrainDamage) return denyPreview('terrain damage is not in play');
@@ -351,7 +374,9 @@ const submergedTargetPenalty = (
   target: TargetRef,
   attackers: readonly AttackerRef[],
 ): { ok: false; reason: string } | { ok: true; halved: boolean } => {
-  if (target.kind === 'terrain' || target.kind === 'building') return { ok: true, halved: false };
+  if (target.kind === 'terrain' || target.kind === 'building' || target.kind === 'bridge') {
+    return { ok: true, halved: false };
+  }
   const victim = state.units[target.unit];
   if (!victim) return { ok: true, halved: false };
   const submerged =
@@ -662,6 +687,14 @@ const applyResult = (
 
     case 'ogreTreads':
       return state; // handled by resolveTreadAttack
+
+    case 'bridge': {
+      // A bridge is dropped by an X; a D shakes it and no more (13.02).
+      if (result !== 'X') {
+        return log(state, 'info', 'The bridge shakes and stands.', [target.hex]);
+      }
+      return demolishBridge(state, target.hex, target.toward);
+    }
   }
 
   return state;
@@ -685,6 +718,9 @@ const applyToUnit = (
   if (!u || !onBoard(u)) return state;
 
   if (isOgre(u)) return state; // 7.13: an Ogre is never targeted as a whole
+
+  // A Superheavy on its record sheet (13.07) loses a component, not the counter.
+  if (sheetOf(state, u) !== null) return applySheetDamage(state, id, result, credit);
 
   if (result === 'X') {
     const next = destroyUnit(state, id, 'destroyed by fire', credit);
@@ -844,6 +880,8 @@ const applySpillover = (
   strength: number,
   credit: string,
 ): GameState => {
+  // A bridge is a hexside: nothing stands on it to be hit by spillover.
+  if (target.kind === 'bridge') return state;
   const where = targetHex(state, target);
   if (!where) return state;
 
@@ -989,7 +1027,9 @@ export const previewOrbitalStrike = (
   const strength = orbitalStrikesLeft(state)[strikeIndex];
   if (strength === undefined) return denyStrike('no such strike left in orbit');
   if (target.kind === 'ogreTreads') return denyStrike('orbital fire cannot pick out treads');
-  if (target.kind === 'terrain') return denyStrike('orbital fire wants a target, not a hex');
+  if (target.kind === 'terrain' || target.kind === 'bridge') {
+    return denyStrike('orbital fire wants a target, not a hex');
+  }
 
   // The fleet is there to take the base, not to flatten it: orbital fire
   // supports the force on the ground, and the base — a post or the Admin
@@ -1046,7 +1086,7 @@ export const resolveOrbitalStrike = (
   if (target.kind === 'ogreTreads') {
     return { state, ok: false, reason: 'orbital fire cannot pick out treads — name a weapon' };
   }
-  if (target.kind === 'terrain') {
+  if (target.kind === 'terrain' || target.kind === 'bridge') {
     return { state, ok: false, reason: 'orbital fire wants a target, not a hex' };
   }
 

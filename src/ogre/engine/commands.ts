@@ -228,6 +228,19 @@ export interface LayMinefieldCommand extends CommandBase {
   readonly at: Hex;
 }
 
+/**
+ * Combat engineering (15): a Combat Engineer counter that has not moved
+ * spends its whole movement phase entrenching its hex, clearing the
+ * minefield it stands in, or dropping the bridge on the hexside toward
+ * `toward`.
+ */
+export interface EngineerCommand extends CommandBase {
+  readonly type: 'engineer';
+  readonly unit: UnitId;
+  readonly task: 'entrench' | 'clearMines' | 'demolish';
+  readonly toward?: Hex;
+}
+
 export type Command =
   | MoveUnitCommand
   | RamCommand
@@ -249,7 +262,8 @@ export type Command =
   | FinishSetupCommand
   | LaunchCruiseMissileCommand
   | SetTrainSpeedCommand
-  | LayMinefieldCommand;
+  | LayMinefieldCommand
+  | EngineerCommand;
 
 export type CommandType = Command['type'];
 

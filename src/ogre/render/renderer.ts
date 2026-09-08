@@ -563,17 +563,19 @@ export class MapRenderer {
   private drawRoutes(hexes: readonly Hex[], size: number, state: GameState): void {
     const ctx = this.ctx;
     const cut = new Set(state.routesCut);
+    const down = new Set(state.bridgesDown ?? []);
     ctx.lineCap = 'round';
 
     for (const h of hexes) {
       const c = toPixel(h, size);
       for (let dir = 0; dir < 3; dir++) {
-        const route = this.map.routes[sideKey(canonicalSide(h, dir))];
+        const side = sideKey(canonicalSide(h, dir));
+        const route = this.map.routes[side];
         if (!route) continue;
         const n = neighbor(h, dir);
         if (!inBounds(this.map, n)) continue;
         const nc = toPixel(n, size);
-        const broken = cut.has(hexKey(h)) || cut.has(hexKey(n));
+        const broken = cut.has(hexKey(h)) || cut.has(hexKey(n)) || down.has(side);
 
         ctx.beginPath();
         ctx.moveTo(c.x, c.y);
@@ -755,6 +757,17 @@ export class MapRenderer {
    */
   private drawMines(state: GameState, view: RenderView, size: number): void {
     const ctx = this.ctx;
+    // Entrenchments (15): a ring of trench around the hex.
+    for (const k of state.entrenched ?? []) {
+      const comma = k.indexOf(',');
+      const h = { q: Number(k.slice(0, comma)), r: Number(k.slice(comma + 1)) };
+      this.path(ctx, h, size, size * 0.2);
+      ctx.strokeStyle = rgba('#3a2a14', 0.8);
+      ctx.lineWidth = Math.max(1.5, size * 0.1);
+      ctx.setLineDash([size * 0.2, size * 0.12]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
     for (const m of minesOf(state)) {
       if (!m.revealed && view.viewer !== null && m.owner !== view.viewer) continue;
       const c = toPixel(m.pos, size);
