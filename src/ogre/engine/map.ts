@@ -133,12 +133,16 @@ export const routeBetween = (
   a: Hex,
   b: Hex,
   cuts?: readonly string[],
+  bridgesDown?: readonly string[],
 ): Route | undefined => {
   const dir = directionTo(a, b);
   if (dir < 0) return undefined;
-  const route = map.routes[sideKey(canonicalSide(a, dir))];
+  const side = sideKey(canonicalSide(a, dir));
+  const route = map.routes[side];
   if (!route) return undefined;
   if (cuts && (cuts.includes(key(a)) || cuts.includes(key(b)))) return undefined;
+  // A dropped bridge (13.02, 15): the route is gone across that hexside only.
+  if (bridgesDown && bridgesDown.includes(side)) return undefined;
   return route;
 };
 
@@ -154,8 +158,9 @@ export const isRouteHex = (map: GameMap, h: Hex): boolean => {
  * A bridge: a route crossing a stream hexside (2.03.3). Destroying it cuts the
  * route; there is no other way to damage the road on a bridge (5.07).
  */
-export const isBridge = (map: GameMap, a: Hex, b: Hex): boolean =>
-  sideFeatureBetween(map, a, b) === 'stream' && routeBetween(map, a, b) !== undefined;
+export const isBridge = (map: GameMap, a: Hex, b: Hex, bridgesDown?: readonly string[]): boolean =>
+  sideFeatureBetween(map, a, b) === 'stream' &&
+  routeBetween(map, a, b, undefined, bridgesDown) !== undefined;
 
 // ---------------------------------------------------------------------------
 // Construction

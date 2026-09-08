@@ -64,6 +64,7 @@ import {
   tripMinefield,
 } from './concealment.js';
 import { resolveRam } from './ram.js';
+import { engineer } from './engineering.js';
 import {
   beginOverrun,
   endOverrunRound,
@@ -190,6 +191,8 @@ const route = (state: GameState, cmd: Command, map: GameMap): ApplyResult => {
       return doAttack(state, cmd.attackers, cmd.target, map);
     case 'layMinefield':
       return wrap(state, layMinefield(state, map, cmd.by, cmd.at));
+    case 'engineer':
+      return wrap(state, engineer(state, map, cmd.by, cmd.unit, cmd.task, cmd.toward));
     case 'endPhase':
       return { state: advancePhase(state, map), result: ok() };
     case 'resign':
@@ -491,12 +494,26 @@ const doDismount = (state: GameState, unitId: string): ApplyResult => {
   if (!check.ok) return { state, result: fail(check.reason ?? 'cannot dismount') };
   if (wouldOverstack(state, rider.pos, rider)) return { state, result: fail('that hex is full') };
 
+  // A drone set down is setting up for the rest of the turn (14.01): it
+  // cannot fire until its next fire phase.
+  const settingUp = rider.kind === 'unit' && rider.classId === 'LAD';
   const next = updateAnyUnit(state, unitId, () => ({
     ridingOn: undefined,
     // "may not move 'on its own' on the turn it dismounts" (5.11.3)
     movementEnded: true,
+    ...(settingUp ? { firedThisPhase: true } : {}),
   }));
-  return { state: log(next, 'info', `${unitName(rider)} drops off.`, [rider.pos]), result: ok() };
+  return {
+    state: log(
+      next,
+      'info',
+      settingUp
+        ? `${unitName(rider)} is set down and begins setting up.`
+        : `${unitName(rider)} drops off.`,
+      [rider.pos],
+    ),
+    result: ok(),
+  };
 };
 
 // ---------------------------------------------------------------------------

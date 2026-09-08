@@ -364,7 +364,10 @@ export const previewOverrunAttack = (
     };
   }
 
-  const targetUnit = target.kind === 'terrain' ? undefined : state.units[target.unit];
+  if (target.kind === 'terrain' || target.kind === 'bridge') {
+    return denyPreview('an overrun is fought between units');
+  }
+  const targetUnit = state.units[target.unit];
   if (!targetUnit || !onBoard(targetUnit)) return denyPreview('no such target');
 
   const victim = participantOf(overrun, targetUnit.id);

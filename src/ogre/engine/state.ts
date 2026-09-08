@@ -284,8 +284,11 @@ export const unitAbbr = (u: Unit): string =>
  * Infantry multiply by squads — "Each squad is 1 attack strength point" (3.02);
  * everything else has one number on the counter.
  */
-export const printedAttack = (u: ConventionalUnit): number =>
-  unitClass(u.classId).attack * (unitClass(u.classId).kind === 'infantry' ? u.squads : 1);
+export const printedAttack = (u: ConventionalUnit): number => {
+  // A Superheavy on its record sheet (13.07) shoots with the guns it has left.
+  if (u.sheet) return u.sheet.guns * 3;
+  return unitClass(u.classId).attack * (unitClass(u.classId).kind === 'infantry' ? u.squads : 1);
+};
 
 export const printedDefense = (u: ConventionalUnit): number =>
   unitClass(u.classId).defense * (unitClass(u.classId).kind === 'infantry' ? u.squads : 1);
@@ -336,7 +339,12 @@ export const defenseOf = (
   // that applies to the vehicle, if any, and not the usual bonus for infantry."
   // (5.11.2)
   const treatAsInfantry = infantry && u.ridingOn == null;
-  return base * defenseMultiplier(terrain, treatAsInfantry);
+  let multiplier = defenseMultiplier(terrain, treatAsInfantry);
+  // Entrenched by combat engineers (15): infantry there defend as in forest.
+  if (treatAsInfantry && (state.entrenched ?? []).includes(key(where))) {
+    multiplier = Math.max(multiplier, 2);
+  }
+  return base * multiplier;
 };
 
 /** The defence of one Ogre component (7.13.1). */
@@ -385,15 +393,15 @@ export const attackerStrength = (
   // like Ogre AP weapons" (3.01) — one attack of strength equal to the number
   // of guns, since "any number of AP weapons may be used for that single
   // attack" (7.05.1).
-  if (ref.antipersonnel) return cls.ap ?? 0;
+  if (ref.antipersonnel) return u.sheet ? u.sheet.ap : (cls.ap ?? 0);
   if (cls.kind === 'infantry') {
     const squads = Math.max(1, Math.min(u.squads, ref.squads ?? u.squads));
     return cls.attack * squads;
   }
   // "A unit with an asterisk after its attack strength may divide that strength
   // into two equal attacks" (7.02).
-  if (ref.halfAttack && cls.splitAttack) return cls.attack / 2;
-  return cls.attack;
+  if (ref.halfAttack && cls.splitAttack) return printedAttack(u) / 2;
+  return printedAttack(u);
 };
 
 export const attackerRange = (u: Unit, ref: { weapon?: string; heavyWeapon?: boolean }): number => {
@@ -432,6 +440,11 @@ export const movementAllowance = (
   if (u.stuck || u.disabled !== 'none') return 0;
   const cls = unitClass(u.classId);
   if (options?.noHover && cls.mobility === 'gev') return 0;
+  // A Superheavy on its record sheet (13.07) moves on the tread units it has left.
+  if (u.sheet && phase === 'movement') {
+    const treads = Math.min(cls.move, u.sheet.treads);
+    return treads > 0 ? treads + gravityBonus : 0;
+  }
   // The train runs at its speed marker, not a printed allowance (9.02).
   if (cls.mobility === 'rail') return phase === 'gevMovement' ? 0 : (u.trainSpeed ?? 0);
   if (phase === 'gevMovement') return cls.secondMove ?? 0;
