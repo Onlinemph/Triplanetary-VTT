@@ -303,6 +303,10 @@ const build = (map: GameMap, opts: ScenarioBuildOptions, scenarioId: string): Ga
       reserveEdge: defenderEdge,
       orbitalStrikes: strikes,
       orbitalStrikeSide: attacker.player,
+      // §6.02: "the base is captured intact in the second case only" — the
+      // post or building is the prize, not the target. The computer reads
+      // this and holds its fire on it while the garrison still stands.
+      prizeIntact: true,
     },
   });
 

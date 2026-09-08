@@ -64,6 +64,31 @@ export const ALWAYS_VISIBLE_KEY = 'alwaysVisible';
  */
 export const PUBLIC_KEYS_KEY = 'publicKeys';
 
+/** `scenarioData` key Orbital Drop keeps its ledger under; see {@link redactDropData}. */
+export const ORBITAL_DROP_KEY = 'orbitalDrop';
+
+/**
+ * The war's ledger as one viewer may see it: their own garrisons, everything
+ * else about the invasion in the open. A spectator sees no garrison at all.
+ */
+export const redactDropData = (
+  state: GameState,
+  value: unknown,
+  viewer: PlayerId | null,
+): unknown => {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return value;
+  const data = value as Record<string, unknown>;
+  const garrisons = data['garrisons'];
+  if (typeof garrisons !== 'object' || garrisons === null) return value;
+  const kept: Record<string, unknown> = {};
+  for (const [baseId, g] of Object.entries(garrisons as Record<string, unknown>)) {
+    const base = state.bases[baseId];
+    if (!base || base.owner === null || viewer === null) continue;
+    if (base.owner === viewer || areAllied(state, viewer, base.owner)) kept[baseId] = g;
+  }
+  return { ...data, garrisons: kept };
+};
+
 /**
  * The generator state a sealed view carries: none.
  *
@@ -369,6 +394,15 @@ export const redactState = (state: GameState, viewer: PlayerId | null, map: Game
     // Declared public: sent whole, to everybody, spectators included.
     if (key === PUBLIC_KEYS_KEY || published.has(key)) {
       scenarioData[key] = value;
+      continue;
+    }
+    // Orbital Drop keeps the war's ledger under one key, and §3.02 wants each
+    // garrison's composition "recorded secretly": a viewer receives the
+    // garrisons of the bases they hold and nothing of anyone else's. The
+    // declared invasion and the order the freeze minted are public — the
+    // battle reveals the defence as the counters go down (§6).
+    if (key === ORBITAL_DROP_KEY) {
+      scenarioData[key] = redactDropData(state, value, viewer);
       continue;
     }
     // Each player receives only their own always-visible list.

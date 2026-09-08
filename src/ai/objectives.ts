@@ -20,6 +20,8 @@
  * the objective.
  */
 
+import { warErrand } from './war/staff.js';
+import type { WarWeights } from './war/weights.js';
 import {
   type GameMap,
   type GameState,
@@ -53,6 +55,19 @@ export interface Errand {
    * a speed of 1" — the one errand where going faster does not get there sooner.
    */
   readonly cruise?: boolean;
+  /**
+   * Be in orbit at `hex` — a gravity hex of `bodyId` — and hold there. An
+   * escort over a hexside it must keep silenced.
+   */
+  readonly orbit?: boolean;
+  /** The hexside to put down on, when the errand names one. */
+  readonly side?: HexSide;
+  /**
+   * Fly it with fuel to spare: the route is searched inside a budget that
+   * keeps points back for the orbit, the landing and the unexpected, and the
+   * fastest route through a full tank is taken only when no frugal one exists.
+   */
+  readonly frugal?: boolean;
   readonly why: string;
 }
 
@@ -99,8 +114,19 @@ export const bodiesVisited = (ship: Ship, map: GameMap): Set<string> => {
 /**
  * The errand this ship is on, or `null` when the scenario sets none.
  */
-export const errandFor = (state: GameState, ship: Ship, map: GameMap): Errand | null => {
+export const errandFor = (
+  state: GameState,
+  ship: Ship,
+  map: GameMap,
+  war?: WarWeights,
+): Errand | null => {
   const me: PlayerId = controllerOf(ship);
+
+  // Orbital Drop: the general staff's errand for this ship, when it has one.
+  // The staff reads the war the same way — off the scenario's own data — and
+  // hands the pilot a destination in the pilot's own vocabulary.
+  const staff = warErrand(state, ship, map, war);
+  if (staff !== null) return staff;
 
   // Bi-Planetary: "each player must navigate to the other world and land."
   const targets = stringTable(state.scenarioData['targets']);

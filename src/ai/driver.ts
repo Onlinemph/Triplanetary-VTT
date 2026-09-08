@@ -37,6 +37,8 @@ import {
 } from '../engine/index.js';
 import { redactState } from '../net/redact.js';
 import { nextCommand } from './index.js';
+import { skyFrozen } from './war/staff.js';
+import type { WarWeights } from './war/weights.js';
 
 export interface DriveResult {
   readonly state: GameState;
@@ -50,6 +52,13 @@ export interface DriveResult {
 
 /** Is this seat played by the computer? */
 export type SeatMap = ReadonlySet<PlayerId>;
+
+/**
+ * The general staff's weights for each computer seat, when a caller wants
+ * something other than the shipped table — the tuner, playing a candidate
+ * against the reigning one. Omitted, every seat plays the default.
+ */
+export type WarWeightsFor = (player: PlayerId) => WarWeights;
 
 export interface AiOrder {
   readonly by: PlayerId;
@@ -75,13 +84,17 @@ export function aiCommand(
   state: GameState,
   seats: SeatMap,
   map: GameMap = DEFAULT_MAP,
+  war?: WarWeightsFor,
 ): AiOrder | null {
   if (state.victory || seats.size === 0) return null;
+  // Orbital Drop §4.05: with the landers down, the sky is frozen for
+  // everybody. The computer does not even end its phase.
+  if (skyFrozen(state)) return null;
 
   for (const player of state.playerOrder) {
     if (!seats.has(player)) continue;
     const view = state.options.fogOfWar ? redactState(state, player, map) : state;
-    const command = nextCommand(view, player, map);
+    const command = nextCommand(view, player, map, war?.(player));
     if (command !== null) return { by: player, command, view };
   }
 
@@ -113,8 +126,13 @@ export interface AiStep {
  * is what makes "did it act on something it could not see?" a question with an
  * answer.
  */
-export function stepAi(state: GameState, seats: SeatMap, map: GameMap = DEFAULT_MAP): AiStep {
-  const order = aiCommand(state, seats, map);
+export function stepAi(
+  state: GameState,
+  seats: SeatMap,
+  map: GameMap = DEFAULT_MAP,
+  war?: WarWeightsFor,
+): AiStep {
+  const order = aiCommand(state, seats, map, war);
   if (order === null) return { state, command: null, by: null, view: state };
 
   const out = applyCommand(state, order.command, map);
@@ -136,8 +154,12 @@ export function stepAi(state: GameState, seats: SeatMap, map: GameMap = DEFAULT_
  * The interface asks this before handing the computer the wheel, so a human seat
  * is never left watching a spinner while nothing happens.
  */
-export const aiHasMove = (state: GameState, seats: SeatMap, map: GameMap = DEFAULT_MAP): boolean =>
-  aiCommand(state, seats, map) !== null;
+export const aiHasMove = (
+  state: GameState,
+  seats: SeatMap,
+  map: GameMap = DEFAULT_MAP,
+  war?: WarWeightsFor,
+): boolean => aiCommand(state, seats, map, war) !== null;
 
 /**
  * Play the computer's seats forward until a human is owed a decision.
@@ -152,13 +174,14 @@ export function driveAi(
   seats: SeatMap,
   map: GameMap = DEFAULT_MAP,
   limit = 400,
+  war?: WarWeightsFor,
 ): DriveResult {
   let s = state;
   const commands: Command[] = [];
   if (seats.size === 0) return { state: s, commands };
 
   for (let step = 0; step < limit; step += 1) {
-    const out = stepAi(s, seats, map);
+    const out = stepAi(s, seats, map, war);
     if (out.refused !== undefined && out.command !== null) {
       return { state: s, commands, refused: { command: out.command, reason: out.refused } };
     }

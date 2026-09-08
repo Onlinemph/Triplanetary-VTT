@@ -43,11 +43,13 @@ import {
   type GameState,
   type BaseState,
   type Hex,
+  type HexSide,
   type Ship,
   type PlayerId,
   DEFAULT_MAP,
   activePlayer,
   areAllied,
+  baseIsFriendly,
   baseWillSupply,
   canFire,
   canManeuver,
@@ -81,6 +83,7 @@ import {
   minedThisTurn,
   prospectingEnabled,
   sideGravityHex,
+  sideKey,
   standingStillThisTurn,
   canTradeAt,
   legalCommands,
@@ -89,6 +92,8 @@ import {
 import { brakingCourse, courseToward, isRunaway, safeCourses } from './navigate.js';
 import { combatForbidden, errandFor, landingSideAt } from './objectives.js';
 import { type Arrival, routeTo } from './route.js';
+import { skyFrozen, warCombatOrder, warOrdnanceOrder, warResupplyOrder } from './war/staff.js';
+import type { WarWeights } from './war/weights.js';
 
 // ---------------------------------------------------------------------------
 // Small readings of the position
@@ -232,10 +237,18 @@ interface Goal {
   readonly within?: number;
   /** The goal's own vector, when it is drifting and cannot steer. */
   readonly goalVelocity?: Hex;
+  /** Fuel the route may spend, when the errand wants points kept back. */
+  readonly maxBurns?: number;
   readonly why: 'repair' | 'errand' | 'prize' | 'hunt' | 'hold';
 }
 
-const goalFor = (state: GameState, ship: Ship, map: GameMap): Goal | null => {
+/**
+ * Points a frugal errand keeps in the tank: one for the orbit the route ends
+ * in, one for the landing, one for the day something goes wrong.
+ */
+const FRUGAL_RESERVE = 3;
+
+const goalFor = (state: GameState, ship: Ship, map: GameMap, war?: WarWeights): Goal | null => {
   const me = controllerOf(ship);
 
   // 1. A ship that is hurt or nearly dry is no use to anybody. Go home.
@@ -246,10 +259,19 @@ const goalFor = (state: GameState, ship: Ship, map: GameMap): Goal | null => {
 
   // 2. The scenario's own errand, where it sets one. A race is not won by
   //    shooting at the other racer.
-  const errand = errandFor(state, ship, map);
+  const errand = errandFor(state, ship, map, war);
   if (errand !== null) {
+    const frugal =
+      errand.frugal === true && !hasUnlimitedFuel(ship)
+        ? { maxBurns: Math.max(0, ship.fuel - FRUGAL_RESERVE) }
+        : {};
     if (errand.land && errand.bodyId !== undefined) {
-      return { hex: errand.hex, arrival: 'orbit', bodyId: errand.bodyId, why: 'errand' };
+      return { hex: errand.hex, arrival: 'orbit', bodyId: errand.bodyId, ...frugal, why: 'errand' };
+    }
+    if (errand.orbit === true && errand.bodyId !== undefined) {
+      // Hold in orbit around that world: the escort's station, the wave's
+      // waiting room.
+      return { hex: errand.hex, arrival: 'orbit', bodyId: errand.bodyId, ...frugal, why: 'errand' };
     }
     if (errand.cruise === true) return { hex: errand.hex, arrival: 'cruise', why: 'errand' };
     if (errand.bodyId !== undefined) {
@@ -258,7 +280,7 @@ const goalFor = (state: GameState, ship: Ship, map: GameMap): Goal | null => {
       // the next world, and stopping costs turns the race has not got.
       return { hex: errand.hex, arrival: 'flyby', bodyId: errand.bodyId, why: 'errand' };
     }
-    return { hex: errand.hex, arrival: 'stop', why: 'errand' };
+    return { hex: errand.hex, arrival: 'stop', ...frugal, why: 'errand' };
   }
 
   // 3. A disabled enemy is a prize: "a disabled ship may be looted or captured
@@ -293,7 +315,12 @@ const goalFor = (state: GameState, ship: Ship, map: GameMap): Goal | null => {
 // Astrogation
 // ---------------------------------------------------------------------------
 
-const astrogationOrder = (state: GameState, me: PlayerId, map: GameMap): Command | null => {
+const astrogationOrder = (
+  state: GameState,
+  me: PlayerId,
+  map: GameMap,
+  war?: WarWeights,
+): Command | null => {
   for (const ship of myShips(state, me)) {
     if (isFixedInstallation(ship)) continue;
     // A scenario may pin a ship down until something happens ("the Enforcer
@@ -306,12 +333,16 @@ const astrogationOrder = (state: GameState, me: PlayerId, map: GameMap): Command
     if (ship.location.kind === 'landed') {
       if (isTakingOffThisTurn(state, ship.id)) continue; // boosters already readied
       if (needsBase(state, ship, map)) continue; // still repairing; stay put
-      const errand = errandFor(state, ship, map);
+      const errand = errandFor(state, ship, map, war);
       // A ship that has flown its errand and is down where it was sent stays
       // down: taking off again would only undo it.
       if (errand?.land === true && map.bodyAt(ship.location.side.hex)?.id === errand.bodyId) {
         continue;
       }
+      // "Boosters are available only at friendly bases": a ship down on a
+      // hexside whose base is gone, or somebody else's, is not lifting off,
+      // and asking would only be refused.
+      if (!boostersAt(state, ship.location.side, me, map)) continue;
       // Otherwise fly. A ship on the ground can do nothing at all, and with fog
       // of war on it will often be unable to *see* an enemy — which is a reason
       // to go looking, not a reason to stay parked on the pad.
@@ -346,7 +377,7 @@ const astrogationOrder = (state: GameState, me: PlayerId, map: GameMap): Command
       }
     }
 
-    const goal = goalFor(state, ship, map);
+    const goal = goalFor(state, ship, map, war);
     if (goal === null) {
       // Nowhere to be — but if standing still means falling, stand somewhere else.
       if (coastIsSafe(state, ship, map)) continue;
@@ -358,25 +389,27 @@ const astrogationOrder = (state: GameState, me: PlayerId, map: GameMap): Command
     // Down, if the errand ends on the ground and we are in orbit to do it.
     // "A ship may only land by expending one fuel point while in orbit."
     if (goal.bodyId !== undefined) {
-      const landing = landingOrder(state, ship, goal.bodyId, map);
+      const landing = landingOrder(state, ship, goal.bodyId, map, war);
       if (landing) return landing;
     }
 
     // The fastest route there, searched rather than guessed. Every leg of it is
     // a course the engine would accept, so the first one can be plotted as it
-    // stands; the rest is thrown away and re-planned next turn.
-    const route = routeTo(
-      state,
-      ship,
-      {
-        goal: goal.hex,
-        arrival: goal.arrival,
-        ...(goal.bodyId !== undefined ? { bodyId: goal.bodyId } : {}),
-        ...(goal.within !== undefined ? { within: goal.within } : {}),
-        ...(goal.goalVelocity !== undefined ? { goalVelocity: goal.goalVelocity } : {}),
-      },
-      map,
-    );
+    // stands; the rest is thrown away and re-planned next turn. A goal that
+    // wants fuel kept back is searched inside that budget first, and through
+    // the whole tank only when no frugal route exists.
+    const request = {
+      goal: goal.hex,
+      arrival: goal.arrival,
+      ...(goal.bodyId !== undefined ? { bodyId: goal.bodyId } : {}),
+      ...(goal.within !== undefined ? { within: goal.within } : {}),
+      ...(goal.goalVelocity !== undefined ? { goalVelocity: goal.goalVelocity } : {}),
+    };
+    const route =
+      goal.maxBurns !== undefined
+        ? (routeTo(state, ship, { ...request, maxBurns: goal.maxBurns }, map) ??
+          routeTo(state, ship, request, map))
+        : routeTo(state, ship, request, map);
     if (route !== null) {
       if (
         route.accel === 0 &&
@@ -410,6 +443,24 @@ const astrogationOrder = (state: GameState, me: PlayerId, map: GameMap): Command
     return { type: 'plotCourse', by: me, ship: ship.id, endpoint: course.endpoint };
   }
   return null;
+};
+
+/**
+ * Will this hexside launch this player's ships? The engine's own reading of
+ * `takeOff`: a standing base that is friendly, or a scenario's explicit
+ * launch permission, and a hexside no nuke has devastated.
+ */
+const boostersAt = (state: GameState, side: HexSide, me: PlayerId, map: GameMap): boolean => {
+  if (state.devastatedSides.includes(sideKey(side))) return false;
+  const pads = (state.scenarioData['takeoffAllowedFrom'] ?? {}) as Record<
+    string,
+    readonly string[] | undefined
+  >;
+  if (pads[me]?.includes(map.bodyAt(side.hex)?.id ?? '') === true) return true;
+  const base = Object.values(state.bases).find(
+    (b) => b.side !== undefined && sideKey(b.side) === sideKey(side),
+  );
+  return base !== undefined && !base.destroyed && baseIsFriendly(state, base, me);
 };
 
 /**
@@ -449,11 +500,15 @@ const landingOrder = (
   ship: Ship,
   bodyId: string,
   map: GameMap,
+  war?: WarWeights,
 ): Command | null => {
-  if (errandFor(state, ship, map)?.land !== true) return null;
+  const errand = errandFor(state, ship, map, war);
+  if (errand?.land !== true) return null;
   if (map.orbitOf(ship.pos, ship.velocity)?.id !== bodyId) return null;
   if (ship.fuel < 1 && !hasUnlimitedFuel(ship)) return null;
-  const side = landingSideAt(state, bodyId, map, controllerOf(ship));
+  // An errand that names the hexside — a landing on an enemy base — is put
+  // down exactly there; otherwise the friendliest pad on the world.
+  const side = errand.side ?? landingSideAt(state, bodyId, map, controllerOf(ship));
   if (side === null) return null;
   return { type: 'land', by: controllerOf(ship), ship: ship.id, side };
 };
@@ -750,9 +805,13 @@ export function nextCommand(
   state: GameState,
   me: PlayerId,
   map: GameMap = DEFAULT_MAP,
+  war?: WarWeights,
 ): Command | null {
   if (state.victory) return null;
   if (state.players[me]?.eliminated === true) return null;
+  // Orbital Drop §4.05: "The space game pauses." Nothing is said while the
+  // ground battle waits — not even the order that would end the phase.
+  if (skyFrozen(state)) return null;
 
   // Owed answers, in either player's turn. Both of these *block*: while one is
   // outstanding the engine accepts nothing else from anybody, so a seat that
@@ -780,16 +839,21 @@ export function nextCommand(
 
   switch (state.phase) {
     case 'astrogation':
-      return astrogationOrder(state, me, map);
+      return astrogationOrder(state, me, map, war);
     case 'combat':
-      return combatOrder(state, me, map);
+      // The pilot's fights first; then, with nothing worth shooting, the
+      // staff's: a warship over the target hexside silences its guns.
+      return combatOrder(state, me, map) ?? warCombatOrder(state, me, map, war);
     case 'resupply':
-      return resupplyOrder(state, me, map);
-    // The ordnance phase is left alone for now: a mine laid badly is a mine you
+      // Prizes, sales and fuel first; then the staff's shopping.
+      return resupplyOrder(state, me, map) ?? warResupplyOrder(state, me, map, war);
+    // The ordnance phase is left to the staff: a mine laid badly is a mine you
     // fly into yourself, and the rule that makes that dangerous — "that ship
-    // must execute an immediate course change" — needs planning this pilot does
-    // not do. Movement is automatic.
+    // must execute an immediate course change" — needs planning this pilot
+    // does not do. An invasion, though, is declared here (Orbital Drop §4.01).
     case 'ordnance':
+      return warOrdnanceOrder(state, me, map, war);
+    // Movement is automatic.
     case 'movement':
       return null;
   }
@@ -808,11 +872,12 @@ export function planPhase(
   map: GameMap = DEFAULT_MAP,
   apply: (s: GameState, c: Command) => GameState | null,
   limit = 40,
+  war?: WarWeights,
 ): { state: GameState; commands: Command[] } {
   let s = state;
   const commands: Command[] = [];
   for (let i = 0; i < limit; i += 1) {
-    const cmd = nextCommand(s, me, map);
+    const cmd = nextCommand(s, me, map, war);
     if (cmd === null) break;
     const next = apply(s, cmd);
     if (next === null) break; // refused: stop rather than loop on it
