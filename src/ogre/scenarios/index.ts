@@ -8,6 +8,7 @@
 import type { ScenarioDef } from './types.js';
 import { MARK_III_ATTACK, MARK_V_ATTACK } from './ogreAttack.js';
 import { CROSSING } from './crossing.js';
+import { TRAIN } from './train.js';
 import { LANDING } from './landing.js';
 import { ASSAULT, ASSAULT_ASTEROID, ASSAULT_GREEN } from './assault.js';
 import { CUSTOM } from './custom.js';
@@ -16,6 +17,7 @@ export type { ScenarioDef, ScenarioBuildOptions } from './types.js';
 export { mapOf } from './types.js';
 export { MARK_III_ATTACK, MARK_V_ATTACK } from './ogreAttack.js';
 export { CROSSING } from './crossing.js';
+export { TRAIN, ESCORT_PLAYER, RAIDER_PLAYER, railLine } from './train.js';
 export { LANDING, DEFAULT_LANDING } from './landing.js';
 export {
   ASSAULT,
@@ -49,6 +51,7 @@ export const SCENARIOS: readonly ScenarioDef[] = [
   MARK_III_ATTACK,
   MARK_V_ATTACK,
   CROSSING,
+  TRAIN,
   LANDING,
   ASSAULT,
   ASSAULT_GREEN,

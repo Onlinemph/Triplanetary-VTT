@@ -70,6 +70,7 @@ export const WEIGHT_SPEC = {
   'move.goalAttacker': spec(10, 2, 30, 'Per hex of ground toward the objective, attacking'),
   'move.goalDefender': spec(4, 0, 20, 'Per hex of ground toward the nearest enemy, defending'),
   'move.edge': spec(12, 2, 30, 'Per hex toward the exit edge, when leaving is the goal'),
+  'move.exit': spec(30, 5, 60, 'Per hex toward the exit, for a counter whose whole job is leaving'),
   'move.inReachCap': spec(80, 20, 200, 'Cap on the worth of targets a hex puts in reach'),
   'move.hazardStuck': spec(40, 0, 100, 'Against a hex that may bog the unit down'),
   'move.hazardDisable': spec(12, 0, 60, 'Against a hex that may disable the unit'),

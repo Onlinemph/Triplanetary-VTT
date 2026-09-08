@@ -15,7 +15,7 @@
  */
 
 import { type Hex, eq, key, parseKey } from './hex.js';
-import { type GameMap, inBounds, terrainAt } from './map.js';
+import { type GameMap, hasRoute, inBounds, terrainAt } from './map.js';
 import { entryCost } from './terrain.js';
 import { OGRE_WEAPONS } from './ogres.js';
 import { unitClass } from './units.js';
@@ -105,6 +105,9 @@ const standable = (state: GameState, map: GameMap, unit: Unit, at: Hex): string 
   const closed = entry.cost === null && !fixed;
   if (closed) return entry.reason ?? 'this unit cannot be set up there';
   if (fixed && terrain === 'water') return 'this unit cannot be set up there';
+  // "The train moves only along railroad hexes" (9.01), and it is put down on them.
+  if (mobilityOf(unit) === 'rail' && !hasRoute(map, at, 'rail'))
+    return 'the train keeps to the rails';
   if (unitsAt(state, at).some((u) => u.owner !== unit.owner)) return 'the enemy holds that hex';
   return null;
 };

@@ -22,11 +22,20 @@ There are two arrangements, and the host picks one when opening the table:
   database, and it is right for people who trust each other.
 
 Both play both games. Triplanetary, Ogre, a battle out of the builder and an
-Orbital Drop war all sit at either kind of table. Two things still need the
-referee: the fogged Triplanetary scenarios, Escape and Lateral 7, because a
-shared move list rebuilds the board the fog is hiding; and a seat handed to
-the computer, because the referee is what plays it. Everything else is a
-choice about how much you trust the people you sat down with.
+Orbital Drop war all sit at either kind of table, and a seat can be handed to
+the computer at either. One thing still needs the referee: the fogged
+Triplanetary scenarios, Escape and Lateral 7, because a shared move list
+rebuilds the board the fog is hiding. Everything else is a choice about how
+much you trust the people you sat down with.
+
+At a refereed table the referee plays the computer's seat. At a quick table
+there is no referee, so the browser of the person in the lowest occupied seat
+plays it — its orders go through the same door as everyone else's, signed by
+the computer's seat, and nobody can sit in that chair. If that browser goes
+away, the seat ages out in a few minutes and the next person's browser takes
+the computer over. A war at a quick table does the same for its ground
+battles: a side of the battle nobody at the war is playing — a base's militia,
+a power whose seat is empty — is the computer's, played from the battle.
 
 ## Sitting down
 
@@ -50,6 +59,15 @@ The seat is yours again and whoever held it is stood up. Only a table with
 a password offers this, and never for a computer's seat. At a quick table
 the equivalent is time: a seat nobody has been heard from in a while is
 open again, and sitting there is the reclaim.
+
+## The Train
+
+The Ogre picker's **The Train** is an original scenario for the rulebook's
+Section 9: a train has to cross the green map along the line with six squads
+aboard, its escort alongside, through country the raiders got to first. The
+train only runs on the rails, its speed marker changes by one step a turn
+before it moves, and a counter parked on the line stops it dead until the
+escort clears the way. The computer plays either side.
 
 ## A battle of your own
 

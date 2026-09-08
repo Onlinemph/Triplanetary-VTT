@@ -154,6 +154,14 @@ export const isRouteHex = (map: GameMap, h: Hex): boolean => {
   return false;
 };
 
+/** True when a route of this kind touches the hex: a rail hex, a road hex. */
+export const hasRoute = (map: GameMap, h: Hex, route: Route): boolean => {
+  for (let dir = 0; dir < 6; dir++) {
+    if (map.routes[sideKey(canonicalSide(h, dir))] === route) return true;
+  }
+  return false;
+};
+
 /**
  * A bridge: a route crossing a stream hexside (2.03.3). Destroying it cuts the
  * route; there is no other way to damage the road on a bridge (5.07).

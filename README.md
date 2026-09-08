@@ -157,8 +157,9 @@ What it trades: the rules are enforced by each browser, so somebody who edits
 their own copy could propose a move the rules forbid — the others notice, and
 say so, but noticing is not preventing. The two hidden-information scenarios,
 Escape and Lateral 7, are refused outright, because the move list rebuilds the
-board that the fog exists to hide. And a seat handed to the computer needs the
-referee, which is the thing that plays it.
+board that the fog exists to hide. A seat handed to the computer is played by
+the browser of the person in the lowest occupied seat, through the same door
+as everyone else's orders.
 
 ### The refereed table — a judge on the server
 

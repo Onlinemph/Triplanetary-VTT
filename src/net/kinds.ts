@@ -47,6 +47,7 @@ export const GROUND_SCENARIO_IDS: readonly string[] = [
   'mark-iii-attack',
   'mark-v-attack',
   'crossing',
+  'train',
   'landing',
   'assault',
   'assault-green',

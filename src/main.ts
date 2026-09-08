@@ -51,6 +51,7 @@ import type {
   CampaignDeps,
   CampaignHandle,
   LinkState,
+  HostOptions,
   OnlinePort,
   RendererPort,
   ScenarioDescriptor,
@@ -372,6 +373,7 @@ const quickAdopt = (
     const summary = client.summary();
     if (!info || !summary) return null;
     const claims = info.seats;
+    const computers = client.computers();
     return {
       id: info.code,
       code: info.code,
@@ -392,10 +394,13 @@ const quickAdopt = (
           seat,
           ordinal,
           faction: player?.faction ?? '',
-          name:
-            claim?.name !== undefined && claim.name !== '' ? claim.name : (player?.name ?? seat),
-          kind: claim ? 'human' : 'open',
-          present: claim !== undefined,
+          name: computers.includes(seat)
+            ? 'Computer'
+            : claim?.name !== undefined && claim.name !== ''
+              ? claim.name
+              : (player?.name ?? seat),
+          kind: computers.includes(seat) ? 'computer' : claim ? 'human' : 'open',
+          present: computers.includes(seat) || claim !== undefined,
           mine: client.seat === seat,
         };
       }),
@@ -438,6 +443,29 @@ const quickAdopt = (
 /** The last link state a quick table reported, for the badge to read. */
 let quickLink: LinkState = 'offline';
 
+/**
+ * The computer's seats as player ids, from the ordinals a host dialog names.
+ * The board is built once here to read its seat order; the table builds it
+ * again for everybody, from the same frozen setup, and gets the same order.
+ */
+const computerIds = async (
+  opts: HostOptions,
+  setup: { seed?: number; options?: Record<string, boolean>; fleets?: unknown; order?: unknown },
+): Promise<string[]> => {
+  if (opts.computerSeats.length === 0) return [];
+  const rules = await rulesFor(opts.kind ?? 'tri');
+  const built = rules.build(opts.scenarioId, {
+    seed: setup.seed ?? 1,
+    options: setup.options,
+    fleets: setup.fleets as never,
+    order: setup.order,
+  });
+  const ids = rules.summary(built).playerOrder;
+  return opts.computerSeats
+    .map((ordinal) => ids[ordinal])
+    .filter((id): id is string => id !== undefined);
+};
+
 const online: OnlinePort =
   SUPABASE_URL === '' || SUPABASE_ANON_KEY === ''
     ? {
@@ -462,19 +490,24 @@ const online: OnlinePort =
               undefined,
               rulesFor,
             );
+            const setup = {
+              ...(opts.seed === undefined ? {} : { seed: opts.seed }),
+              options: optionRecord(opts.options),
+              ...(opts.fleets ? { fleets: opts.fleets } : {}),
+              // A campaign order rides the frozen setup so every joiner
+              // rebuilds the order's battle, not the printed default.
+              ...(opts.order ? { order: opts.order } : {}),
+            };
+            // The dialog names the computer's seats by ordinal; the table
+            // freezes them by player id, which every browser can read off
+            // the board without asking anybody.
+            const computers = await computerIds(opts, setup);
             await client.host({
               scenarioId: opts.scenarioId,
               ...(opts.kind !== undefined ? { kind: opts.kind } : {}),
               password: opts.password ?? '',
               ...(opts.code !== undefined ? { code: opts.code } : {}),
-              setup: {
-                ...(opts.seed === undefined ? {} : { seed: opts.seed }),
-                options: optionRecord(opts.options),
-                ...(opts.fleets ? { fleets: opts.fleets } : {}),
-                // A campaign order rides the frozen setup so every joiner
-                // rebuilds the order's battle, not the printed default.
-                ...(opts.order ? { order: opts.order } : {}),
-              },
+              setup: { ...setup, ...(computers.length > 0 ? { computers } : {}) },
             });
             return quickAdopt(client, s, true);
           }
@@ -558,6 +591,7 @@ const online: OnlinePort =
           );
           const code = codeFor(parent.code, order.battleId);
           const password = parent.password ?? '';
+          const computers = parent.computers ?? [];
           try {
             await client.host({
               scenarioId: order.scenarioId,
@@ -565,7 +599,7 @@ const online: OnlinePort =
               password,
               code,
               listed: false,
-              setup: { seed: order.seed, order },
+              setup: { seed: order.seed, order, ...(computers.length > 0 ? { computers } : {}) },
             });
           } catch (err) {
             // Somebody at the war opened it first, which is the answer we
