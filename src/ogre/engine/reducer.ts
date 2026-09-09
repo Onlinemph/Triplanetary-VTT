@@ -18,6 +18,7 @@ import {
   activePlayer,
   isInertOgre,
   isOgre,
+  isPallet,
   onBoard,
   passengersOf,
   playerTurnOrdinal,
@@ -27,6 +28,7 @@ import { SETUP_COMMANDS, finishSetup, placeUnit } from './setup.js';
 import { deployReserveCheck } from './reserves.js';
 import { clearBlasts, launchMissile } from './missiles.js';
 import { clearTasks } from './engineering.js';
+import { pushPallet, unpackDrone } from './drone.js';
 import {
   apRemaining,
   clearLaserWatch,
@@ -241,6 +243,10 @@ const route = (state: GameState, cmd: Command, map: GameMap): ApplyResult => {
       return wrap(state, launchMissile(state, map, cmd.unit, cmd.target));
     case 'setTrainSpeed':
       return doSetTrainSpeed(state, cmd.unit, cmd.change);
+    case 'unpackDrone':
+      return wrap(state, unpackDrone(state, cmd.unit));
+    case 'pushPallet':
+      return wrap(state, pushPallet(state, map, cmd.unit, cmd.to));
   }
 };
 
@@ -354,6 +360,13 @@ const doMove = (
   }
   if (unit.kind === 'unit' && unit.ridingOn) {
     return { state, result: fail('that infantry is riding; dismount first') };
+  }
+  // A pallet does not move: it is carried, one hex, by a squad in its hex
+  // (14.01). The order looks the same to the interface.
+  if (isPallet(unit)) {
+    const to = path[path.length - 1];
+    if (!to) return { state, result: fail('nowhere to carry it') };
+    return wrap(state, pushPallet(state, map, unitId, to));
   }
   if (state.phase === 'gevMovement') {
     const cls = unit.kind === 'unit' ? unitClass(unit.classId) : null;
@@ -513,21 +526,29 @@ const doDismount = (state: GameState, unitId: string): ApplyResult => {
   if (!check.ok) return { state, result: fail(check.reason ?? 'cannot dismount') };
   if (wouldOverstack(state, rider.pos, rider)) return { state, result: fail('that hex is full') };
 
-  // A drone set down is setting up for the rest of the turn (14.01): it
-  // cannot fire until its next fire phase.
-  const settingUp = rider.kind === 'unit' && rider.classId === 'LAD';
+  // "Turn 1: Unloading ... All the transport needs to do is remain in one place
+  // for one turn. Place the LAD pallet in the same hex as the transport."
+  // (14.01) The pallet is cargo, not a passenger climbing down.
+  const pallet = rider.kind === 'unit' && rider.classId === 'LAD';
+  if (pallet) {
+    const carrier = state.units[rider.ridingOn!];
+    if (carrier && carrier.moveUsed > 0) {
+      return { state, result: fail('the transport must stand still for a turn to unload it') };
+    }
+  }
+
   const next = updateAnyUnit(state, unitId, () => ({
     ridingOn: undefined,
     // "may not move 'on its own' on the turn it dismounts" (5.11.3)
     movementEnded: true,
-    ...(settingUp ? { firedThisPhase: true } : {}),
+    ...(pallet ? { firedThisPhase: true } : {}),
   }));
   return {
     state: log(
       next,
       'info',
-      settingUp
-        ? `${unitName(rider)} is set down and begins setting up.`
+      pallet
+        ? `${unitName(rider)} is set down on its pallet. It can unpack next turn.`
         : `${unitName(rider)} drops off.`,
       [rider.pos],
     ),

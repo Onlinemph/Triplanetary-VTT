@@ -53,6 +53,7 @@ import {
   type Unit,
   type UnitId,
   isOgre,
+  isPallet,
   onBoard,
   setupActor,
   unitsAt,
@@ -400,7 +401,10 @@ export const concealAll = (state: GameState): GameState => {
   let next = state;
   for (const u of Object.values(state.units)) {
     if (!onBoard(u)) continue;
-    if (isDummy(u) || (state.options.camouflage === true && canBeConcealed(u))) {
+    // "LADs still on a pallet can also be placed as part of a defensive setup.
+    // Small, stealthy, and powered down, they are very hard to detect." (14.01)
+    // That one needs no option turned on.
+    if (isPallet(u) || isDummy(u) || (state.options.camouflage === true && canBeConcealed(u))) {
       next = withUnit(next, { ...u, concealed: true } as Unit);
     }
   }

@@ -43,6 +43,7 @@ import {
   canAct,
   isInertOgre,
   isOgre,
+  isPallet,
   onBoard,
   setupActor,
   unitsAt,
@@ -74,6 +75,7 @@ import {
 } from '../engine/missiles.js';
 import { legalSetupHexes, zoneOf } from '../engine/setup.js';
 import { isUnknown, mineAt, minefieldsLeft } from '../engine/concealment.js';
+import { unpackCheck } from '../engine/drone.js';
 import { DEFAULT_WEIGHTS, type Role, type Weights, roleOf } from './weights.js';
 
 export { DEFAULT_WEIGHTS, BASE_WEIGHTS, WEIGHT_SPEC, WEIGHT_KEYS } from './weights.js';
@@ -598,9 +600,23 @@ const planMovement = (ctx0: Ctx): Command[] => {
     }
   }
 
+  // A drone set down last turn opens itself, so that a computer side with one
+  // in its order of battle actually gets a gun out of it (14.01).
+  for (const u of ctx.own) {
+    if (unpackCheck(ctx.state, u) === null) {
+      out.push({ type: 'unpackDrone', by: player, unit: u.id });
+    }
+  }
+
   const movers = ctx.own
     .filter(
-      (u) => canAct(u) && !isInertOgre(u, ctx.state.turn) && !(u.kind === 'unit' && u.ridingOn),
+      (u) =>
+        canAct(u) &&
+        !isInertOgre(u, ctx.state.turn) &&
+        !(u.kind === 'unit' && u.ridingOn) &&
+        // A pallet only moves when a squad is standing over it, and the squad
+        // has better things to do than carry it about.
+        !isPallet(u),
     )
     // Ogres decide first: everything else moves around where the cybertank goes.
     .sort((a, b) => (isOgre(b) ? 1 : 0) - (isOgre(a) ? 1 : 0) || a.id.localeCompare(b.id));

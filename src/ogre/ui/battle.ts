@@ -42,6 +42,7 @@ import {
   activePlayer,
   isInertOgre,
   isOgre,
+  isPallet,
   onBoard,
   setupActor,
   unitsAt,
@@ -88,6 +89,7 @@ import {
   entrenchedAt,
   sheetOf,
 } from '../engine/engineering.js';
+import { REPACK_TURNS, pushers, unpackCheck } from '../engine/drone.js';
 import { canDismount, canMount } from '../engine/movement.js';
 import { button, el, row, setChildren } from './dom.js';
 import '../ogre.css';
@@ -1298,10 +1300,19 @@ export const createOgreBattle = (opts: OgreBattleOptions): OgreBattle => {
       rows.push(row('Antipersonnel', String(sheet.ap), sheet.ap < 2 ? 'warn' : ''));
       rows.push(row('Tread units', `${sheet.treads} of 3`, sheet.treads < 3 ? 'warn' : ''));
     }
-    if (u.kind === 'unit' && u.classId === 'LAD' && u.ridingOn) {
-      rows.push(row('Carried', 'palletised; set it down to deploy', 'warn'));
-    } else if (u.kind === 'unit' && u.classId === 'LAD' && u.firedThisPhase && u.movementEnded) {
-      rows.push(row('Setting up', 'fires from next turn', 'warn'));
+    // The drone's three turns (14.01).
+    if (u.kind === 'unit' && u.droneState === 'pallet') {
+      rows.push(
+        row(
+          'Palletised',
+          u.ridingOn ? 'cargo aboard its transport' : 'collapsed; D0, and unpacks in a turn',
+          'warn',
+        ),
+      );
+    } else if (u.kind === 'unit' && u.droneState === 'unpacking') {
+      rows.push(row('Setting up', 'it may be shot at, but not fire', 'warn'));
+    } else if (u.kind === 'unit' && (u.repackProgress ?? 0) > 0) {
+      rows.push(row('Being folded up', `${u.repackProgress} of ${REPACK_TURNS} turns`, 'warn'));
     }
     if (
       u.kind === 'unit' &&
@@ -1470,6 +1481,18 @@ export const createOgreBattle = (opts: OgreBattleOptions): OgreBattle => {
         ),
       ),
       ...rideButtons(state, u),
+      // "Turn 2: The LAD unpacks itself" (14.01) — the owner's own decision, so
+      // that a pallet hidden in a defensive setup stays hidden until it fires.
+      u.kind === 'unit' && unpackCheck(state, u) === null
+        ? button('Unpack the drone', () => dispatch({ type: 'unpackDrone', by: me(), unit: u.id }))
+        : null,
+      u.kind === 'unit' && isPallet(u) && pushers(state, u).length > 0 && !u.movementEnded
+        ? el(
+            'p',
+            { class: 'note ram' },
+            'A squad here can carry the pallet one hex — click an adjacent hex (14.01).',
+          )
+        : null,
       ...engineerTasks(state, session.map, u).map((t) =>
         button(t.label, () =>
           dispatch({

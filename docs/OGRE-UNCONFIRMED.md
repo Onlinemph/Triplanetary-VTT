@@ -59,18 +59,6 @@ from stacking limits.
 **Also not in:** armed trains (9.03.1), and reinforcements carried aboard
 (9.07).
 
-### The drone does not deploy (§14.01)
-
-**Printed:** a LAD travels collapsed as a cargo pallet. Turn 1 the transport
-stands still and the pallet is unloaded; turn 2 it unpacks and may be shot at
-but may not fire; turn 3 it can fire. A pallet is a D0 target destroyed by any
-attack, can be hidden in a defensive setup, and is not overrun. Repacking
-takes engineers three turns plus one to load, or a Vulcan one turn. A LAD that
-is set up may not be moved.
-
-**Here:** the LAD mounts and dismounts like a squad of infantry, and is
-"setting up" — unable to fire — for the rest of the turn it dismounts.
-
 ### What the Vulcan still cannot do (§15)
 
 Section 15 is nearly complete: the dice pools, the fire-phase timing, one

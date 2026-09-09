@@ -249,6 +249,25 @@ export interface EngineerCommand extends CommandBase {
   readonly weapon?: string;
 }
 
+/**
+ * Open a Light Artillery Drone that is lying on its pallet (14.01). It spends
+ * the turn unpacking and running diagnostics, and can fire from the next.
+ */
+export interface UnpackDroneCommand extends CommandBase {
+  readonly type: 'unpackDrone';
+  readonly unit: UnitId;
+}
+
+/**
+ * Carry a collapsed drone one hex by hand: "any infantry squad can move a LAD
+ * pallet one hex per turn" (14.01), at the cost of that squad's own movement.
+ */
+export interface PushPalletCommand extends CommandBase {
+  readonly type: 'pushPallet';
+  readonly unit: UnitId;
+  readonly to: Hex;
+}
+
 export type Command =
   | MoveUnitCommand
   | RamCommand
@@ -271,7 +290,9 @@ export type Command =
   | LaunchCruiseMissileCommand
   | SetTrainSpeedCommand
   | LayMinefieldCommand
-  | EngineerCommand;
+  | EngineerCommand
+  | UnpackDroneCommand
+  | PushPalletCommand;
 
 export type CommandType = Command['type'];
 

@@ -53,6 +53,7 @@ import {
   DEFAULT_OPTIONS,
   activePlayer,
   isOgre,
+  isPallet,
 } from './types.js';
 
 // ---------------------------------------------------------------------------
@@ -140,6 +141,10 @@ export const makeUnit = (
   ...(UNIT_CLASSES[classId].structurePoints !== undefined
     ? { structurePoints: UNIT_CLASSES[classId].structurePoints }
     : {}),
+  // "It is considered a Size 1 unit when set up" (14.01): a drone a scenario
+  // puts on the board is emplaced and can fire. One that arrives as cargo is
+  // palletised on purpose — see `drone.palletised`.
+  ...(classId === 'LAD' ? { droneState: 'ready' as const } : {}),
   firedThisPhase: false,
   squadsFired: 0,
   heavyWeaponFired: false,
@@ -390,6 +395,12 @@ export const defenseOf = (
     // ramming rules do their own arithmetic.
     return 0;
   }
+
+  // "A LAD on a pallet is treated as a D0 unit; it is destroyed by any attack.
+  // Additionally, LADs on a pallet that are being transported suffer spillover
+  // attacks at defense strength 0 if the transport vehicle is attacked."
+  // (14.01)
+  if (isPallet(u)) return 0;
 
   const cls = unitClass(u.classId);
   const infantry = cls.kind === 'infantry';

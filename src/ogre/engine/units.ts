@@ -242,7 +242,7 @@ export const UNIT_CLASSES: Readonly<Record<UnitClassId, UnitClass>> = {
     size: 1,
     armorUnits: 1,
     vp: 6,
-    note: 'Fully stated: "It has Attack 2, Range 8, Defense 1, and Movement 0. It is considered a Size 1 unit when set up." (14.01) 6 VP as a "standard" armor unit (1.08). Its printed three-turn deployment from a cargo pallet (14.01) is not modelled: here it mounts and dismounts as a squad would.',
+    note: 'Fully stated: "It has Attack 2, Range 8, Defense 1, and Movement 0. It is considered a Size 1 unit when set up." (14.01) 6 VP as a "standard" armor unit (1.08). The three-turn deployment from a cargo pallet is in `drone.ts`; the Defense 1 here is the drone on its legs, since "A LAD on a pallet is treated as a D0 unit".',
   },
 
   GEV: {

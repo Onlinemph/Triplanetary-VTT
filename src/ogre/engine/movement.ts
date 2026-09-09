@@ -32,6 +32,7 @@ import {
   type Unit,
   type UnitId,
   isOgre,
+  isPallet,
   onBoard,
   passengersOf,
   ridingSomething,
@@ -49,6 +50,7 @@ import {
   withUnit,
 } from './state.js';
 import { mobilityOf } from './mobility.js';
+import { advanceDrones, pushCheck } from './drone.js';
 
 // ---------------------------------------------------------------------------
 // Stacking
@@ -668,6 +670,14 @@ export interface Reach {
  * it walks the same {@link stepInfo}.
  */
 export const reachable = (state: GameState, map: GameMap, unit: Unit): Reach[] => {
+  // "any infantry squad can move a LAD pallet one hex per turn" (14.01): a
+  // pallet has no movement of its own, so its neighbours are its whole reach.
+  if (isPallet(unit)) {
+    return neighbors(unit.pos)
+      .filter((n) => pushCheck(state, map, unit, n) === null)
+      .map((n) => ({ hex: n, cost: 1, path: [n], endsMovement: true, hazard: null }));
+  }
+
   const allowance = movementAllowance(unit, state.phase, state.options);
   if (allowance <= 0 || unit.movementEnded) return [];
 
@@ -807,7 +817,8 @@ export const resolvePendingHazards = (state: GameState, player: PlayerId): GameS
  * disabled on its own turn by ramming is back for the next.
  */
 export const runRecovery = (state: GameState, player: PlayerId, ordinal: number): GameState => {
-  let next = state;
+  // "Turn 3: The LAD can fire." (14.01)
+  let next = advanceDrones(state, player);
   for (const u of Object.values(state.units)) {
     if (u.kind !== 'unit' || u.owner !== player || !onBoard(u)) continue;
 
@@ -854,6 +865,11 @@ export const canMount = (
     (unitClass(rider.classId).kind !== 'infantry' && rider.classId !== 'LAD')
   ) {
     return { ok: false, reason: 'only infantry and the drone ride' };
+  }
+  // "it can be transported collapsed as a single cargo pallet" — and only
+  // collapsed. "A LAD that is set up may not be moved." (14.01)
+  if (rider.classId === 'LAD' && rider.droneState !== 'pallet') {
+    return { ok: false, reason: 'a drone that is set up may not be moved (14.01)' };
   }
   if (ridingSomething(rider)) return { ok: false, reason: 'already aboard something' };
   if (carrier.kind !== 'unit') return { ok: false, reason: 'Ogres do not give lifts' };

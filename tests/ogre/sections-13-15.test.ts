@@ -37,9 +37,23 @@ import {
   superheavyMove,
   vulcanDice,
 } from '../../src/ogre/engine/engineering.js';
-import { detectsMines, mineAt } from '../../src/ogre/engine/concealment.js';
-import { type GameState, onBoard } from '../../src/ogre/engine/types.js';
-import { A, B, at, flatMap, inPhase, newGame, put, putOgre, seedForRoll } from './helpers.js';
+import { concealAll, detectsMines, mineAt } from '../../src/ogre/engine/concealment.js';
+import { palletised } from '../../src/ogre/engine/drone.js';
+import { canOverrun } from '../../src/ogre/engine/overrun.js';
+import { reachable } from '../../src/ogre/engine/movement.js';
+import { type ConventionalUnit, type GameState, onBoard } from '../../src/ogre/engine/types.js';
+import {
+  A,
+  B,
+  at,
+  flatMap,
+  inPhase,
+  newGame,
+  patch,
+  put,
+  putOgre,
+  seedForRoll,
+} from './helpers.js';
 
 const map = flatMap();
 
@@ -67,6 +81,21 @@ const withOptions = (s: GameState, options: Partial<GameState['options']>): Game
   ...s,
   options: { ...s.options, ...options },
 });
+
+/** Round the sequence back to this player's movement phase, one turn on. */
+const nextTurn = (s: GameState): GameState => {
+  let out = s;
+  const player = out.playerOrder[out.activePlayerIndex]!;
+  for (let guard = 0; guard < 12; guard++) {
+    out = applyCommand(
+      out,
+      { type: 'endPhase', by: out.playerOrder[out.activePlayerIndex]! },
+      map,
+    ).state;
+    if (out.phase === 'movement' && out.playerOrder[out.activePlayerIndex] === player) return out;
+  }
+  throw new Error('the turn never came round');
+};
 
 // ---------------------------------------------------------------------------
 // 13.07 The Superheavy's record sheet
@@ -294,33 +323,76 @@ describe('bridges as targets (13.02)', () => {
 // 14.01 The Light Artillery Drone
 // ---------------------------------------------------------------------------
 
-describe('the drone rides and sets up (14.01)', () => {
-  it('mounts a carrier as one squad, and cannot fire the turn it is set down', () => {
-    // The green map's stacking (5.02.2): the drone and its carrier share a hex.
+describe('the drone’s three turns (14.01)', () => {
+  /** A drone a scenario puts on the board is emplaced and can fire. */
+  it('starts set up, and a set-up one may not be moved', () => {
     let s = newGame({ seed: 1, stackingLimit: 5 });
-    const pc = put(s, A, 'GEVPC', at(4, 6));
-    s = pc.state;
     const lad = put(s, A, 'LAD', at(4, 6));
-    s = moveFor(lad.state, A);
-    s = run(s, { type: 'mount', by: A, unit: lad.id, carrier: pc.id });
-    expect((s.units[lad.id] as { ridingOn?: string }).ridingOn).toBe(pc.id);
-    // Carried along.
-    s = run(s, { type: 'moveUnit', by: A, unit: pc.id, path: [at(5, 6), at(6, 6)] });
-    expect(key(s.units[lad.id]!.pos)).toBe(key(at(6, 6)));
-    // Next turn: set it down, and it is setting up.
-    s = run(s, { type: 'endPhase', by: A }); // fire
-    s = run(s, { type: 'endPhase', by: A }); // gev movement
-    s = run(s, { type: 'endPhase', by: A }); // B's turn
-    for (let i = 0; i < 4; i++) s = run(s, { type: 'endPhase', by: B });
-    s = run(s, { type: 'endPhase', by: A }); // A's recovery -> movement
-    expect(s.phase).toBe('movement');
+    s = lad.state;
+    expect((s.units[lad.id] as { droneState?: string }).droneState).toBe('ready');
+    const truck = put(s, A, 'TK', at(4, 6));
+    s = moveFor(truck.state, A);
+    const refused = applyCommand(s, { type: 'mount', by: A, unit: lad.id, carrier: truck.id }, map);
+    expect(refused.result.ok).toBe(false);
+    expect(refused.result.ok ? '' : refused.result.reason).toMatch(/set up may not be moved/);
+  });
+
+  // "Turn 1: Unloading ... Turn 2: The LAD unpacks itself ... It may be
+  // targeted, but may not attack ... Turn 3: The LAD can fire."
+  it('unloads, unpacks, and fires — on three separate turns', () => {
+    let s = newGame({ seed: 1, stackingLimit: 5 });
+    const truck = put(s, A, 'TK', at(4, 6));
+    s = truck.state;
+    const lad = put(s, A, 'LAD', at(4, 6));
+    s = patch(lad.state, lad.id, palletised(lad.state.units[lad.id] as ConventionalUnit));
+    s = moveFor(s, A);
+    s = run(s, { type: 'mount', by: A, unit: lad.id, carrier: truck.id });
+
+    // It rides where the truck goes. Off the road a Truck manages one hex a
+    // turn: clear ground costs a wheeled vehicle 4 of its 4 points (5.08.5).
+    s = run(s, { type: 'moveUnit', by: A, unit: truck.id, path: [at(5, 6)] });
+    expect(key(s.units[lad.id]!.pos)).toBe(key(at(5, 6)));
+
+    // Turn 1: the transport has to stand still to put it down.
+    s = nextTurn(s);
+    const early = applyCommand(
+      run(s, { type: 'moveUnit', by: A, unit: truck.id, path: [at(6, 6)] }),
+      { type: 'dismount', by: A, unit: lad.id },
+      map,
+    );
+    expect(early.result.ok).toBe(false);
+    expect(early.result.ok ? '' : early.result.reason).toMatch(/stand still/);
+
     s = run(s, { type: 'dismount', by: A, unit: lad.id });
-    const down = s.units[lad.id]!;
-    expect((down as { ridingOn?: string }).ridingOn).toBeUndefined();
-    expect((down as { firedThisPhase: boolean }).firedThisPhase).toBe(true);
-    s = run(s, { type: 'endPhase', by: A });
-    const enemy = put(s, B, 'HVY', at(8, 6));
-    s = enemy.state;
+    expect((s.units[lad.id] as { droneState?: string }).droneState).toBe('pallet');
+    // It cannot open itself the same turn.
+    const tooSoon = applyCommand(s, { type: 'unpackDrone', by: A, unit: lad.id }, map);
+    expect(tooSoon.result.ok).toBe(false);
+    expect(tooSoon.result.ok ? '' : tooSoon.result.reason).toMatch(/next/);
+
+    // Turn 2: it unpacks. "It may be targeted, but may not attack."
+    s = nextTurn(s);
+    s = run(s, { type: 'unpackDrone', by: A, unit: lad.id });
+    expect((s.units[lad.id] as { droneState?: string }).droneState).toBe('unpacking');
+    const enemy = put(s, B, 'HVY', at(9, 6));
+    s = fireFor(enemy.state, A);
+    const early2 = applyCommand(
+      s,
+      {
+        type: 'attack',
+        by: A,
+        attackers: [{ unit: lad.id }],
+        target: { kind: 'unit', unit: enemy.id },
+      },
+      map,
+    );
+    expect(early2.result.ok).toBe(false);
+    expect(early2.result.ok ? '' : early2.result.reason).toMatch(/setting up/);
+
+    // Turn 3: it can fire.
+    s = nextTurn({ ...s, phase: 'movement' });
+    expect((s.units[lad.id] as { droneState?: string }).droneState).toBe('ready');
+    s = fireFor(s, A);
     const shot = applyCommand(
       s,
       {
@@ -331,7 +403,95 @@ describe('the drone rides and sets up (14.01)', () => {
       },
       map,
     );
-    expect(shot.result.ok).toBe(false);
+    expect(shot.result.ok).toBe(true);
+  });
+
+  // "A LAD on a pallet is treated as a D0 unit; it is destroyed by any attack."
+  it('is a D0 target on its pallet, and hidden in a defensive setup', () => {
+    let s = newGame({ seed: 1, stackingLimit: 5 });
+    const lad = put(s, A, 'LAD', at(4, 6));
+    s = patch(lad.state, lad.id, palletised(lad.state.units[lad.id] as ConventionalUnit));
+    expect(defenseOf(s, map, s.units[lad.id]!)).toBe(0);
+    // On its legs it is the counter's Defense 1.
+    const up = patch(s, lad.id, { droneState: 'ready' });
+    expect(defenseOf(up, map, up.units[lad.id]!)).toBe(1);
+
+    // "LADs still on a pallet can also be placed as part of a defensive setup
+    // ... very hard to detect." No option needed.
+    expect(concealAll(s).units[lad.id]!.concealed).toBe(true);
+  });
+
+  // "An overrun does not take place when a opponent enters a hex with a
+  // collapsed LAD, as the LAD is not a functioning combat unit at that time."
+  it('is not overrun on its pallet', () => {
+    let s = newGame({ seed: 1, stackingLimit: 5 });
+    s = withOptions(s, { overrunCombat: true });
+    const lad = put(s, B, 'LAD', at(5, 6));
+    s = patch(lad.state, lad.id, palletised(lad.state.units[lad.id] as ConventionalUnit));
+    const tank = put(s, A, 'HVY', at(4, 6));
+    s = moveFor(tank.state, A);
+    expect(canOverrun(s, map, s.units[tank.id]!, at(5, 6)).ok).toBe(false);
+    // Set up, it is a unit like any other.
+    const up = patch(s, lad.id, { droneState: 'ready' });
+    expect(canOverrun(up, map, up.units[tank.id]!, at(5, 6)).ok).toBe(true);
+  });
+
+  // "any infantry squad can move a LAD pallet one hex per turn"
+  it('is carried one hex a turn by a squad in its hex', () => {
+    let s = newGame({ seed: 1, stackingLimit: 5 });
+    const lad = put(s, A, 'LAD', at(4, 6));
+    s = patch(lad.state, lad.id, palletised(lad.state.units[lad.id] as ConventionalUnit));
+    // With nobody to lift it, it goes nowhere.
+    s = moveFor(s, A);
+    expect(reachable(s, map, s.units[lad.id]!)).toEqual([]);
+
+    const inf = put(s, A, 'INF', at(4, 6));
+    s = moveFor(inf.state, A);
+    expect(reachable(s, map, s.units[lad.id]!).length).toBe(6);
+    // Two hexes is one too many.
+    const far = applyCommand(
+      s,
+      { type: 'moveUnit', by: A, unit: lad.id, path: [at(5, 6), at(6, 6)] },
+      map,
+    );
+    expect(far.result.ok).toBe(false);
+    expect(far.result.ok ? '' : far.result.reason).toMatch(/one hex per turn/);
+
+    s = run(s, { type: 'moveUnit', by: A, unit: lad.id, path: [at(5, 6)] });
+    expect(key(s.units[lad.id]!.pos)).toBe(key(at(5, 6)));
+    // The squad carried it, and spent its own move doing so.
+    expect(key(s.units[inf.id]!.pos)).toBe(key(at(5, 6)));
+    expect(s.units[inf.id]!.movementEnded).toBe(true);
+  });
+
+  // "It takes a squad of Combat Engineers three turns to re-palletize a LAD ...
+  // A Vulcan may break down and load an LAD in one turn."
+  it('takes engineers three turns to fold up, and a Vulcan one', () => {
+    const fold = (sapper: 'CE' | 'VULCAN'): GameState => {
+      let s = newGame({ seed: 1, stackingLimit: 5 });
+      const lad = put(s, A, 'LAD', at(4, 6));
+      s = lad.state;
+      const crew = sapper === 'CE' ? put(s, A, 'CE', at(4, 6)) : putOgre(s, A, 'VULCAN', at(4, 6));
+      s = fireFor(crew.state, A);
+      const offers = engineerTasks(s, map, s.units[crew.id]!);
+      expect(offers.some((t) => t.task === 'repackDrone')).toBe(true);
+      for (let turn = 0; turn < 3; turn++) {
+        s = run(s, { type: 'engineer', by: A, unit: crew.id, task: 'repackDrone', target: lad.id });
+        if ((s.units[lad.id] as { droneState?: string }).droneState === 'pallet') break;
+        s = fireFor(nextTurn({ ...s, phase: 'movement' }), A);
+      }
+      return s;
+    };
+
+    const byHand = fold('CE');
+    const drone = Object.values(byHand.units).find(
+      (u) => u.kind === 'unit' && u.classId === 'LAD',
+    )!;
+    expect((drone as { droneState?: string }).droneState).toBe('pallet');
+    expect(byHand.log.filter((e) => /of 3 turns to re-palletize/.test(e.text)).length).toBe(2);
+
+    const byVulcan = fold('VULCAN');
+    expect(byVulcan.log.some((e) => /in one turn/.test(e.text))).toBe(true);
   });
 });
 

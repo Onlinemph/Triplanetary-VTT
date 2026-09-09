@@ -348,17 +348,25 @@ The numbers are provisional: the bridge's defence, the sheet's components and
 the die that picks one, the drone's stowage. Correct them against the printed
 text.
 
-### 14 – Advanced units (partial)
+### 14 – Advanced units
 
-| Rule                                                            | Where                  |
-| --------------------------------------------------------------- | ---------------------- |
-| 14.02 The Ninja: −1 to every die rolled against it              | `combat.resolveAttack` |
-| 14.02 The Ninja's weapons do not combine with other units' fire | `combat.previewAttack` |
+| Rule                                                                     | Where                                              |
+| ------------------------------------------------------------------------ | -------------------------------------------------- |
+| 14.01 Turn 1 unloading: the transport stands still, the pallet goes down | `reducer.doDismount`                               |
+| 14.01 Turn 2 unpacking: targetable, but may not attack                   | `drone.unpackDrone`, `combat.spentReason`          |
+| 14.01 Turn 3: it can fire                                                | `drone.advanceDrones`, from `movement.runRecovery` |
+| 14.01 A pallet is a D0 unit, destroyed by any attack                     | `state.defenseOf`                                  |
+| 14.01 A transported pallet takes spillover at D0                         | `combat.applySpillover`                            |
+| 14.01 A pallet may be hidden in a defensive setup                        | `concealment.concealAll`                           |
+| 14.01 No overrun takes place in a hex holding only a pallet              | `overrun.canOverrun`                               |
+| 14.01 A squad carries a pallet one hex a turn                            | `drone.pushPallet`, `movement.reachable`           |
+| 14.01 A drone that is set up may not be moved                            | `movement.canMount`                                |
+| 14.01 Three engineer turns to re-palletize, or one Vulcan turn           | `engineering.engineer`, task `repackDrone`         |
+| 14.02 The Ninja: −1 to every die rolled against it                       | `combat.resolveAttack`                             |
+| 14.02 The Ninja's weapons do not combine with other units' fire          | `combat.previewAttack`                             |
 
-The drone's deployment is implemented from its shape: it rides any vehicle
-that carries infantry, as one squad's worth of room (`movement.canMount`),
-and the turn it is set down it is setting up and may not fire
-(`reducer.doDismount`). The printed sequence is still to be checked.
+A drone a scenario puts on the board is emplaced and can fire; `drone.palletised`
+folds one up for a builder that means it to arrive as cargo.
 
 ### Setup
 
@@ -396,7 +404,7 @@ engine's shape.
 | **10 – Cruise missiles**    | The owner's choice of route; the engine flies a straight line                                                          | Immediate flight, the 2d6 interception table with its tracking bonuses, premature detonation, six-hex fratricide and the printed blast table are all in.        |
 | **12 – Lasers**             | Nothing; only the 20 SP on the counter is unconfirmed                                                                  | Structure Points, the damaged state, the fire restriction, Ogre-missile interception and the spillover exception are all as printed (12.01–12.09).              |
 | **13 – Optional rules**     | River bridges (13.02.1), the layer's choice of road mine, passive detection (13.04.1)                                  | Terrain damage (13.01), bridges at D6 (13.02), mines (13.04), camouflage (13.05), dummies (13.06) and the Superheavy's record sheet (13.07) are all as printed. |
-| **14 – Advanced units**     | The LAD's three-turn deployment from a cargo pallet                                                                    | Both units' statistics are in, and the Ninja's stealth; the drone rides a vehicle as one squad and sets up the turn it is set down.                             |
+| **14 – Advanced units**     | Nothing                                                                                                                | Both units' statistics, the Ninja's stealth, and the drone's whole three-turn deployment with its pallet, its D0, its hiding place and its repacking (14.01).   |
 | **15 – Combat engineering** | Reloading missiles (15.04.4), towing (15.04.8), Drone control and cargo (15.02.1, 15.02.4-5), assembly times (15.02.2) | The dice pools, entrenchments, revetments and fourteen tasks are in, the Vulcan's own among them. See above.                                                    |
 
 ---
@@ -410,8 +418,7 @@ to call provisional is now quoted and cited at the implementation site.
 `docs/OGRE-UNCONFIRMED.md` is what is left: the handful of numbers that are on
 the counters rather than in the rules text, and the rules the engine knowingly
 models differently — cruise missile flight and interception, the train as two
-counters, the drone's three-turn deployment, the engineers' dice pools, and the
-whole of the Vulcan's work.
+counters, the engineers' dice pools, and the whole of the Vulcan's work.
 
 ## Reporting a rules bug
 

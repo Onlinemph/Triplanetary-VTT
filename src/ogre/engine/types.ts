@@ -654,6 +654,15 @@ export const unitsAt = (state: GameState, hex: Hex): Unit[] =>
     (u) => onBoard(u) && u.pos.q === hex.q && u.pos.r === hex.r && !ridingSomething(u),
   );
 
+/**
+ * A collapsed Light Artillery Drone: cargo, not a combat unit (14.01).
+ *
+ * "A LAD on a pallet is treated as a D0 unit; it is destroyed by any attack"
+ * and "An overrun does not take place when a opponent enters a hex with a
+ * collapsed LAD, as the LAD is not a functioning combat unit at that time."
+ */
+export const isPallet = (u: Unit): boolean => u.kind === 'unit' && u.droneState === 'pallet';
+
 /** Infantry riding a vehicle are in the vehicle's hex but are not *in* the hex. */
 export const ridingSomething = (u: Unit): boolean => u.kind === 'unit' && u.ridingOn != null;
 

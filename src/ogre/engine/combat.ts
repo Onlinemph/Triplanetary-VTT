@@ -36,6 +36,7 @@ import { baseTerrain, degradeTerrain, treadHitRollIn } from './terrain.js';
 import { mobilityOf } from './mobility.js';
 import { LASER_DAMAGED_AT, isMarine, unitClass } from './units.js';
 import { laserLineOfSight } from './los.js';
+import { droneCanFire } from './drone.js';
 import {
   type AttackResolution,
   type AttackerRef,
@@ -49,6 +50,7 @@ import {
   canAct,
   isInertOgre,
   isOgre,
+  isPallet,
   onBoard,
   passengersOf,
   unitsAt,
@@ -512,6 +514,14 @@ const spentReason = (
     return null;
   }
 
+  // "It may be targeted, but may not attack" until the turn after it unpacks,
+  // and a pallet is not a functioning combat unit at all (14.01).
+  if (!droneCanFire(u)) {
+    return u.droneState === 'pallet'
+      ? `${unitName(u)} is still on its pallet`
+      : `${unitName(u)} is still setting up`;
+  }
+
   if (unitClass(u.classId).laser !== undefined) {
     // "When a Laser or Laser Tower is reduced to 10 SP, it is 'damaged' ...
     // The Laser can no longer fire" (12.07).
@@ -797,7 +807,9 @@ export const applyToRiders = (
   credit: string,
 ): GameState => {
   if (target.kind !== 'unit') return state;
-  const riders = passengersOf(state, target.unit);
+  // A palletised drone is cargo rather than a rider: 14.01 gives it spillover
+  // at D0 instead, which `applySpillover` handles.
+  const riders = passengersOf(state, target.unit).filter((r) => !isPallet(r));
   if (riders.length === 0) return state;
 
   // "calculates the odds ... for ... all the infantry": one calculation for
@@ -1246,8 +1258,16 @@ const applySpillover = (
   // on that vehicle." (12.08)
   const laser = isLaserAttack(state, attackers);
 
+  // "LADs on a pallet that are being transported suffer spillover attacks at
+  // defense strength 0 if the transport vehicle is attacked." (14.01) They are
+  // cargo, not riders, so 5.11.2 does not reach them — spillover does.
+  const inTheHex = [
+    ...unitsAt(state, where),
+    ...(targetId ? passengersOf(state, targetId).filter(isPallet) : []),
+  ];
+
   let next = state;
-  for (const other of unitsAt(state, where)) {
+  for (const other of inTheHex) {
     if (other.id === targetId) continue;
     if (attackerIds.has(other.id)) continue;
     if (isOgre(other)) continue;
@@ -1318,6 +1338,7 @@ export const resetFireFlags = (state: GameState, player: string): GameState => {
 export const canStillFire = (state: GameState, u: Unit): boolean => {
   if (!canAct(u)) return false;
   if (isOgre(u)) return u.weapons.some((w) => isFireable(u, w) && !w.fired);
+  if (!droneCanFire(u)) return false;
   const cls = unitClass(u.classId);
   if (cls.attack <= 0) return false;
   if (cls.kind === 'infantry') return u.squadsFired < u.squads;

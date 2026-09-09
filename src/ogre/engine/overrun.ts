@@ -41,6 +41,7 @@ import {
   type Unit,
   type UnitId,
   isOgre,
+  isPallet,
   onBoard,
   unitsAt,
 } from './types.js';
@@ -98,7 +99,11 @@ export const canOverrun = (
   if (distance(mover.pos, target) !== 1) return no('overrun an adjacent hex');
   if (!inBounds(map, target)) return no('there is nothing off the map to overrun');
 
-  const enemies = unitsAt(state, target).filter((u) => u.owner !== mover.owner);
+  // "An overrun does not take place when a opponent enters a hex with a
+  // collapsed LAD, as the LAD is not a functioning combat unit at that time.
+  // The unit entering the hex may still fire on the LAD pallet during its Fire
+  // Phase." (14.01)
+  const enemies = unitsAt(state, target).filter((u) => u.owner !== mover.owner && !isPallet(u));
   if (enemies.length === 0) return no('nothing there to overrun');
 
   const terrain = terrainAt(map, target, state.terrainOverrides);
