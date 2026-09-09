@@ -140,7 +140,13 @@ export interface ConventionalUnit {
    * A Superheavy's record sheet (13.07), once it has taken damage under that
    * option. Absent means the full sheet; see `engineering.ts`.
    */
-  readonly sheet?: { readonly guns: number; readonly ap: number; readonly treads: number };
+  readonly sheet?: {
+    readonly guns: number;
+    readonly ap: number;
+    readonly treads: number;
+    /** Down from a hit on the sheet; a second D does nothing more (13.07). */
+    readonly disabled?: boolean;
+  };
 }
 
 /** One targetable component on an Ogre's record sheet. */
@@ -210,6 +216,12 @@ export interface Minefield {
   readonly owner: PlayerId;
   readonly pos: Hex;
   readonly revealed: boolean;
+  /**
+   * Laid on the road or railroad through the hex (13.04). A road mine goes off
+   * under anything that enters using the road and does nothing to a unit that
+   * comes in across country; a mine off the road goes off on a die roll.
+   */
+  readonly onRoad?: boolean;
 }
 
 export const isOgre = (u: Unit): u is OgreUnit => u.kind === 'ogre';

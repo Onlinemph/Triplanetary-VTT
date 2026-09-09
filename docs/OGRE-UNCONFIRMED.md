@@ -1,216 +1,181 @@
-# Numbers to check against the printed game
+# What is still not the printed rule
 
-Every value in the Ogre engine that was set from the _shape_ of a rule rather
-than its text, in one list, with what the code assumes now and where the real
-answer lives. Write the printed value in the last column and hand it back; each
-one is a one-line change plus a test.
+Checked against **Ogre Sixth Edition, Revised: Battlefields**, rules version 6.3
+(August 2019). Everything the rulebook settles has been corrected in the
+engine and cited at the implementation site; this file is what is left.
 
-Nothing here is a guess about how a rule _works_ — the mechanics are
-implemented and tested. These are only magnitudes: an attack strength, a
-defence, a movement allowance, a victory value. A wrong number here makes the
-game play differently, never incorrectly.
+Two kinds of thing are listed:
+
+1. **Numbers the rules text does not print.** They are on the counters or the
+   record sheets, so they still need somebody with the components.
+2. **Rules the engine models differently.** Each of these is a known,
+   deliberate simplification, not an oversight, and each says what the printed
+   rule is and what it would take to close the gap.
 
 The companion file is `docs/OGRE-RULES-MAPPING.md`, which says where each rule
-is implemented. This one says only what is unconfirmed.
+is implemented.
 
 ---
 
-## If you only look up five things
+## 1. Numbers still to read off a counter
 
-These are the ones that can reach a game today and change how it plays:
+| Counter                | Value            | Code now    | Where it lives           |
+| ---------------------- | ---------------- | ----------- | ------------------------ |
+| **Truck** (TK)         | Movement         | 4           | Counter; wheeled, 5.08.5 |
+| **Hovertruck** (HT)    | Movement         | 4 + 3       | Counter; GEV rules, 3.03 |
+|                        | Defence          | 0           | Counter                  |
+| **Laser** (LSR)        | Structure Points | D2 stand-in | Counter / scenario       |
+|                        | Victory points   | 12          | Scenario                 |
+| **Laser Tower** (LTWR) | Structure Points | D4 stand-in | Counter / scenario       |
+|                        | Victory points   | 18          | Scenario                 |
+| **Train**              | Size             | 5           | Scenario                 |
+|                        | Victory points   | 12          | Scenario                 |
+| **Command Post** (CP)  | Size             | 1           | Not in the Size Table    |
 
-1. **The Train's defence, size and victory value** — The Train scenario fields
-   it, so these are live now.
-2. **The cruise missile's flight, defence and blast** (§10) — the Missile
-   Crawler is in the battle builder.
-3. **The minefield's attack strength** (13.04) — a builder option.
-4. **The Superheavy's record sheet** (13.07) — a builder option, and the sheet
-   changes how a Superheavy dies.
-5. **The dummy counter's movement** (13.06) — a builder option; too fast and a
-   dummy gives itself away, too slow and it cannot bluff.
-
-The Laser and the Laser Tower are at the bottom of the list on purpose:
-they are implemented, but nothing in the game currently puts one on the board,
-so their numbers cannot affect a game until a scenario or the builder offers
-them.
-
----
-
-## 1. Counter faces
-
-One line each, from the counter sheet or the unit summary. "Code now" is what
-the engine uses today.
-
-| Counter                         | Value          | Code now | Correct value |
-| ------------------------------- | -------------- | -------- | ------------- |
-| **Train** (TRAIN)               | Defence        | 3        |               |
-|                                 | Size           | 5        |               |
-|                                 | Victory points | 12       |               |
-|                                 | Squads carried | 6        |               |
-| **Missile Crawler** (MCRL)      | Defence        | 2        |               |
-|                                 | Movement       | 2        |               |
-| **Crawler** (CRL, a fired MCRL) | Defence        | 2        |               |
-|                                 | Movement       | 2        |               |
-| **Truck** (TK)                  | Movement       | 4        |               |
-|                                 | Victory points | 6        |               |
-| **Hovertruck** (HT)             | Movement       | 4        |               |
-|                                 | Second move    | 3        |               |
-|                                 | Defence        | 0        |               |
-| **Light Artillery Drone** (LAD) | Victory points | 6        |               |
-| **Dummy** (13.06)               | Movement       | 3        |               |
-| **Command Post** (CP)           | Size           | 1        |               |
-| **Laser** (LSR)                 | Attack         | 3        |               |
-|                                 | Defence        | 2        |               |
-|                                 | Victory points | 12       |               |
-| **Laser Tower** (LTWR)          | Attack         | 3        |               |
-|                                 | Defence        | 4        |               |
-|                                 | Victory points | 18       |               |
-
-The LAD's other statistics are quoted verbatim from 14.01 ("Attack 2, Range 8,
-Defense 1, and Movement 0 … Size 1") and need no checking. Every other unit in
-`src/ogre/engine/units.ts` carries a printed citation in its `note`.
+Everything else on the counters is now settled. The Armor Units summary gave
+the Mobile Howitzer D2 and the Missile Crawler D2/M1; 1.08 gave the victory
+values (2 a squad, 3 a half-value armour unit, 6 a standard one or a Crawler,
+12 a double-value one or a Cruise Missile); 15.03.6 and 3.02.2 gave the Truck
+1 VP and the Hovertruck 2, for "unit selection and victory calculation" alike.
 
 ---
 
-## 2. Section 10 — cruise missiles
+## 2. Rules the engine simplifies
 
-The missile is a counter that flies, can be shot down by a laser, and
-detonates. All of that is implemented. The magnitudes are placeholders chosen
-to sit sensibly against the Combat Results Table.
+### Cruise missiles fly, and should not (§10)
 
-| Quantity                                            | Code now | Correct value |
-| --------------------------------------------------- | -------- | ------------- |
-| Hexes flown per fire phase                          | 12       |               |
-| The missile's defence against an intercepting laser | 2        |               |
-| Blast attack strength one hex from ground zero      | 12       |               |
-| Blast attack strength two hexes from ground zero    | 6        |               |
-| How far the blast reaches at all                    | 2 hexes  |               |
-| Another missile lost to a detonation within         | 2 hexes  |               |
+**Printed:** "In that time, a Cruise Missile can reach any point on the map
+(however big the map is) – unless it is intercepted." The missile is fired in
+the fire phase and tracked hex by hex to its target immediately, before
+anything else happens. Interception is a **two-dice roll** on a table by the
+firing unit's type (12 for an armour unit of attack 1-2, 11+ for attack 3 or
+more and for each infantry squad, 10+ for an Ogre battery, 9+ for an Ogre
+missile or a Laser), with +1 past 10 hexes, +2 past 15, +3 past 20 or from off
+the board. A successful hit shoots it down, except on a 6 on one die, when it
+detonates where it was intercepted. Fratricide reaches **six** hexes.
 
-Three questions of rule rather than number, if the text answers them:
+The blast is a table by unit type and distance, not two rings: a D0 unit or
+GEV is destroyed at 1-2 hexes and attacked at 4-1, 2-1, 1-1 out to 5; a D3+
+unit, the train or a hardened CP is only attacked, at 4-1 from one hex; towns
+and forests go at 1-3; roads, bridges and Ogre components take a 2-1 at one
+hex. Forest and swamp count as one hex further away, town and underwater two.
+Structure points and Ogre treads are attacked in groups of five.
 
-- Is everything at ground zero destroyed outright, whatever it is? The code
-  says yes, and turns the hex into a crater.
-- Does the blast fall off in rings as above, or by some other schedule?
-- May a laser fire at a missile _and_ at a ground target in the same fire
-  phase? The code lets one laser make one interception.
+**Here:** the missile is a counter that flies twelve hexes a fire phase over
+several turns, and a laser intercepts it by shooting at a defence strength.
+The blast is two rings of fixed attack strength, and fratricide reaches two
+hexes.
 
-## 3. Section 12 — lasers
+**To close it:** replace the flight loop with an immediate hex-by-hex trace,
+the interception check with the 2d6 table, and the two rings with the printed
+table. The launch, the crater and the road cut are already right. It is the
+largest single piece of work on this page and it makes the missile _simpler_,
+not harder — nothing needs to persist between turns.
 
-Line of sight is implemented from the text (12.02 blocked by raised terrain,
-12.03 a tower fires over but not into it). Only the strengths are unknown, and
-they are in the counter table above. Two open questions:
+### Lasers are buildings (§12)
 
-- Is a laser's range genuinely unlimited along a clear line? The code says yes
-  (it stores range 99).
-- Is there a limit on how often a laser fires — once a turn, or every fire
-  phase like any gun? The code treats it as any other gun.
+**Printed:** "Defensively, they are buildings with Structure Points."
+A Laser is damaged at 10 SP and destroyed at 0; a damaged one cannot fire.
+It may attack a unit only if it did not fire at all during the preceding enemy
+turn.
 
-## 4. Section 13 — optional rules
+**Here:** a Laser is an immobile unit with a defence strength standing in for
+its Structure Points. Its attack (2), its ranges (30 and 60) and its double
+strength when overrun are now the printed ones, and so is the line of sight.
+What is missing is SP damage, the damaged state, and the fire restriction.
 
-| Quantity                                                          | Code now | Correct value |
-| ----------------------------------------------------------------- | -------- | ------------- |
-| **13.02** A bridge's defence strength as a target                 | 4        |               |
-| **13.04** A minefield's attack strength against a unit            | 4        |               |
-| **13.04** Tread units an Ogre loses to a minefield                | 2        |               |
-| **13.04** Die roll or better for an Ogre to lose treads to a mine | 4        |               |
-| **13.04** Minefields a side may lay in a scenario                 | up to 12 |               |
-| **13.06** Dummy counters a side may field                         | up to 8  |               |
+**To close it:** the engine already has buildings with Structure Points for
+§11. Moving the two Laser classes onto that machinery is mostly deletion.
 
-The last two are our own caps on the battle builder, not rules; if the section
-sets a number, it replaces them.
+### The train is one counter, and should be two (§9)
 
-Questions of rule:
+**Printed:** a train is two counters and two hexes long, with a separate speed
+marker. The markers are **ranges** — M0/1, M2/3, M4/5, M6/7 — so a train moves
+one of two distances each turn and tops out at 7, not 4. Speed changes by one
+marker at the **end** of each turn. Destroying the rear counter leaves the
+front running; destroying the front of a moving train destroys the whole
+thing. A train that enters a hex where the rails are cut is destroyed. Its
+defence is doubled in a town. It does not count against stacking. Each half
+carries 12 "size points" of cargo, and only units of Size 3 or below.
 
-- **13.02** An X drops a bridge and a D does nothing. Is that right, and can a
-  bridge be attacked by more than one unit at once? The code allows stacking
-  fire on it but no spillover.
-- **13.04** Does the mover stop in the mined hex (the code says yes), and does
-  the minefield stay to catch the next unit (the code says yes)?
-- **13.05** Camouflage: the code reveals a concealed counter when it fires, is
-  fired on, rams, is rammed, overruns, or ends either movement phase next to an
-  enemy — but **not** merely for moving. Is that the printed list?
+**Here:** one counter, a single-number speed marker capped at 4, changed at
+the start of movement, and a squad-count capacity. Its defence of 3 and its
+X-only damage rule are right.
 
-### 13.07 — the Superheavy's record sheet
+**To close it:** the front/rear pair is the real work; the speed markers, the
+top speed, the cut-rail destruction and the town doubling are each small.
 
-The sheet exists in print; these are the numbers on it.
+### The drone does not deploy (§14.01)
 
-| Quantity                            | Code now               | Correct value |
-| ----------------------------------- | ---------------------- | ------------- |
-| Guns on the sheet                   | 2                      |               |
-| Attack strength of one gun          | 3                      |               |
-| Antipersonnel weapons               | 2                      |               |
-| Tread units                         | 3                      |               |
-| Movement with all three tread units | 3                      |               |
-| Movement once tread units are lost  | one hex per tread left |               |
+**Printed:** a LAD travels collapsed as a cargo pallet. Turn 1 the transport
+stands still and the pallet is unloaded; turn 2 it unpacks and may be shot at
+but may not fire; turn 3 it can fire. A pallet is a D0 target destroyed by any
+attack, can be hidden in a defensive setup, and is not overrun. Repacking
+takes engineers three turns plus one to load, or a Vulcan one turn. A LAD that
+is set up may not be moved.
 
-And how damage is taken. The code rolls a die for an X: 1-2 a gun, 3-4 a tread
-unit, 5-6 an antipersonnel weapon, moving to the next kind when that one is
-spent; a D takes a tread unit; the tank is destroyed once it has neither a gun
-nor a tread unit. If the printed sheet allocates damage differently, that is
-the thing to copy out.
+**Here:** the LAD mounts and dismounts like a squad of infantry, and is
+"setting up" — unable to fire — for the rest of the turn it dismounts.
 
-## 5. Section 14 — the drone
+### Combat engineering is a sketch (§15)
 
-The Ninja's stealth and the LAD's statistics are implemented from quoted text.
-What is missing is the deployment sequence.
+The parts that are in are right: engineers work in the fire phase, spending
+their attack; entrenchments double infantry defence in clear and triple it in
+forest or rubble, and nowhere else; a bridge in the hex you stand in comes
+down automatically.
 
-- How does a LAD get where it is going? The code lets it ride a vehicle as one
-  squad of infantry would.
-- What does setting up cost? The code says it may not fire on the turn it
-  dismounts.
-- Can it move at all once down? The code says no (Movement 0, per 14.01).
+Not in: the **dice pools** (each extra squad adds a die, a Heavy Drone two, a
+Vulcan four; a 6 succeeds, or the number the task names), and with them most
+of the task list — placing mines (5+), disarming enemy mines (5+), active mine
+detection, terrain levelling with a supply Truck (6), grading ridges (5+),
+the coup de grace against a weaponless Ogre (4+). Entrenchment capacity (one
+squad on 1-4, two on a 5, three on a 6) is not modelled either: a hex is
+simply entrenched or not.
 
-## 6. Section 15 — combat engineering
+### The Vulcan does no work at all (§15.02, §15.04)
 
-The Combat Engineer counter itself is quoted from 15.01 (double victory points,
-traded 2-for-1 for regular infantry) and is not in question. The tasks are.
+The Vulcan's chassis is right — Mark III-B, move 4, 48 tread units, two
+secondary batteries, six AP guns, two manipulator arms at D2 — and so is the
+unfinished-Ogre rule. Everything it is _for_ is missing:
 
-| Quantity                               | Code now                    | Correct value |
-| -------------------------------------- | --------------------------- | ------------- |
-| What one task costs                    | the whole movement phase    |               |
-| Defensive benefit of an entrenched hex | as forest (×2 for infantry) |               |
-| Where engineers may clear a minefield  | the hex they stand in       |               |
-| Where engineers may demolish a bridge  | a neighbouring hexside      |               |
+- **Heavy Drones** (a Heavy Tank chassis with one arm, 16 VP each, four to a
+  Vulcan), combat Drones, and the sixteen "ducklings" it can drive at half
+  strength.
+- **Maintenance and assembly** times: six turns to winch a damaged unit
+  aboard, six to load or unload palleted cargo, one for a single item, and
+  12/30/42/60/72/75 turns to assemble an Ogre from modules by mark.
+- **Vulcan tasks**: freeing units stuck in swamp, repairing cut rail, clearing
+  roads in damaged terrain, reloading missiles, field-repairing an Ogre's
+  weapons and treads, creating revetments.
+- **Cargo**: a dozen Ogre missiles or six squads inside, Size 4 on top.
+- Passive mine detection for Ninjas, Vulcans and Ogres of Size 8 or more.
 
-Questions of rule:
+This is a whole subsystem rather than a gap, and it is the only place where
+the rulebook is fully in hand and the engine has nothing.
 
-- Is the list of tasks entrench / clear mines / demolish, or are there others?
-- Does entrenchment benefit vehicles as well as infantry? The code gives it to
-  infantry only.
-- Can a task be interrupted, or undone by the other side?
+### Smaller known gaps
 
-### The Vulcan's work — not implemented at all
-
-The Vulcan's two manipulator arms (defence 2, 15.02) and the unfinished-Ogre
-rule (15.02.2) are in. Its **repair and salvage work is not implemented**, because
-the procedure is not known here. What would be needed:
-
-- What can the Vulcan repair, and on what — a damaged Ogre, a disabled vehicle,
-  a destroyed one?
-- How long does a repair take, and what does the Vulcan give up to make it?
-- What can it salvage from a wreck, and what does the salvage become?
-- Can it build, and if so what and how fast?
-
-That is the one genuinely missing rule rather than a missing number, so it is
-the largest single thing on this page.
+- **13.02.1 River bridges.** A bridge crossing a whole hex has defence 8, lies
+  in three hexes, and drowns anything on its centre hex when it goes; an Ogre
+  falls in and takes four dice of tread damage. Only stream bridges are in.
+- **13.04 Road mines.** A mine records whether it is on the road, and the
+  engine keeps that flag, but every mine laid in a road hex is treated as a
+  road mine. The rules let the layer choose.
+- **13.04.1 Passive detection.** An Ogre of Size 8 or more, a Ninja or a Vulcan
+  is warned before entering a mined hex and then sets one off only on a 6.
+- **9.03.1 Armed trains**, **9.06 collisions**, **9.07 reinforcements from the
+  train**: none are in.
+- **12.05** A Laser can try to intercept an Ogre missile on a 10+.
+- **15.01.1 Marine Engineers** (6 VP, double defence in water) are not a class.
 
 ---
 
-## How to hand the answers back
+## Where the numbers live
 
-Anything is fine — this file with the last column filled in, a photograph of a
-page, or just a list like "Train defence 4, size 6". Each answer is a constant
-in one file:
-
-| Where                            | What lives there                               |
+| Where                            | What                                           |
 | -------------------------------- | ---------------------------------------------- |
 | `src/ogre/engine/units.ts`       | Every counter face, and its `unconfirmed` flag |
 | `src/ogre/engine/missiles.ts`    | `CRUISE_MISSILE` — §10                         |
 | `src/ogre/engine/concealment.ts` | `MINEFIELD` — 13.04                            |
 | `src/ogre/engine/engineering.ts` | `SUPERHEAVY_SHEET`, `SUPERHEAVY_GUN`, `BRIDGE` |
 | `src/ogre/scenarios/custom.ts`   | `HIDDEN_LIMITS` — the builder's caps           |
-
-A corrected number also means clearing that statistic from the counter's
-`unconfirmed` list and replacing "placeholder" in its `note` with the citation,
-so the audit in `docs/OGRE-RULES-MAPPING.md` shrinks as the answers come in.

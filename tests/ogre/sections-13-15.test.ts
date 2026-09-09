@@ -15,6 +15,7 @@ import { defenseOf, movementAllowance, printedAttack } from '../../src/ogre/engi
 import {
   SUPERHEAVY_SHEET,
   bridgeStands,
+  superheavyMove,
   engineerTasks,
   entrenchedAt,
   sheetOf,
@@ -76,22 +77,78 @@ describe('the Superheavy on its record sheet (13.07)', () => {
     expect(sheetOf(on.state, on.state.units[on.shvy]!)).toEqual(SUPERHEAVY_SHEET);
   });
 
-  it('loses a component to an X rather than the counter', () => {
-    const { state, shvy } = board(true);
-    const attackers = Object.values(state.units)
-      .filter((u) => u.owner === A)
-      .map((u) => ({ unit: u.id }));
-    const next = run(state, {
-      type: 'attack',
-      by: A,
-      attackers,
-      target: { kind: 'unit', unit: shvy },
-    });
-    const u = next.units[shvy]!;
-    expect(onBoard(u)).toBe(true);
-    const sheet = sheetOf(next, u)!;
-    expect(sheet.guns + sheet.ap + sheet.treads).toBe(6);
-    expect(next.log.some((e) => /Superheavy Tank loses/.test(e.text))).toBe(true);
+  it('takes a component or treads on an X, by the printed die, rather than the counter', () => {
+    // The X die is rolled after the CRT die, so walk seeds until each branch
+    // of 13.07's table has been seen at least once.
+    const attackersOf = (state: GameState) =>
+      Object.values(state.units)
+        .filter((u) => u.owner === A)
+        .map((u) => ({ unit: u.id }));
+    let sawGunLoss = false;
+    let sawTreadLoss = false;
+    let sawWreck = false;
+    for (let seed = 1; seed <= 80; seed++) {
+      const { state, shvy } = board(true);
+      const out = applyCommand(
+        { ...state, rng: { seed } },
+        {
+          type: 'attack',
+          by: A,
+          attackers: attackersOf(state),
+          target: { kind: 'unit', unit: shvy },
+        },
+        map,
+      );
+      const u = out.state.units[shvy]!;
+      if (!onBoard(u)) {
+        sawWreck = true;
+        continue;
+      }
+      const sheet = sheetOf(out.state, u)!;
+      if (sheet.guns < SUPERHEAVY_SHEET.guns) {
+        // "One main gun and one AP gun are lost. Unit is disabled."
+        expect(sheet.ap).toBe(SUPERHEAVY_SHEET.ap - 1);
+        expect(u.kind === 'unit' && u.disabled).not.toBe('none');
+        sawGunLoss = true;
+      } else if (sheet.treads < SUPERHEAVY_SHEET.treads) {
+        expect(u.kind === 'unit' && u.disabled).not.toBe('none');
+        sawTreadLoss = true;
+      }
+    }
+    expect(sawGunLoss).toBe(true);
+    expect(sawTreadLoss).toBe(true);
+    expect(sawWreck).toBe(true);
+  });
+
+  it('is disabled by a D, and a second D while it is down does nothing more', () => {
+    const built = board(true);
+    const shvy = built.shvy;
+    const u = built.state.units[shvy]!;
+    if (u.kind !== 'unit') throw new Error('not a unit');
+    const down: GameState = {
+      ...built.state,
+      units: {
+        ...built.state.units,
+        [shvy]: { ...u, sheet: { ...SUPERHEAVY_SHEET, disabled: true } },
+      },
+    };
+    const attackers = Object.values(down.units)
+      .filter((x) => x.owner === A)
+      .map((x) => ({ unit: x.id }));
+    // Every seed that produces a D leaves the sheet exactly as it was.
+    for (let seed = 1; seed <= 40; seed++) {
+      const out = applyCommand(
+        { ...down, rng: { seed } },
+        { type: 'attack', by: A, attackers, target: { kind: 'unit', unit: shvy } },
+        map,
+      );
+      if (out.state.log.some((e) => /already down/.test(e.text))) {
+        const after = out.state.units[shvy]!;
+        expect(sheetOf(out.state, after)).toEqual({ ...SUPERHEAVY_SHEET, disabled: true });
+        return;
+      }
+    }
+    throw new Error('no D result in 40 seeds');
   });
 
   it('shoots with the guns it has left and moves on the tread units it has left', () => {
@@ -102,12 +159,16 @@ describe('the Superheavy on its record sheet (13.07)', () => {
     if (u.kind !== 'unit') throw new Error('not a unit');
     state = {
       ...state,
-      units: { ...state.units, [shvy]: { ...u, sheet: { guns: 1, ap: 0, treads: 1 } } },
+      units: { ...state.units, [shvy]: { ...u, sheet: { guns: 1, ap: 0, treads: 4 } } },
     };
     const worn = state.units[shvy]!;
     if (worn.kind !== 'unit') throw new Error('not a unit');
+    // One cannon of the printed two: "2 CANNONS ATK 3".
     expect(printedAttack(worn)).toBe(3);
+    // Four tread units of eighteen: the bottom band of the printed move track.
     expect(movementAllowance(worn, 'movement', state.options)).toBe(1);
+    expect(superheavyMove(SUPERHEAVY_SHEET.treads)).toBe(3);
+    expect(superheavyMove(0)).toBe(0);
     // No antipersonnel weapons left: it can no longer walk through infantry.
     const inf = put(state, A, 'INF', at(7, 6), 3);
     const step = stepInfo(inf.state, map, worn, at(6, 6), at(7, 6));
@@ -124,7 +185,8 @@ describe('the Superheavy on its record sheet (13.07)', () => {
       ...state,
       units: { ...state.units, [shvy]: { ...u, sheet: { guns: 0, ap: 1, treads: 1 } } },
     };
-    // A D takes the last tread unit; that alone does not finish it.
+    // With both cannon already gone, a 1-2 on the X die finishes it, and so
+    // does a 5 (all treads) or a 6 (destroyed outright).
     const attackers = Object.values(state.units)
       .filter((x) => x.owner === A)
       .map((x) => ({ unit: x.id }));
@@ -139,7 +201,13 @@ describe('the Superheavy on its record sheet (13.07)', () => {
       const after = out.state.units[shvy]!;
       if (!onBoard(after)) {
         hit = true;
-        expect(out.state.log.some((e) => /is a wreck/.test(e.text))).toBe(true);
+        // Either branch of the printed table finishes it: a 1-2 with both
+        // cannon already gone, a 5 that takes the last tread, or a 6.
+        expect(
+          out.state.log.some((e) =>
+            /is a wreck|nothing left to lose|destroyed outright/.test(e.text),
+          ),
+        ).toBe(true);
       }
     }
     expect(hit).toBe(true);
@@ -171,7 +239,7 @@ describe('bridges as targets (13.02)', () => {
       toward: at(6, 6),
     });
     expect(preview.ok).toBe(true);
-    expect(preview.defenseStrength).toBe(4);
+    expect(preview.defenseStrength).toBe(6);
     const next = run(
       s,
       {
@@ -260,14 +328,25 @@ describe('combat engineers (15)', () => {
     const ce = put(s, A, 'CE', at(5, 6), 2);
     s = ce.state;
     const inf = put(s, A, 'INF', at(5, 6), 3);
-    s = moveFor(inf.state, A);
+    // "Attempting a task counts as that squad's 'attack' for that turn, and is
+    // made during the Fire Phase." (15.03)
+    s = fireFor(inf.state, A);
     const tasks = engineerTasks(s, map, s.units[ce.id]!);
     expect(tasks.map((t) => t.task)).toContain('entrench');
+    // And not in the movement phase, where the work used to be done.
+    expect(
+      applyCommand(moveFor(s, A), { type: 'engineer', by: A, unit: ce.id, task: 'entrench' }, map)
+        .result.ok,
+    ).toBe(false);
     s = run(s, { type: 'engineer', by: A, unit: ce.id, task: 'entrench' });
     expect(entrenchedAt(s, at(5, 6))).toBe(true);
-    expect(s.units[ce.id]!.movementEnded).toBe(true);
-    expect(defenseOf(s, map, s.units[inf.id]!)).toBe(6); // 3 squads, doubled
-    // Not twice in the same phase, and not after moving.
+    // The task was their shot for the turn.
+    const worked = s.units[ce.id]!;
+    expect(worked.kind === 'unit' && worked.firedThisPhase).toBe(true);
+    // "Entrenchments double the defense strength of infantry ... in clear
+    // terrain" (15.03.5): three squads at D1, doubled.
+    expect(defenseOf(s, map, s.units[inf.id]!)).toBe(6);
+    // Not twice in the same phase.
     expect(
       applyCommand(s, { type: 'engineer', by: A, unit: ce.id, task: 'entrench' }, map).result.ok,
     ).toBe(false);
@@ -285,7 +364,7 @@ describe('combat engineers (15)', () => {
       ...s,
       mines: [{ id: 'mine-b-1', owner: B, pos: at(5, 6), revealed: true }],
     };
-    s = moveFor(s, A);
+    s = fireFor(s, A);
     const tasks = engineerTasks(s, m, s.units[ce.id]!).map((t) => t.task);
     expect(tasks).toContain('clearMines');
     expect(tasks).toContain('demolish');

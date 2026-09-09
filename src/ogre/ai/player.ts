@@ -274,7 +274,10 @@ const reachOf = (u: Unit): number => {
     );
   }
   const cls = unitClass(u.classId);
-  return cls.laser ? 8 : cls.range;
+  // A Laser reaches 30 hexes and a Laser Tower 60 (12.02, 12.03) — further
+  // than any board — but only down a clear line, which this does not check.
+  // Capping it keeps a laser from valuing every hex on the map equally.
+  return cls.laser ? Math.min(cls.range, 12) : cls.range;
 };
 
 const moveOf = (state: GameState, u: Unit): number =>

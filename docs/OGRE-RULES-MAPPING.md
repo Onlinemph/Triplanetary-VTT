@@ -372,22 +372,28 @@ record sheets carried in from the last battle (`assault.applyOgreRecord`).
 Each of these is a self-contained addition; none of them require changing the
 engine's shape.
 
-| Section                     | What is missing                                                                        | Notes                                                                                                                                                                                                                                                |
-| --------------------------- | -------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **9 – The train**           | The printed numbers, and the printed scenario                                          | The mechanics are in, flagged provisional, and an original scenario fields them (The Train); see above.                                                                                                                                              |
-| **10 – Cruise missiles**    | The printed flight, defence and blast numbers                                          | The mechanics are in, flagged provisional; see above.                                                                                                                                                                                                |
-| **12 – Lasers**             | The printed attack and defence values                                                  | The mechanics are in, flagged provisional; see above.                                                                                                                                                                                                |
-| **13 – Optional rules**     | The printed numbers for mines, camouflage, dummies, bridges and the Superheavy's sheet | Terrain damage (13.01), bridges (13.02), the hidden-information trio (13.04–13.06) and the Superheavy record sheet (13.07) are all in, the last five from their shape.                                                                               |
-| **14 – Advanced units**     | The printed LAD deployment sequence                                                    | Both units' statistics are in, and the Ninja's stealth; the drone rides a vehicle as one squad and sets up the turn it is set down (`engineering.ts`), from the rule's shape.                                                                        |
-| **15 – Combat engineering** | The Vulcan's tasks, and the printed engineering numbers                                | Entrenching, mine clearing and bridge demolition are in (`engineer`), from the rule's shape. The Vulcan's record sheet — the two manipulator arms at D2 (15.02) — and the unfinished-Ogre rule (15.02.2) are in; its repair and salvage work is not. |
+| Section                     | What is missing                                                                       | Notes                                                                                                                                                                                                           |
+| --------------------------- | ------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **9 – The train**           | The two-counter train, the M0/1–M6/7 speed markers, armed trains, collisions, cargo   | D3 and the X-only damage rule are the printed ones. An original scenario fields it (The Train); see above.                                                                                                      |
+| **10 – Cruise missiles**    | Immediate flight, the 2d6 interception table, the printed blast table                 | The launch, the crater, the road cut and fratricide are in; the flight model and the numbers are ours. The printed rule is simpler than what is here.                                                           |
+| **12 – Lasers**             | Structure Points, the damaged state, the fire restriction                             | Attack 2, ranges 30 and 60, the line of sight and the double strength when overrun are the printed ones (12.02, 12.03, 12.06, 12.09).                                                                           |
+| **13 – Optional rules**     | River bridges (13.02.1), the layer's choice of road mine, passive detection (13.04.1) | Terrain damage (13.01), bridges at D6 (13.02), mines (13.04), camouflage (13.05), dummies (13.06) and the Superheavy's record sheet (13.07) are all as printed.                                                 |
+| **14 – Advanced units**     | The LAD's three-turn deployment from a cargo pallet                                   | Both units' statistics are in, and the Ninja's stealth; the drone rides a vehicle as one squad and sets up the turn it is set down.                                                                             |
+| **15 – Combat engineering** | The dice pools, most of the task list, and the whole of the Vulcan's work             | Engineers work in the fire phase, spending their attack; entrenchments are as printed (15.03.5); a bridge in your own hex comes down automatically (13.02). The Vulcan's chassis is right and its jobs are not. |
 
 ---
 
-## The numbers still to confirm
+## What is still not the printed rule
 
-`docs/OGRE-UNCONFIRMED.md` is the checklist: every value set from a rule's
-shape rather than its text, what the code assumes now, and where the printed
-answer lives. It is written to be filled in against the physical game.
+The engine has been checked against **Ogre Sixth Edition, Revised:
+Battlefields**, rules version 6.3 (August 2019). Most of what this file used
+to call provisional is now quoted and cited at the implementation site.
+
+`docs/OGRE-UNCONFIRMED.md` is what is left: the handful of numbers that are on
+the counters rather than in the rules text, and the rules the engine knowingly
+models differently — cruise missile flight and interception, Lasers as
+Structure Point buildings, the train as two counters, the drone's three-turn
+deployment, the engineers' dice pools, and the whole of the Vulcan's work.
 
 ## Reporting a rules bug
 

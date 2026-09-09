@@ -24,6 +24,7 @@ import {
   HEAVY_WEAPON,
   MAX_SQUADS_PER_GROUP,
   UNIT_CLASSES,
+  superheavyMove,
   unitClass,
 } from './units.js';
 import {
@@ -340,9 +341,16 @@ export const defenseOf = (
   // (5.11.2)
   const treatAsInfantry = infantry && u.ridingOn == null;
   let multiplier = defenseMultiplier(terrain, treatAsInfantry);
-  // Entrenched by combat engineers (15): infantry there defend as in forest.
+  // "Entrenchments double the defense strength of infantry within the
+  // entrenchment in clear terrain, and triple the defense strength of infantry
+  // within the entrenchment in forest or rubble terrain (this replaces the
+  // benefit for the forest or rubble) ... Entrenchments in any terrain other
+  // than clear, forest, or rubble offer no benefit. Entrenchments have no
+  // effect on vehicles." (15.03.5)
   if (treatAsInfantry && (state.entrenched ?? []).includes(key(where))) {
-    multiplier = Math.max(multiplier, 2);
+    const ground = baseTerrain(terrain);
+    if (ground === 'clear') multiplier = 2;
+    else if (ground === 'forest' || ground === 'rubble') multiplier = 3;
   }
   return base * multiplier;
 };
@@ -440,10 +448,11 @@ export const movementAllowance = (
   if (u.stuck || u.disabled !== 'none') return 0;
   const cls = unitClass(u.classId);
   if (options?.noHover && cls.mobility === 'gev') return 0;
-  // A Superheavy on its record sheet (13.07) moves on the tread units it has left.
+  // A Superheavy on its record sheet (13.07) moves on the move track printed
+  // against its tread units: 3, then 2, 1, 0 as they are shot away.
   if (u.sheet && phase === 'movement') {
-    const treads = Math.min(cls.move, u.sheet.treads);
-    return treads > 0 ? treads + gravityBonus : 0;
+    const move = superheavyMove(u.sheet.treads);
+    return move > 0 ? move + gravityBonus : 0;
   }
   // The train runs at its speed marker, not a printed allowance (9.02).
   if (cls.mobility === 'rail') return phase === 'gevMovement' ? 0 : (u.trainSpeed ?? 0);

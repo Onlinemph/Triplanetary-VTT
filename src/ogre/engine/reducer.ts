@@ -60,7 +60,7 @@ import {
   mineStopOn,
   revealAt,
   revealUnit,
-  spotAdjacent,
+  revealOnMove,
   tripMinefield,
 } from './concealment.js';
 import { resolveRam } from './ram.js';
@@ -351,9 +351,10 @@ const doMove = (
   const walked = stop >= 0 ? path.slice(0, stop + 1) : path;
   const { state: moved, plan } = applyMove(state, map, unitId, walked);
   if (!plan.ok) return { state, result: fail(plan.reason ?? 'illegal move') };
-  // Moving does not by itself turn a counter face up (13.05): what does is
-  // ending the phase next to an enemy, which `advancePhase` asks about.
-  let next = moved;
+  // "As soon as any camouflaged unit moves ... or as soon as an enemy unit
+  // moves through ... its hex, the ? marker is replaced by the real unit."
+  // (13.05)
+  let next = revealOnMove(moved, unitId, walked);
   if (stop >= 0) {
     next = updateAnyUnit(next, unitId, () => ({ movementEnded: true }));
     next = tripMinefield(next, map, unitId);
@@ -655,7 +656,7 @@ export const advancePhase = (state: GameState, map: GameMap): GameState => {
 
     case 'movement': {
       // Step 3 of the sequence happens here, before anybody shoots.
-      const settled = spotAdjacent(resolvePendingHazards(state, player), player);
+      const settled = resolvePendingHazards(state, player);
       // Cruise missiles still in the air take their next leg as the fire
       // phase opens (10.03), before any new launch.
       return flyMissiles({ ...settled, phase: 'fire' }, map, player);
@@ -665,7 +666,7 @@ export const advancePhase = (state: GameState, map: GameMap): GameState => {
       return beginMovementPhase({ ...state, phase: 'gevMovement' }, map, player, 'gevMovement');
 
     case 'gevMovement': {
-      const settled = spotAdjacent(resolvePendingHazards(state, player), player);
+      const settled = resolvePendingHazards(state, player);
       return startNextPlayerTurn(settled, map);
     }
   }

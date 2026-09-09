@@ -254,6 +254,11 @@ export const overrunStrength = (u: Unit, ref: AttackerRef): number => {
       // A command post has no attack strength anywhere else in the game.
       strength = 1;
       doubled = false;
+    } else if (cls.laser) {
+      // "A Laser being overrun fires at double strength (4), because of the
+      // close range." (12.09)
+      strength = cls.attack;
+      doubled = true;
     } else if (ref.antipersonnel) {
       strength = cls.ap ?? 0;
       doubled = true;
