@@ -25,6 +25,7 @@ import {
   MAX_SQUADS_PER_GROUP,
   UNIT_CLASSES,
   isMarine,
+  trainTopSpeed,
   superheavyMove,
   unitClass,
 } from './units.js';
@@ -364,6 +365,12 @@ export const defenseOf = (
   // defence is unaffected by water (7.14.4).
   if (isMarine(u.classId) && baseTerrain(terrain) === 'water') base *= 2;
 
+  // "If a train counter is in a town hex, its defense strength is doubled.
+  // Other terrain does not affect the train's defense." (9.03.2)
+  if (cls.mobility === 'rail') {
+    return baseTerrain(terrain) === 'town' ? base * 2 : base;
+  }
+
   // "Infantry riding in or on a vehicle receive the terrain defensive bonus
   // that applies to the vehicle, if any, and not the usual bonus for infantry."
   // (5.11.2)
@@ -513,7 +520,12 @@ export const movementAllowance = (
     return move > 0 ? move + gravityBonus : 0;
   }
   // The train runs at its speed marker, not a printed allowance (9.02).
-  if (cls.mobility === 'rail') return phase === 'gevMovement' ? 0 : (u.trainSpeed ?? 0);
+  // "M4/5, for instance, means that the train will move forward either 4 or 5
+  // hexes (as the owning player chooses)." (9.02) The allowance is the faster
+  // reading; `planPath` holds it to the slower one as a minimum.
+  if (cls.mobility === 'rail') {
+    return phase === 'gevMovement' ? 0 : trainTopSpeed(u.trainSpeed ?? 0);
+  }
   if (phase === 'gevMovement') return cls.secondMove ?? 0;
   return cls.move > 0 ? cls.move + gravityBonus : 0;
 };

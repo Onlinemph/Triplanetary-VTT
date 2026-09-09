@@ -633,7 +633,18 @@ export const superheavyMove = (treads: number): number => {
   return 0;
 };
 
-export const TRAIN_MAX_SPEED = 4;
+/**
+ * The train's speed markers (9.02), by the lower number of each pair.
+ *
+ * "There are four markers available per train: M0/1, M2/3, M4/5, and M6/7.
+ * M4/5, for instance, means that the train will move forward either 4 or 5
+ * hexes (as the owning player chooses)." So a marker is stored as its lower
+ * number — 0, 2, 4 or 6 — and the train runs that far or one hex further.
+ */
+export const TRAIN_MARKERS: readonly number[] = [0, 2, 4, 6];
+export const TRAIN_MAX_SPEED = 6;
+/** A marker's faster reading: "either 4 or 5 hexes". */
+export const trainTopSpeed = (marker: number): number => marker + 1;
 
 /** A unit that fires along a line of sight rather than at a printed range. */
 export const isLaserClass = (id: UnitClassId): boolean => UNIT_CLASSES[id].laser !== undefined;

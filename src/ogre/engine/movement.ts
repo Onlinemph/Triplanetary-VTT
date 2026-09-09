@@ -21,6 +21,8 @@ import {
 } from './map.js';
 import { rollDie } from './rng.js';
 import { type Route, entryCost, gevWaterlineStops, sideCrossing } from './terrain.js';
+import { oddsFor, resolve } from './crt.js';
+import { applyDamageToUnit } from './combat.js';
 import { unitClass } from './units.js';
 import {
   type ConventionalUnit,
@@ -37,6 +39,8 @@ import {
 } from './types.js';
 import {
   apRemaining,
+  defenseOf,
+  destroyUnit,
   log,
   movementAllowance,
   reduceSquad,
@@ -85,6 +89,8 @@ export const wouldOverstack = (
   mover: Unit,
   carriedSquads = 0,
 ): boolean => {
+  // "The train does not count against stacking limits." (9.02.3)
+  if (mover.kind === 'unit' && unitClass(mover.classId).mobility === 'rail') return false;
   const own =
     mover.kind === 'unit' && unitClass(mover.classId).kind === 'infantry'
       ? mover.squads / 3
@@ -102,6 +108,10 @@ export interface StepInfo {
   readonly ok: boolean;
   readonly cost: number;
   readonly reason?: string;
+  /** The train ran onto cut track and is lost with the step (9.02.4). */
+  readonly derails?: boolean;
+  /** The train ran into units standing on the track (9.06). */
+  readonly collides?: boolean;
   /** The step is along a road or railroad link (2.03.1), so terrain is ignored. */
   readonly onRoute: boolean;
   /** The road bonus is available for this kind of unit on this kind of route (5.07.3). */
@@ -175,8 +185,23 @@ export const stepInfo = (
   if (toTerrain === 'crater') return deny('craters are impassable');
 
   // "The train moves only along railroad hexes" (9.01): every step is a rail
-  // link, and a cut in the line stops it dead.
-  if (mobility === 'rail' && route !== 'rail') return deny('the train keeps to the rails');
+  // link. Where the rails are there but cut, it does not stop — "If the train
+  // moves into a hex where the rails are cut, it is destroyed" (9.02.4).
+  if (mobility === 'rail' && route !== 'rail') {
+    const laid = routeBetween(map, from, to);
+    if (laid !== 'rail') return deny('the train keeps to the rails');
+    return {
+      ok: true,
+      cost: 1,
+      onRoute: true,
+      bonusEligible: false,
+      endsMovement: true,
+      hazard: null,
+      requiresPhaseStart: false,
+      reducesInfantry: false,
+      derails: true,
+    };
+  }
 
   const crossing = sideCrossing(side, mobility, route !== undefined);
   if (!crossing.allowed) return deny(crossing.reason ?? 'that hexside is impassable');
@@ -200,6 +225,21 @@ export const stepInfo = (
         // On its record sheet (13.07) the Superheavy needs an AP weapon left.
         (unit.kind === 'unit' && unit.classId === 'SHVY' && (unit.sheet?.ap ?? 1) > 0));
 
+    if (mobility === 'rail') {
+      // "If the train moves onto a unit on the track ..." (9.06) — it does not
+      // stop and it does not go round; something gives.
+      return {
+        ok: true,
+        cost: 1,
+        onRoute: true,
+        bonusEligible: false,
+        endsMovement: true,
+        hazard: null,
+        requiresPhaseStart: false,
+        reducesInfantry: false,
+        collides: true,
+      };
+    }
     if (canWalkThroughInfantry) {
       // 6.06: not a ram, and it does not count against the ramming limit.
       reducesInfantry = true;
@@ -254,6 +294,12 @@ export interface PathPlan {
   /** Allowance actually available, including any road bonus earned (5.07.1). */
   readonly budget: number;
   readonly steps: readonly StepInfo[];
+  /**
+   * A legal path that is shorter than the train's marker (9.02): physically
+   * fine, but not a distance the train may stop at. The search walks through
+   * such a hex without offering it, and the reducer refuses it.
+   */
+  readonly tooShort?: boolean;
   /** True when the unit walks off the board on the last step (5.12). */
   readonly exits: boolean;
   readonly endsMovement: boolean;
@@ -335,6 +381,16 @@ export const planPath = (
   const budget = allowance + (onRoute && bonusEligible ? 1 : 0);
   const spent = unit.moveUsed + cost;
 
+  // "the train must move one of the two distances shown by the counter on it
+  // at the beginning of the turn" (9.02) — so it may not creep. Flagged rather
+  // than refused here, so the reachability search can walk on past the hex.
+  let tooShort = false;
+  if (mobilityOf(unit) === 'rail' && !exits) {
+    const marker = unit.kind === 'unit' ? (unit.trainSpeed ?? 0) : 0;
+    const derailed = steps.some((st) => st.derails === true);
+    tooShort = !derailed && marker > 0 && spent < marker;
+  }
+
   // "Regardless of other terrain effects, any unit which is capable of moving
   // at all may move one hex per turn, as long as it is not moving into totally
   // prohibited terrain." (5.09)
@@ -360,6 +416,7 @@ export const planPath = (
     exits,
     endsMovement: ends,
     stillOnRoute: onRoute,
+    ...(tooShort ? { tooShort: true } : {}),
   };
 };
 
@@ -389,6 +446,17 @@ export const applyMove = (
 
   const plan = planPath(state, map, unit, path);
   if (!plan.ok) return { state, plan };
+  if (plan.tooShort === true) {
+    const marker = unit.kind === 'unit' ? (unit.trainSpeed ?? 0) : 0;
+    return {
+      state,
+      plan: {
+        ...plan,
+        ok: false,
+        reason: `the train runs ${String(marker)} or ${String(marker + 1)} hexes, not ${String(plan.totalCost)}`,
+      },
+    };
+  }
 
   let next = state;
   const dest = path[path.length - 1]!;
@@ -410,6 +478,32 @@ export const applyMove = (
   }
 
   const hazard = plan.steps.reduce<null | 'disable' | 'stuck'>((acc, s) => s.hazard ?? acc, null);
+
+  // "The owner of any unit in a rail hex may declare that unit to be on the
+  // track ... If the train moves onto a unit on the track" (9.06), the train
+  // and whatever is standing there settle it between them.
+  const hitAt = plan.steps.findIndex((s) => s.collides === true);
+  if (hitAt >= 0) {
+    return { state: collide(next, map, unitId, path, hitAt), plan };
+  }
+
+  // "If the train moves into a hex where the rails are cut, it is destroyed."
+  // (9.02.4) It gets there — the wreck is in the hex — and then it is gone.
+  const derailAt = plan.steps.findIndex((s) => s.derails === true);
+  if (derailAt >= 0) {
+    const wreckAt = path[derailAt]!;
+    next = updateAnyUnit(next, unitId, () => ({
+      pos: wreckAt,
+      moveUsed: unit.moveUsed + derailAt + 1,
+      movementEnded: true,
+    }));
+    for (const rider of passengersOf(next, unitId)) {
+      next = updateAnyUnit(next, rider.id, () => ({ pos: wreckAt }));
+    }
+    next = log(next, 'bad', `${unitName(unit)} runs onto cut track at ${key(wreckAt)}.`, [wreckAt]);
+    next = destroyUnit(next, unitId, 'derailed on cut track');
+    return { state: next, plan };
+  }
 
   if (plan.exits) {
     const edge = exitEdge(map, unit.pos, dest);
@@ -456,12 +550,114 @@ const exitEdge = (map: GameMap, from: Hex, to: Hex): 'north' | 'south' | 'east' 
 // Reachability, for the interface
 // ---------------------------------------------------------------------------
 
+/**
+ * A train meeting units standing on the line (9.06).
+ *
+ * "(a) If the enemy units are armed, even the weakest armed unit would be able
+ * to cut the tracks in front of the train as it approached. The train is
+ * destroyed. If the train is moving at speed 5 or better, the wrecked train
+ * may still strike the enemy units. Roll a 1-1 attack on every unit except
+ * infantry. Otherwise, the enemy units are unaffected. (b) If the enemy units
+ * are unarmed, the train collides with them. Roll a single attack on the train
+ * with an attack strength equal to the combined Size of the enemy units. The
+ * enemy units are destroyed."
+ */
+const collide = (
+  state: GameState,
+  map: GameMap,
+  unitId: UnitId,
+  path: readonly Hex[],
+  at: number,
+): GameState => {
+  const train = state.units[unitId];
+  const where = path[at]!;
+  if (!train) return state;
+  const standing = unitsAt(state, where).filter((u) => u.owner !== train.owner);
+  const armed = standing.some((u) => u.kind === 'unit' && unitClass(u.classId).attack > 0);
+  const marker = train.kind === 'unit' ? (train.trainSpeed ?? 0) : 0;
+  let next = state;
+
+  if (armed) {
+    next = log(
+      next,
+      'bad',
+      `${unitName(train)} runs into the guns at ${key(where)} and the track goes with it.`,
+      [where],
+    );
+    // "If the train is moving at speed 5 or better, the wrecked train may
+    // still strike the enemy units."
+    if (marker + 1 >= 5) {
+      for (const victim of standing) {
+        if (victim.kind === 'unit' && unitClass(victim.classId).kind === 'infantry') continue;
+        next = trainWreckAttack(next, map, victim.id, 1, train.owner);
+      }
+    }
+    return destroyUnit(next, unitId, 'wrecked on the guns', standing[0]?.owner);
+  }
+
+  // Unarmed: the train goes through them, and pays for it.
+  const combinedSize = standing.reduce(
+    (n, u) => n + (u.kind === 'unit' ? unitClass(u.classId).size : 0),
+    0,
+  );
+  for (const victim of standing) {
+    next = destroyUnit(next, victim.id, 'run down by the train', train.owner);
+  }
+  next = log(
+    next,
+    'warn',
+    `${unitName(train)} ploughs through ${key(where)} — a strength ${String(combinedSize)} collision.`,
+    [where],
+  );
+  const hitBy = standing[0]?.owner;
+  if (combinedSize > 0 && hitBy !== undefined) {
+    next = trainWreckAttack(next, map, unitId, combinedSize, hitBy);
+  }
+  const alive = next.units[unitId];
+  if (alive && onBoard(alive)) {
+    next = updateAnyUnit(next, unitId, () => ({ pos: where, movementEnded: true }));
+    for (const rider of passengersOf(next, unitId)) {
+      next = updateAnyUnit(next, rider.id, () => ({ pos: where }));
+    }
+  }
+  return next;
+};
+
+/** One collision attack, resolved on the Combat Results Table like any other. */
+const trainWreckAttack = (
+  state: GameState,
+  map: GameMap,
+  victimId: UnitId,
+  strength: number,
+  credit: PlayerId,
+): GameState => {
+  const victim = state.units[victimId];
+  if (!victim || !onBoard(victim)) return state;
+  const odds = oddsFor(strength, defenseOf(state, map, victim));
+  if (odds.kind === 'none') return state;
+  const die = rollDie(state.rng);
+  let next: GameState = { ...state, rng: die.state };
+  const result = odds.kind === 'auto' ? 'X' : resolve(odds, die.value, 'normal');
+  if (result === 'NE') return next;
+  next = log(
+    next,
+    'bad',
+    `The collision ${result === 'X' ? 'wrecks' : 'shakes'} ${unitName(victim)}.`,
+    [victim.pos],
+  );
+  return applyDamageToUnit(next, victimId, result, credit);
+};
+
 export interface Reach {
   readonly hex: Hex;
   readonly cost: number;
   readonly path: readonly Hex[];
   readonly endsMovement: boolean;
   readonly hazard: null | 'disable' | 'stuck';
+  /** A hex a train may run through but not stop in (9.02). */
+  readonly tooShort?: boolean;
+  /** Entering means a collision on the line (9.06), not an ordinary move. */
+  readonly collides?: boolean;
 }
 
 /**
@@ -496,12 +692,16 @@ export const reachable = (state: GameState, map: GameMap, unit: Unit): Reach[] =
       const plan = planPath(state, map, unit, path);
       if (!plan.ok) continue;
 
+      // A train may pass through a hex it is not allowed to stop in (9.02):
+      // keep searching from it, but do not offer it as a destination.
       const entry: Reach = {
         hex: n,
         cost: here.cost + info.cost,
         path,
         endsMovement: here.endsMovement || info.endsMovement,
         hazard: info.hazard ?? here.hazard,
+        ...(plan.tooShort === true ? { tooShort: true } : {}),
+        ...(info.collides === true ? { collides: true } : {}),
       };
       const prev = best.get(key(n));
       if (!prev || entry.cost < prev.cost) {
@@ -512,7 +712,8 @@ export const reachable = (state: GameState, map: GameMap, unit: Unit): Reach[] =
   }
 
   best.delete(key(unit.pos));
-  return [...best.values()];
+  // A hex the mover may pass through but not stop in is not a destination.
+  return [...best.values()].filter((r) => r.tooShort !== true);
 };
 
 // ---------------------------------------------------------------------------

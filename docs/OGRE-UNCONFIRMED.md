@@ -59,21 +59,20 @@ What is missing is SP damage, the damaged state, and the fire restriction.
 
 ### The train is one counter, and should be two (§9)
 
-**Printed:** a train is two counters and two hexes long, with a separate speed
-marker. The markers are **ranges** — M0/1, M2/3, M4/5, M6/7 — so a train moves
-one of two distances each turn and tops out at 7, not 4. Speed changes by one
-marker at the **end** of each turn. Destroying the rear counter leaves the
-front running; destroying the front of a moving train destroys the whole
-thing. A train that enters a hex where the rails are cut is destroyed. Its
-defence is doubled in a town. It does not count against stacking. Each half
-carries 12 "size points" of cargo, and only units of Size 3 or below.
+**Printed:** a train is two counters and two hexes long. Destroying the rear
+counter leaves the front running; destroying the front of a moving train
+destroys the whole thing. Each half carries 12 "size points" of cargo, and
+only units of Size 3 or below. It always goes forward unless it is on the
+M0/1 marker, which is also the only marker it may reverse on.
 
-**Here:** one counter, a single-number speed marker capped at 4, changed at
-the start of movement, and a squad-count capacity. Its defence of 3 and its
-X-only damage rule are right.
+**Here:** one counter, and cargo counted in squads. Everything else about the
+train is now the printed rule: the M0/1 to M6/7 markers with their two
+distances, the marker changing at the end of the turn, destruction on cut
+track, the collision rules of 9.06, doubled defence in a town, and freedom
+from stacking limits.
 
-**To close it:** the front/rear pair is the real work; the speed markers, the
-top speed, the cut-rail destruction and the town doubling are each small.
+**Also not in:** armed trains (9.03.1), and reinforcements carried aboard
+(9.07).
 
 ### The drone does not deploy (§14.01)
 
@@ -120,8 +119,6 @@ revetment, so the section's general 6 stands in.
 - **13.04 Road mines.** A mine records whether it is on the road, and the
   engine keeps that flag, but every mine laid in a road hex is treated as a
   road mine. The rules let the layer choose.
-- **9.03.1 Armed trains**, **9.06 collisions**, **9.07 reinforcements from the
-  train**: none are in.
 - **12.05** A Laser can try to intercept an Ogre missile on a 10+.
 
 ---
