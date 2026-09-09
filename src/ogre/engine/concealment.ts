@@ -53,6 +53,7 @@ import {
   type Unit,
   type UnitId,
   isOgre,
+  isPallet,
   onBoard,
   setupActor,
   unitsAt,
@@ -129,6 +130,7 @@ export const layMinefield = (
   map: GameMap,
   by: PlayerId,
   at: Hex,
+  onRoad?: boolean,
 ): { state: GameState; ok: boolean; reason?: string } => {
   if (!state.setup) return { state, ok: false, reason: 'minefields are laid while setting up' };
   if (setupActor(state) !== by) return { state, ok: false, reason: 'it is not your setup' };
@@ -147,10 +149,15 @@ export const layMinefield = (
   // time." (13.04) — so no one-to-a-hex rule.
 
   const id = `mine-${by}-${minesOf(state).length + 1}`;
-  // "recording the hex numbers and whether they are on the road" (13.04): a
-  // mine laid on a road hex is a road mine, and goes off under anything that
-  // uses the road.
-  const mine: Minefield = { id, owner: by, pos: at, revealed: false, onRoad: isRouteHex(map, at) };
+  // "recording the hex numbers and whether they are on the road" (13.04): the
+  // layer's choice, and only a choice where there is a road to be on.
+  const mine: Minefield = {
+    id,
+    owner: by,
+    pos: at,
+    revealed: false,
+    onRoad: isRouteHex(map, at) && onRoad !== false,
+  };
   const next: GameState = {
     ...state,
     mines: [...minesOf(state), mine],
@@ -171,17 +178,30 @@ export const plantMinefield = (
   map: GameMap,
   by: PlayerId,
   at: Hex,
+  onRoad?: boolean,
 ): GameState => {
   const left = minefieldsLeft(state, by);
   if (left <= 0) return state;
   const id = `mine-${by}-${minesOf(state).length + 1}`;
-  const mine: Minefield = { id, owner: by, pos: at, revealed: false, onRoad: isRouteHex(map, at) };
+  const mine: Minefield = {
+    id,
+    owner: by,
+    pos: at,
+    revealed: false,
+    onRoad: isRouteHex(map, at) && onRoad !== false,
+  };
   return {
     ...state,
     mines: [...minesOf(state), mine],
     minesLeft: { ...(state.minesLeft ?? {}), [by]: left - 1 },
   };
 };
+
+/** Turn a minefield face up: something has found it (13.04, 13.04.1). */
+export const revealMinefield = (state: GameState, at: Hex): GameState => ({
+  ...state,
+  mines: minesOf(state).map((m) => (eq(m.pos, at) ? { ...m, revealed: true } : m)),
+});
 
 /** Take a minefield off the map: cleared by engineers (15), or for a test. */
 export const removeMinefield = (state: GameState, id: string): GameState => ({
@@ -206,6 +226,30 @@ export const mineStopOn = (state: GameState, mover: Unit, path: readonly Hex[]):
     if (m && m.owner !== mover.owner) return i;
   }
   return -1;
+};
+
+/**
+ * The first hex on a path a detecting cybertank can see a mine in, and would
+ * rather be asked about (13.04.1).
+ *
+ * "Whenever a qualifying Ogre is about to enter a hex with a mine or a hidden
+ * unit, the opposing player must acknowledge the presence of a mine (or hidden
+ * unit) within the hex. The Ogre may then choose to stay still, move
+ * elsewhere, or continue into the hex."
+ *
+ * The engine asks the question by refusing the order and naming the hex: the
+ * mine is then on the table, and the next order is the Ogre's choice. Entering
+ * a mine it has already been shown is the "voluntarily enters" case of 13.04.1,
+ * and goes off only on a 6.
+ */
+export const mineWarningOn = (state: GameState, mover: Unit, path: readonly Hex[]): Hex | null => {
+  if (!detectsMines(mover)) return null;
+  for (const h of path) {
+    const m = mineAt(state, h);
+    // Already shown to it: it is going in with its eyes open.
+    if (m && m.owner !== mover.owner && !m.revealed) return h;
+  }
+  return null;
 };
 
 /**
@@ -400,7 +444,10 @@ export const concealAll = (state: GameState): GameState => {
   let next = state;
   for (const u of Object.values(state.units)) {
     if (!onBoard(u)) continue;
-    if (isDummy(u) || (state.options.camouflage === true && canBeConcealed(u))) {
+    // "LADs still on a pallet can also be placed as part of a defensive setup.
+    // Small, stealthy, and powered down, they are very hard to detect." (14.01)
+    // That one needs no option turned on.
+    if (isPallet(u) || isDummy(u) || (state.options.camouflage === true && canBeConcealed(u))) {
       next = withUnit(next, { ...u, concealed: true } as Unit);
     }
   }

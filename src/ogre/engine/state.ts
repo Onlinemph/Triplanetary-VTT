@@ -22,9 +22,11 @@ import {
 import {
   type UnitClassId,
   HEAVY_WEAPON,
+  LASER_DAMAGED_AT,
   MAX_SQUADS_PER_GROUP,
   UNIT_CLASSES,
   isMarine,
+  TRAIN_GUN,
   trainTopSpeed,
   superheavyMove,
   unitClass,
@@ -52,6 +54,7 @@ import {
   DEFAULT_OPTIONS,
   activePlayer,
   isOgre,
+  isPallet,
 } from './types.js';
 
 // ---------------------------------------------------------------------------
@@ -135,6 +138,14 @@ export const makeUnit = (
   stuck: false,
   pendingHazard: null,
   ...freshMovementFields(pos),
+  // A Laser carries its Structure Points from the moment it is placed (12.01).
+  ...(UNIT_CLASSES[classId].structurePoints !== undefined
+    ? { structurePoints: UNIT_CLASSES[classId].structurePoints }
+    : {}),
+  // "It is considered a Size 1 unit when set up" (14.01): a drone a scenario
+  // puts on the board is emplaced and can fire. One that arrives as cargo is
+  // palletised on purpose — see `drone.palletised`.
+  ...(classId === 'LAD' ? { droneState: 'ready' as const } : {}),
   firedThisPhase: false,
   squadsFired: 0,
   heavyWeaponFired: false,
@@ -297,6 +308,46 @@ export const printedAttack = (u: ConventionalUnit): number => {
   return unitClass(u.classId).attack * (unitClass(u.classId).kind === 'infantry' ? u.squads : 1);
 };
 
+/** A Laser emplacement's Structure Points now: its own, or the class's full count. */
+export const structurePointsOf = (u: ConventionalUnit): number =>
+  u.structurePoints ?? unitClass(u.classId).structurePoints ?? 0;
+
+/** "reduced to 10 SP, it is 'damaged' ... can no longer fire" (12.07). */
+export const laserDamaged = (u: ConventionalUnit): boolean => {
+  const full = unitClass(u.classId).structurePoints;
+  return full !== undefined && structurePointsOf(u) <= LASER_DAMAGED_AT;
+};
+
+/**
+ * Remember that a Laser spent a shot while it was not its owner's turn.
+ *
+ * "If a Laser or Laser Tower did not fire at all during the preceding enemy
+ * turn, it may make one attack during its own fire phase." (12.06) A Laser's
+ * only chance to fire in the enemy's turn is interception — at a Cruise
+ * Missile (12.04) or an Ogre missile (12.05) — so the flag is set there and
+ * read by `canStillFire` one turn later.
+ */
+export const markFiredInEnemyTurn = (state: GameState, id: UnitId): GameState => {
+  const u = state.units[id];
+  if (!u || u.kind !== 'unit') return state;
+  if (unitClass(u.classId).laser === undefined) return state;
+  return withUnit(state, { ...u, firedInEnemyTurn: true });
+};
+
+/**
+ * Forget it again, at the end of the owner's own fire phase: from here on the
+ * "preceding enemy turn" is the one about to start.
+ */
+export const clearLaserWatch = (state: GameState, player: PlayerId): GameState => {
+  let next = state;
+  for (const u of Object.values(state.units)) {
+    if (u.owner !== player || u.kind !== 'unit') continue;
+    if (u.firedInEnemyTurn !== true) continue;
+    next = withUnit(next, { ...u, firedInEnemyTurn: false });
+  }
+  return next;
+};
+
 export const printedDefense = (u: ConventionalUnit): number =>
   unitClass(u.classId).defense * (unitClass(u.classId).kind === 'infantry' ? u.squads : 1);
 
@@ -345,6 +396,12 @@ export const defenseOf = (
     // ramming rules do their own arithmetic.
     return 0;
   }
+
+  // "A LAD on a pallet is treated as a D0 unit; it is destroyed by any attack.
+  // Additionally, LADs on a pallet that are being transported suffer spillover
+  // attacks at defense strength 0 if the transport vehicle is attacked."
+  // (14.01)
+  if (isPallet(u)) return 0;
 
   const cls = unitClass(u.classId);
   const infantry = cls.kind === 'infantry';
@@ -461,6 +518,13 @@ export const attackerStrength = (
     return OGRE_WEAPONS[w.kind].attack;
   }
   const cls = unitClass(u.classId);
+  // "one 4/2 gun on each of the train counters ... the train will have 8
+  // attacks, each with a strength of 4 and range of 2, per turn" (9.03.1). The
+  // guns fire separately, like squads, so `ref.squads` picks how many.
+  if (cls.mobility === 'rail' && (u.trainGuns ?? 0) > 0) {
+    const guns = Math.max(1, Math.min(u.trainGuns!, ref.squads ?? u.trainGuns!));
+    return TRAIN_GUN.attack * guns;
+  }
   if (ref.heavyWeapon) return HEAVY_WEAPON.attack;
   // "The Superheavy also has two antipersonnel weapons. These function exactly
   // like Ogre AP weapons" (3.01) — one attack of strength equal to the number
@@ -483,7 +547,9 @@ export const attackerRange = (u: Unit, ref: { weapon?: string; heavyWeapon?: boo
     return w ? OGRE_WEAPONS[w.kind].range : 0;
   }
   if (ref.heavyWeapon) return HEAVY_WEAPON.range;
-  return unitClass(u.classId).range;
+  const cls = unitClass(u.classId);
+  if (cls.mobility === 'rail' && (u.trainGuns ?? 0) > 0) return TRAIN_GUN.range;
+  return cls.range;
 };
 
 // ---------------------------------------------------------------------------
@@ -568,8 +634,14 @@ export const destroyUnit = (
   if (credit) next = addPoints(next, credit, victoryValue(u));
 
   for (const rider of Object.values(next.units)) {
-    if (rider.kind === 'unit' && !rider.destroyed && rider.ridingOn === id) {
+    if (rider.destroyed) continue;
+    // Cargo goes with its carrier: the Vulcan's hold "will survive as long as
+    // the Ogre does" (15.02.1), and no longer.
+    if (rider.kind === 'unit' && (rider.ridingOn === id || rider.stowedIn === id)) {
       next = destroyUnit(next, rider.id, `lost with the ${unitName(u)}`, credit);
+    } else if (rider.towedBy === id) {
+      // A tow rope is not a coffin: the hitch simply lets go (15.04.8).
+      next = withUnit(next, { ...rider, towedBy: undefined } as Unit);
     }
   }
   return next;

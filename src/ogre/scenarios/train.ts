@@ -27,6 +27,7 @@ import {
   onBoard,
 } from '../engine/types.js';
 import { createGame, log, makePlayer, makeUnit, withUnit } from '../engine/state.js';
+import { couple } from '../engine/train.js';
 import type { ScenarioBuildOptions, ScenarioDef } from './types.js';
 import {
   type Deployer,
@@ -116,17 +117,33 @@ const build = (map: GameMap, opts: ScenarioBuildOptions): GameState => {
   let rng = createRng(opts.seed ^ 0x7ae1);
   const d: Deployer = { state: base, serial: 1 };
 
-  // The train, at the west end of the line, with the infantry aboard.
+  // The train: two counters, two hexes of it, at the west end of the line
+  // (9.01). The front is the one that runs east; the rear follows it.
   const trainId = `${ESCORT_PLAYER}-train`;
-  const train: ConventionalUnit = {
-    ...makeUnit(trainId, ESCORT_PLAYER, 'TRAIN', westEnd),
+  const rearId = `${ESCORT_PLAYER}-train-rear`;
+  const rearHex = line[0]!;
+  const frontHex = line[1] ?? line[0]!;
+  const front: ConventionalUnit = {
+    ...makeUnit(trainId, ESCORT_PLAYER, 'TRAIN', frontHex),
     trainSpeed: OPENING_SPEED,
   };
-  d.state = withUnit(d.state, train);
+  d.state = withUnit(d.state, front);
+  d.state = withUnit(d.state, makeUnit(rearId, ESCORT_PLAYER, 'TRAIN', rearHex));
+  d.state = couple(d.state, trainId, rearId);
+
+  // The squads ride, split between the halves — 12 size points apiece (9.07).
+  let half = 0;
   for (const squads of infantryCounters(ABOARD)) {
+    const carrier = half++ % 2 === 0 ? trainId : rearId;
     const rider: ConventionalUnit = {
-      ...makeUnit(`${ESCORT_PLAYER}-inf-${d.serial++}`, ESCORT_PLAYER, 'INF', westEnd, squads),
-      ridingOn: trainId,
+      ...makeUnit(
+        `${ESCORT_PLAYER}-inf-${d.serial++}`,
+        ESCORT_PLAYER,
+        'INF',
+        d.state.units[carrier]!.pos,
+        squads,
+      ),
+      ridingOn: carrier,
     };
     d.state = withUnit(d.state, rider);
   }
@@ -173,14 +190,17 @@ const build = (map: GameMap, opts: ScenarioBuildOptions): GameState => {
         // counter it is that has to get there.
         exitEdge: 'east',
         exitSide: ESCORT_PLAYER,
-        exitUnits: [trainId],
+        // Either counter reaching the edge is the train getting away: the
+        // rear can be shot off and the front run on (9.03).
+        exitUnits: [trainId, rearId],
         escortValue: escortWorth,
         raiderValue: raiderWorth,
       },
     },
     'info',
-    `The train comes on at the west end of the line with ${ABOARD} squads aboard. It has ${TURN_LIMIT} turns to leave by the east edge.`,
-    [westEnd],
+    `The train comes on at the west end of the line — two counters and two hexes of it — with ` +
+      `${ABOARD} squads aboard. It has ${TURN_LIMIT} turns to leave by the east edge.`,
+    [westEnd, frontHex],
   );
   return withSetup(built, opts.setup, [RAIDER_PLAYER, ESCORT_PLAYER], {
     [RAIDER_PLAYER]: zone(eastHalf, 'the eastern half'),
@@ -189,10 +209,18 @@ const build = (map: GameMap, opts: ScenarioBuildOptions): GameState => {
 };
 
 const checkVictory = (state: GameState): VictoryState | null => {
-  const train = Object.values(state.units).find(
+  const counters = Object.values(state.units).filter(
     (u) => u.kind === 'unit' && u.classId === 'TRAIN' && u.owner === ESCORT_PLAYER,
   );
-  if (!train) return null;
+  const front = counters.find((u) => u.kind === 'unit' && u.trainHalf === 'front') ?? counters[0];
+  if (!front) return null;
+  // A train is the counters that are left: the rear can be shot off it and the
+  // front run on (9.03).
+  const train = {
+    ...front,
+    destroyed: counters.every((u) => u.destroyed),
+    offMap: counters.find((u) => !u.destroyed)?.offMap,
+  };
   const units = Object.values(state.units);
   const escortLeft = armourValue(units.filter((u) => u.owner === ESCORT_PLAYER && !u.destroyed));
   const raidersLeft = armourValue(units.filter((u) => u.owner === RAIDER_PLAYER && !u.destroyed));
@@ -255,14 +283,16 @@ export const TRAIN: ScenarioDef = {
     `The raiders have ${RAIDER_ARMOR} armour units and ${RAIDER_SQUADS} squads set up anywhere ` +
     'in the eastern half. The train wins by leaving the map at the east end of the line ' +
     `inside ${TURN_LIMIT} turns.\n\n` +
-    'The train moves only along the rails, at its speed marker — M0/1, M2/3, M4/5 or M6/7 — ' +
+    'The train is two counters and two hexes long (9.01). It moves only along the rails, at its ' +
+    'speed marker — M0/1, M2/3, M4/5 or M6/7 — ' +
     'and must run one of the two distances the marker shows. The marker changes by one step at ' +
     'the end of each turn, so a driver who sees trouble ahead has as many turns to brake as ' +
     'the marker has steps, and a train going too fast to stop short of a roadblock cannot move ' +
     'at all. Run onto cut track and it is destroyed; run into armed enemies standing on the ' +
     'line and they wreck it, though at speed 5 or better the wreck takes some of them with it. ' +
     'A "D" result does nothing to it and only an "X" derails it, and its defence doubles in a ' +
-    'town. It does not count against stacking.\n\n' +
+    'town. It does not count against stacking. Shoot the rear counter off and the front runs on; ' +
+    'destroy the front while it is moving and the whole train goes (9.03).\n\n' +
     'This scenario uses overrun combat rather than ramming, and the green map’s stacking.',
   victoryConditions: [
     'The train leaves by the east edge: escort victory — complete if half the escort’s value survives.',

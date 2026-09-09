@@ -13,9 +13,12 @@ import {
   isUnknown,
   mineAt,
   minefieldsLeft,
+  detectsMines,
   minesOf,
   redactOgreState,
+  tripMinefield,
 } from '../../src/ogre/engine/concealment.js';
+import { type GameMap, emptyBuilder, layRoute } from '../../src/ogre/engine/map.js';
 import { type GameState, activePlayer, onBoard, setupActor } from '../../src/ogre/engine/types.js';
 import { withUnit, makeUnit } from '../../src/ogre/engine/state.js';
 import { CUSTOM } from '../../src/ogre/scenarios/index.js';
@@ -176,6 +179,118 @@ describe('minefields (13.04)', () => {
     expect(
       minesOf(redactOgreState({ ...s, options: { ...s.options, minefields: 2 } }, B)),
     ).toHaveLength(2);
+  });
+
+  // "He places them in whatever hexes he wishes, recording the hex numbers and
+  // whether they are on the road." (13.04) The layer chooses: a road mine goes
+  // off under anything that uses the road, and a mine beside the road needs a
+  // 6 but survives a column driving past.
+  it('lets the layer say whether a mine in a road hex is on the road', () => {
+    const b = emptyBuilder();
+    layRoute(b, [at(7, 6), at(8, 6), at(9, 6)], 'road');
+    const roadMap: GameMap = { ...map, routes: b.routes };
+    const base: GameState = {
+      ...newGame({ seed: 5 }),
+      setup: {
+        order: [B, A],
+        index: 0,
+        zones: { [B]: { hexes: [key(at(8, 6))], label: 'the east' } },
+      },
+      minesLeft: { [B]: 2 },
+    };
+
+    // No choice given: a mine in a road hex is a road mine.
+    const onIt = applyCommand(base, { type: 'layMinefield', by: B, at: at(8, 6) }, roadMap);
+    expect(mineAt(onIt.state, at(8, 6))?.onRoad).toBe(true);
+
+    // Said otherwise: it lies beside the road and takes its chances on a 6.
+    const beside = applyCommand(
+      base,
+      { type: 'layMinefield', by: B, at: at(8, 6), onRoad: false },
+      roadMap,
+    );
+    expect(mineAt(beside.state, at(8, 6))?.onRoad).toBe(false);
+
+    // Off the road there is nothing to choose either way.
+    const nowhere = applyCommand(
+      {
+        ...base,
+        setup: { ...base.setup!, zones: { [B]: { hexes: [key(at(8, 7))], label: 'e' } } },
+      },
+      { type: 'layMinefield', by: B, at: at(8, 7) },
+      roadMap,
+    );
+    expect(mineAt(nowhere.state, at(8, 7))?.onRoad).toBe(false);
+  });
+
+  // "Whenever a qualifying Ogre is about to enter a hex with a mine ... the
+  // opposing player must acknowledge the presence of a mine ... The Ogre may
+  // then choose to stay still, move elsewhere, or continue into the hex."
+  // (13.04.1)
+  it('shows a detecting cybertank the mine and lets it decide', () => {
+    let s = newGame({ seed: 3 });
+    const mk = putOgre(s, A, 'MK5', at(3, 8));
+    s = mk.state;
+    s = withMine(s, B, at(4, 8));
+    s = moveFor(s, A);
+    expect(detectsMines(s.units[mk.id]!)).toBe(true);
+
+    // The first order is refused, and the minefield is on the table.
+    const warned = applyCommand(
+      s,
+      { type: 'moveUnit', by: A, unit: mk.id, path: [at(4, 8), at(5, 8)] },
+      map,
+    );
+    expect(warned.result.ok).toBe(false);
+    expect(warned.result.ok ? '' : warned.result.reason).toMatch(/minefield at/);
+    expect(key(warned.state.units[mk.id]!.pos)).toBe(key(at(3, 8)));
+    expect(mineAt(warned.state, at(4, 8))?.revealed).toBe(true);
+
+    // The same order again is the choice to go in, and it goes in.
+    const went = run(warned.state, {
+      type: 'moveUnit',
+      by: A,
+      unit: mk.id,
+      path: [at(4, 8), at(5, 8)],
+    });
+    expect(key(went.units[mk.id]!.pos)).toBe(key(at(4, 8)));
+
+    // Something without the equipment gets no warning at all.
+    let plain = newGame({ seed: 3 });
+    const mk3 = putOgre(plain, A, 'MK3', at(3, 8));
+    plain = moveFor(withMine(mk3.state, B, at(4, 8)), A);
+    expect(detectsMines(plain.units[mk3.id]!)).toBe(false);
+    const blind = applyCommand(
+      plain,
+      { type: 'moveUnit', by: A, unit: mk3.id, path: [at(4, 8), at(5, 8)] },
+      map,
+    );
+    expect(blind.result.ok).toBe(true);
+  });
+
+  // The difference the choice makes on the ground.
+  it('goes off under anything using the road, and only under the road', () => {
+    const b = emptyBuilder();
+    layRoute(b, [at(3, 6), at(4, 6), at(5, 6)], 'road');
+    const roadMap: GameMap = { ...map, routes: b.routes };
+    const drive = (onRoad: boolean, usedRoad: boolean): GameState => {
+      let s = newGame({ seed: 9 });
+      // Standing in the mined hex, as a mover that has just entered it is.
+      const tank = put(s, A, 'HVY', at(4, 6));
+      s = {
+        ...tank.state,
+        mines: [{ id: 'm', owner: B, pos: at(4, 6), revealed: false, onRoad }],
+      };
+      return tripMinefield(moveFor(s, A), roadMap, tank.id, usedRoad);
+    };
+
+    // A road mine under a column on the road: destroyed, no roll.
+    const hit = drive(true, true);
+    expect(Object.values(hit.units)[0]!.destroyed).toBe(true);
+    // The same mine, and a tank that came in cross-country: nothing.
+    const past = drive(true, false);
+    expect(Object.values(past.units)[0]!.destroyed).toBe(false);
+    expect(mineAt(past, at(4, 6))).toBeDefined();
   });
 });
 

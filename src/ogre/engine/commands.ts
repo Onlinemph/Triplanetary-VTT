@@ -227,6 +227,14 @@ export interface SetTrainSpeedCommand extends CommandBase {
 export interface LayMinefieldCommand extends CommandBase {
   readonly type: 'layMinefield';
   readonly at: Hex;
+  /**
+   * "recording the hex numbers and whether they are on the road" (13.04). A
+   * road mine goes off under anything that uses the road and is unaffected by
+   * anything that does not; one laid beside the road takes its chances on a 6.
+   * Only meaningful in a hex the road runs through; omitted, a mine there is
+   * laid on the road.
+   */
+  readonly onRoad?: boolean;
 }
 
 /**
@@ -247,6 +255,52 @@ export interface EngineerCommand extends CommandBase {
   readonly toward?: Hex;
   readonly target?: UnitId;
   readonly weapon?: string;
+  /** Laying a mine: whether it goes on the road (13.04). Defaults to yes. */
+  readonly onRoad?: boolean;
+  /** Loading cargo: which of the Vulcan's two areas (15.02.1). */
+  readonly area?: 'internal' | 'top';
+}
+
+/**
+ * Open a Light Artillery Drone that is lying on its pallet (14.01). It spends
+ * the turn unpacking and running diagnostics, and can fire from the next.
+ */
+export interface UnpackDroneCommand extends CommandBase {
+  readonly type: 'unpackDrone';
+  readonly unit: UnitId;
+}
+
+/**
+ * Carry a collapsed drone one hex by hand: "any infantry squad can move a LAD
+ * pallet one hex per turn" (14.01), at the cost of that squad's own movement.
+ */
+export interface PushPalletCommand extends CommandBase {
+  readonly type: 'pushPallet';
+  readonly unit: UnitId;
+  readonly to: Hex;
+}
+
+/**
+ * Let a towed vehicle off the hitch (15.04.8): "Unhitching a towed vehicle is
+ * automatic and is not considered a task."
+ */
+export interface UnhitchCommand extends CommandBase {
+  readonly type: 'unhitch';
+  readonly unit: UnitId;
+}
+
+/**
+ * Put a crewless vehicle on one of a Vulcan's four control channels, or take
+ * it off (15.02.4, 15.02.5). "The Vulcan determines which four ducklings are
+ * under active control at the beginning of each turn."
+ */
+export interface DroneControlCommand extends CommandBase {
+  readonly type: 'droneControl';
+  /** The Vulcan doing the driving. */
+  readonly unit: UnitId;
+  readonly target: UnitId;
+  /** `null` drops it, to fend for itself. */
+  readonly level: 'combat' | 'duckling' | null;
 }
 
 export type Command =
@@ -271,7 +325,11 @@ export type Command =
   | LaunchCruiseMissileCommand
   | SetTrainSpeedCommand
   | LayMinefieldCommand
-  | EngineerCommand;
+  | EngineerCommand
+  | UnpackDroneCommand
+  | PushPalletCommand
+  | UnhitchCommand
+  | DroneControlCommand;
 
 export type CommandType = Command['type'];
 

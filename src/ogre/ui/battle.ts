@@ -42,11 +42,19 @@ import {
   activePlayer,
   isInertOgre,
   isOgre,
+  isPallet,
   onBoard,
   setupActor,
   unitsAt,
 } from '../engine/types.js';
-import { attackerRange, isFireable, movementAllowance, unitName } from '../engine/state.js';
+import {
+  attackerRange,
+  isFireable,
+  laserDamaged,
+  movementAllowance,
+  structurePointsOf,
+  unitName,
+} from '../engine/state.js';
 import { reachable } from '../engine/movement.js';
 import {
   canStillFire,
@@ -80,7 +88,25 @@ import {
   engineerTasks,
   entrenchedAt,
   sheetOf,
+  riverBridgesNear,
 } from '../engine/engineering.js';
+import { REPACK_TURNS, pushers, unpackCheck } from '../engine/drone.js';
+import {
+  TRAIN_CARGO_PER_HALF,
+  TRAIN_GUN,
+  gunsLeft,
+  gunsOn,
+  trainCargoUsed,
+} from '../engine/train.js';
+import {
+  VULCAN_CARGO,
+  cargoUsed,
+  channelsUsed,
+  controlledBy,
+  outOfContact,
+  spareMissiles,
+  towedBy,
+} from '../engine/vulcan.js';
 import { canDismount, canMount } from '../engine/movement.js';
 import { button, el, row, setChildren } from './dom.js';
 import '../ogre.css';
@@ -179,6 +205,8 @@ interface UiState {
   aiming: UnitId | null;
   /** Laying minefields during the setup: the next zone hex clicked gets one. */
   laying: boolean;
+  /** 13.04: whether the next mine goes on the road, where there is one. */
+  mineOnRoad: boolean;
   showHexNumbers: boolean;
   helpOpen: boolean;
 }
@@ -227,6 +255,7 @@ export const createOgreBattle = (opts: OgreBattleOptions): OgreBattle => {
     strike: null,
     aiming: null,
     laying: false,
+    mineOnRoad: true,
     showHexNumbers: false,
     helpOpen: false,
   };
@@ -472,7 +501,7 @@ export const createOgreBattle = (opts: OgreBattleOptions): OgreBattle => {
     // --- Deployment: pick up a counter, put it down --------------------
     if (s.state.setup) {
       if (ui.laying) {
-        dispatch({ type: 'layMinefield', by: me(), at: h });
+        dispatch({ type: 'layMinefield', by: me(), at: h, onRoad: ui.mineOnRoad });
         if (minefieldsLeft(s.state, me()) <= 0) ui.laying = false;
         draw();
         return;
@@ -612,12 +641,15 @@ export const createOgreBattle = (opts: OgreBattleOptions): OgreBattle => {
     if (a.kind === 'building' || b.kind === 'building') {
       return a.kind === 'building' && b.kind === 'building' && a.building === b.building;
     }
+    if (a.kind === 'riverBridge' || b.kind === 'riverBridge') {
+      return a.kind === 'riverBridge' && b.kind === 'riverBridge' && eq(a.hex, b.hex);
+    }
     return a.unit === b.unit;
   };
 
   /** Where the current target stands, so the panel can list its neighbours. */
   const targetHex = (state: GameState, t: TargetRef): Hex | null => {
-    if (t.kind === 'terrain' || t.kind === 'bridge') return t.hex;
+    if (t.kind === 'terrain' || t.kind === 'bridge' || t.kind === 'riverBridge') return t.hex;
     if (t.kind === 'building') return state.buildings[t.building]?.pos ?? null;
     const u = state.units[t.unit];
     return u ? u.pos : null;
@@ -646,7 +678,9 @@ export const createOgreBattle = (opts: OgreBattleOptions): OgreBattle => {
               ? hexLabel(c.hex)
               : c.kind === 'bridge'
                 ? `the bridge ${hexLabel(c.hex)}–${hexLabel(c.toward)}`
-                : unitName(state.units[c.unit]!),
+                : c.kind === 'riverBridge'
+                  ? `the river bridge at ${hexLabel(c.hex)}`
+                  : unitName(state.units[c.unit]!),
           () => {
             ui.target = c;
             draw();
@@ -1079,6 +1113,19 @@ export const createOgreBattle = (opts: OgreBattleOptions): OgreBattle => {
                 },
                 { class: ui.laying ? 'chip active' : 'chip' },
               ),
+              // "recording the hex numbers and whether they are on the road"
+              // (13.04). A road mine catches anything that uses the road; one
+              // laid beside it needs a 6, but survives a column driving past.
+              ui.laying
+                ? button(
+                    ui.mineOnRoad ? 'On the road' : 'Off the road',
+                    () => {
+                      ui.mineOnRoad = !ui.mineOnRoad;
+                      draw();
+                    },
+                    { class: 'chip' },
+                  )
+                : null,
             )
           : null,
         state.options.camouflage === true || (state.options.dummies ?? 0) > 0
@@ -1291,10 +1338,48 @@ export const createOgreBattle = (opts: OgreBattleOptions): OgreBattle => {
       rows.push(row('Antipersonnel', String(sheet.ap), sheet.ap < 2 ? 'warn' : ''));
       rows.push(row('Tread units', `${sheet.treads} of 3`, sheet.treads < 3 ? 'warn' : ''));
     }
-    if (u.kind === 'unit' && u.classId === 'LAD' && u.ridingOn) {
-      rows.push(row('Carried', 'palletised; set it down to deploy', 'warn'));
-    } else if (u.kind === 'unit' && u.classId === 'LAD' && u.firedThisPhase && u.movementEnded) {
-      rows.push(row('Setting up', 'fires from next turn', 'warn'));
+    // The drone's three turns (14.01).
+    if (u.kind === 'unit' && u.droneState === 'pallet') {
+      rows.push(
+        row(
+          'Palletised',
+          u.ridingOn ? 'cargo aboard its transport' : 'collapsed; D0, and unpacks in a turn',
+          'warn',
+        ),
+      );
+    } else if (u.kind === 'unit' && u.droneState === 'unpacking') {
+      rows.push(row('Setting up', 'it may be shot at, but not fire', 'warn'));
+    } else if (u.kind === 'unit' && (u.repackProgress ?? 0) > 0) {
+      rows.push(row('Being folded up', `${u.repackProgress} of ${REPACK_TURNS} turns`, 'warn'));
+    }
+    // A Vulcan's logistics (15.02.1, 15.02.4, 15.02.5, 15.04.8).
+    if (isOgre(u) && u.typeId === 'VULCAN') {
+      rows.push(
+        row('Hold', `${cargoUsed(state, u.id, 'internal')} of ${VULCAN_CARGO.internal} stowed`),
+      );
+      rows.push(row('Deck', `${cargoUsed(state, u.id, 'top')} of ${VULCAN_CARGO.top} stowed`));
+      const spares = spareMissiles(state, u.id);
+      if (spares > 0) rows.push(row('Spare missiles', String(spares)));
+      const driven = controlledBy(state, u.id);
+      if (driven.length > 0) {
+        rows.push(row('Driving', `${driven.length} on ${channelsUsed(state, u.id)} of 4 channels`));
+      }
+      const load = towedBy(state, u.id);
+      if (load) rows.push(row('On the hitch', unitName(load), 'warn'));
+    }
+    if (u.kind === 'unit' && u.stowedIn) {
+      rows.push(
+        row('Stowed', u.stowedOn === 'internal' ? 'in the hold' : 'on the deck, exposed', 'warn'),
+      );
+    }
+    if (u.kind === 'unit' && u.drivenBy) {
+      rows.push(
+        row(
+          'Driven',
+          u.control === 'combat' ? 'on a Vulcan’s control channel' : 'following as a duckling',
+          outOfContact(state, u) ? 'warn' : '',
+        ),
+      );
     }
     if (
       u.kind === 'unit' &&
@@ -1313,7 +1398,12 @@ export const createOgreBattle = (opts: OgreBattleOptions): OgreBattle => {
       }
     } else {
       const cls = unitClass(u.classId);
-      if (cls.attack > 0) {
+      if (gunsOn(u) > 0) {
+        // "one 4/2 gun on each of the train counters" (9.03.1).
+        rows.push(
+          row('Attack / range', `${TRAIN_GUN.attack} / ${TRAIN_GUN.range}, each gun separately`),
+        );
+      } else if (cls.attack > 0) {
         rows.push(
           row(
             'Attack / range',
@@ -1321,9 +1411,37 @@ export const createOgreBattle = (opts: OgreBattleOptions): OgreBattle => {
           ),
         );
       }
-      rows.push(row('Defence', String(cls.defense * (cls.kind === 'infantry' ? u.squads : 1))));
+      if (cls.structurePoints !== undefined) {
+        // "Defensively, they are buildings with Structure Points." (12.01)
+        const sp = structurePointsOf(u);
+        rows.push(
+          row(
+            'Structure',
+            `${sp} / ${cls.structurePoints} SP`,
+            laserDamaged(u) ? 'warn' : undefined,
+          ),
+        );
+        if (laserDamaged(u)) rows.push(row('Damaged', 'it can no longer fire (12.07)', 'warn'));
+      } else {
+        rows.push(row('Defence', String(cls.defense * (cls.kind === 'infantry' ? u.squads : 1))));
+      }
       if (cls.mobility === 'rail') {
         rows.push(row('Speed', `${u.trainSpeed ?? 0} of ${TRAIN_MAX_SPEED}`));
+        if (u.coupledTo) {
+          rows.push(row('Half', u.trainHalf === 'rear' ? 'the rear counter' : 'the front'));
+        }
+        if (gunsOn(u) > 0) {
+          rows.push(
+            row(
+              'Guns',
+              `${gunsLeft(u)} of ${gunsOn(u)} × ${TRAIN_GUN.attack}/${TRAIN_GUN.range}`,
+              gunsLeft(u) === 0 ? 'warn' : '',
+            ),
+          );
+          rows.push(row('Cargo', `${trainCargoUsed(state, u.id)} of ${TRAIN_CARGO_PER_HALF}`));
+        } else {
+          rows.push(row('Cargo', `${trainCargoUsed(state, u.id)} of ${TRAIN_CARGO_PER_HALF}`));
+        }
       } else {
         rows.push(
           row(
@@ -1450,6 +1568,23 @@ export const createOgreBattle = (opts: OgreBattleOptions): OgreBattle => {
         ),
       ),
       ...rideButtons(state, u),
+      // "Turn 2: The LAD unpacks itself" (14.01) — the owner's own decision, so
+      // that a pallet hidden in a defensive setup stays hidden until it fires.
+      u.kind === 'unit' && unpackCheck(state, u) === null
+        ? button('Unpack the drone', () => dispatch({ type: 'unpackDrone', by: me(), unit: u.id }))
+        : null,
+      u.towedBy
+        ? button('Unhitch', () => dispatch({ type: 'unhitch', by: me(), unit: u.id }), {
+            class: 'chip',
+          })
+        : null,
+      u.kind === 'unit' && isPallet(u) && pushers(state, u).length > 0 && !u.movementEnded
+        ? el(
+            'p',
+            { class: 'note ram' },
+            'A squad here can carry the pallet one hex — click an adjacent hex (14.01).',
+          )
+        : null,
       ...engineerTasks(state, session.map, u).map((t) =>
         button(t.label, () =>
           dispatch({
@@ -1460,6 +1595,7 @@ export const createOgreBattle = (opts: OgreBattleOptions): OgreBattle => {
             ...(t.toward ? { toward: t.toward } : {}),
             ...(t.target !== undefined ? { target: t.target } : {}),
             ...(t.weapon !== undefined ? { weapon: t.weapon } : {}),
+            ...(t.area !== undefined ? { area: t.area } : {}),
           }),
         ),
       ),
@@ -1619,6 +1755,27 @@ export const createOgreBattle = (opts: OgreBattleOptions): OgreBattle => {
             ),
         ),
       );
+      const rivers = from ? riverBridgesNear(state, session.map, from.pos, reach) : [];
+      if (rivers.length > 0) {
+        kids.push(
+          el(
+            'div',
+            { class: 'chips targets' },
+            ...rivers.map((h) =>
+              button(
+                `River bridge ${hexLabel(h)}`,
+                () => {
+                  ui.target = { kind: 'riverBridge', hex: h };
+                  draw();
+                },
+                {
+                  class: sameThing({ kind: 'riverBridge', hex: h }, ui.target) ? 'chip on' : 'chip',
+                },
+              ),
+            ),
+          ),
+        );
+      }
       if (inReach.length > 0) {
         kids.push(
           el(
@@ -1646,7 +1803,10 @@ export const createOgreBattle = (opts: OgreBattleOptions): OgreBattle => {
     const target = ui.target;
     if (target && ui.attackers.length > 0) {
       const targetUnit =
-        target.kind === 'terrain' || target.kind === 'building' || target.kind === 'bridge'
+        target.kind === 'terrain' ||
+        target.kind === 'building' ||
+        target.kind === 'bridge' ||
+        target.kind === 'riverBridge'
           ? null
           : state.units[target.unit];
       const chips = hexTargetChips(state);

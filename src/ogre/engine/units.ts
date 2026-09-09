@@ -106,6 +106,13 @@ export interface UnitClass {
    * over it but cannot fire *into* it.
    */
   readonly laser?: 'standard' | 'tower';
+  /**
+   * "Defensively, they are buildings with Structure Points" (12.01). A class
+   * with this is shot at like a building — flat damage rather than the Combat
+   * Results Table — and is "damaged" at `LASER_DAMAGED_AT`. The count is on
+   * the counter, not in the rules text.
+   */
+  readonly structurePoints?: number;
 
   /** Where the cited numbers come from. */
   readonly note: string;
@@ -235,7 +242,7 @@ export const UNIT_CLASSES: Readonly<Record<UnitClassId, UnitClass>> = {
     size: 1,
     armorUnits: 1,
     vp: 6,
-    note: 'Fully stated: "It has Attack 2, Range 8, Defense 1, and Movement 0. It is considered a Size 1 unit when set up." (14.01) 6 VP as a "standard" armor unit (1.08). Its printed three-turn deployment from a cargo pallet (14.01) is not modelled: here it mounts and dismounts as a squad would.',
+    note: 'Fully stated: "It has Attack 2, Range 8, Defense 1, and Movement 0. It is considered a Size 1 unit when set up." (14.01) 6 VP as a "standard" armor unit (1.08). The three-turn deployment from a cargo pallet is in `drone.ts`; the Defense 1 here is the drone on its legs, since "A LAD on a pallet is treated as a D0 unit".',
   },
 
   GEV: {
@@ -411,7 +418,7 @@ export const UNIT_CLASSES: Readonly<Record<UnitClassId, UnitClass>> = {
     armorUnits: 0,
     vp: 12,
     carries: 6,
-    note: '"The train’s defense strength is always 3 ... Only an X result affects the train." (9.03) The train moves only along rail hexes at its speed marker, which changes by one marker a turn (9.02, 9.02.1); a ram against it is resolved at the Size Table’s train column (9.05). Three things here are still short of the printed rule: a real train is two counters two hexes long (3.03, 9.01), its speed markers are ranges (M0/1, M2/3, M4/5, M6/7 — so a top speed of 7, not 4), and each half carries 12 "size points" rather than a squad count (9.07). Its size and victory value are set by the scenario.',
+    note: '"The train’s defense strength is always 3 ... Only an X result affects the train." (9.03) It moves only along rail hexes at its speed marker, which changes by one marker a turn (9.02, 9.02.1); a ram against it is resolved at the Size Table’s train column (9.05). A standard train is two counters coupled (9.01), each carrying 12 "size points" of cargo (9.07) and, in an armed-train scenario, up to four 4/2 guns (9.03.1) — see `train.ts`. Its size and victory value are set by the scenario.',
     unconfirmed: ['size', 'vp'],
   },
 
@@ -429,6 +436,7 @@ export const UNIT_CLASSES: Readonly<Record<UnitClassId, UnitClass>> = {
     armorUnits: 2,
     vp: 12,
     laser: 'standard',
+    structurePoints: 20,
     note: '"A standard Laser turret has a range of 30 hexes. Its line of fire is blocked by ridge hexsides or any raised terrain – i.e., forest, swamp ..., towns, or rubble." (12.02) It has "an attack strength of 2" and may fire at a unit only if it did not fire at all during the preceding enemy turn (12.06); overrun, it fires at double strength (12.09). In the printed rules a Laser is a building with Structure Points (12.01, 12.07: damaged at 10 SP, destroyed at 0); the defence strength here stands in for that until buildings carry the Laser.',
     unconfirmed: ['defense', 'vp'],
   },
@@ -447,6 +455,7 @@ export const UNIT_CLASSES: Readonly<Record<UnitClassId, UnitClass>> = {
     armorUnits: 3,
     vp: 18,
     laser: 'tower',
+    structurePoints: 20,
     note: '"A Laser Tower mounts the same type of Laser that a standard emplacement does. Its height makes it more vulnerable, but also gives it a much greater range: 60 hexes. A Laser Tower can fire over any type of terrain, but cannot attack a unit that is actually in a town, swamp, forest, or rubble hex." (12.03) Attack 2 per 12.06, as the standard Laser. Like the Laser it is a building with Structure Points in print (12.01); the defence strength stands in for that.',
     unconfirmed: ['defense', 'vp'],
   },
@@ -641,10 +650,33 @@ export const superheavyMove = (treads: number): number => {
  * hexes (as the owning player chooses)." So a marker is stored as its lower
  * number — 0, 2, 4 or 6 — and the train runs that far or one hex further.
  */
+/** "When a Laser or Laser Tower is reduced to 10 SP, it is 'damaged'." (12.07) */
+export const LASER_DAMAGED_AT = 10;
+
 export const TRAIN_MARKERS: readonly number[] = [0, 2, 4, 6];
 export const TRAIN_MAX_SPEED = 6;
 /** A marker's faster reading: "either 4 or 5 hexes". */
 export const trainTopSpeed = (marker: number): number => marker + 1;
+
+/**
+ * A train gun (9.03.1).
+ *
+ * "The defender may exchange up to 4 armor units for train guns. For each
+ * armor unit given up, he can put one 4/2 gun on each of the train counters
+ * (thus, if he exchanges 4 armor units, the train will have 8 attacks, each
+ * with a strength of 4 and range of 2, per turn). These guns have no separate
+ * defense strength; if the train counter goes, they go."
+ */
+export const TRAIN_GUN = { attack: 4, range: 2 } as const;
+export const MAX_TRAIN_GUNS = 4;
+
+/**
+ * "Only units of Size 3 or below may go on the train. Each half of the train
+ * may carry up to 12 'size points' worth of armor (e.g., 4 Heavy Tanks, or 12
+ * squads of infantry)." (9.07)
+ */
+export const TRAIN_CARGO_PER_HALF = 12;
+export const MAX_TRAIN_CARGO_SIZE = 3;
 
 /** A unit that fires along a line of sight rather than at a printed range. */
 export const isLaserClass = (id: UnitClassId): boolean => UNIT_CLASSES[id].laser !== undefined;

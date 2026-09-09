@@ -115,6 +115,31 @@ export interface ConventionalUnit {
   readonly trainSpeed?: number;
   /** The train's speed has been set this turn; it changes once per turn. */
   readonly trainSpeedSet?: boolean;
+  /**
+   * The other counter of a two-counter train (9.01), and which end this is.
+   * "'Front' and 'back' are always relative to the movement of the train"
+   * (9.02), so the half the player drives becomes the front.
+   */
+  readonly coupledTo?: UnitId;
+  readonly trainHalf?: 'front' | 'rear';
+  /**
+   * 4/2 guns on this counter (9.03.1): "For each armor unit given up, he can
+   * put one 4/2 gun on each of the train counters." They fire like squads —
+   * separately, at separate targets — so `squadsFired` counts them.
+   */
+  readonly trainGuns?: number;
+  /**
+   * A Laser emplacement's Structure Points (12.01, 12.07). Absent means the
+   * class's full count. "When a Laser or Laser Tower is reduced to 10 SP, it
+   * is 'damaged' ... The Laser can no longer fire, but it is not actually
+   * destroyed until it is reduced to 0 SP."
+   */
+  readonly structurePoints?: number;
+  /**
+   * The laser shot at something during the enemy's turn, so it may not attack
+   * a unit in its own fire phase (12.06). Cleared as its fire phase ends.
+   */
+  readonly firedInEnemyTurn?: boolean;
 
   readonly destroyed: boolean;
   readonly destroyedBy?: string;
@@ -137,6 +162,44 @@ export interface ConventionalUnit {
    */
   readonly concealed?: boolean;
   /**
+   * A Light Artillery Drone's deployment (14.01). Absent on everything else,
+   * and on a drone that a scenario simply put on the board ready to fire.
+   *
+   * "Turn 1: Unloading ... Place the LAD pallet in the same hex as the
+   * transport. Turn 2: The LAD unpacks itself, sets itself up, and runs
+   * diagnostics ... It may be targeted, but may not attack ... Turn 3: The LAD
+   * can fire."
+   */
+  readonly droneState?: DroneState;
+  /**
+   * Turns of work done towards putting a drone back on its pallet: "It takes a
+   * squad of Combat Engineers three turns to re-palletize a LAD, and one
+   * further turn to load it onto a Truck. A Vulcan may break down and load an
+   * LAD in one turn." (14.01)
+   */
+  readonly repackProgress?: number;
+  /**
+   * Stowed aboard a Vulcan (15.02.1): its id, and which of the two cargo areas.
+   * The hold "will survive as long as the Ogre does"; the deck is exposed.
+   */
+  readonly stowedIn?: UnitId;
+  readonly stowedOn?: 'internal' | 'top';
+  /**
+   * A Vulcan is driving this counter (15.02.4, 15.02.5): its id, and whether it
+   * has a whole control channel to itself or is one of four ducklings sharing.
+   */
+  readonly drivenBy?: UnitId;
+  readonly control?: 'combat' | 'duckling';
+  /**
+   * No crew aboard. "Those systems, unaided, will allow an armor unit to move
+   * intelligently over short distances, and to attack at half strength"
+   * (15.02.4) — but only with a Vulcan in the loop; on its own such a counter
+   * does nothing. Scenarios set this; nothing in the rules creates it mid-game.
+   */
+  readonly crewless?: boolean;
+  /** On a Vulcan's tow hitch (15.04.8). */
+  readonly towedBy?: UnitId;
+  /**
    * A Superheavy's record sheet (13.07), once it has taken damage under that
    * option. Absent means the full sheet; see `engineering.ts`.
    */
@@ -148,6 +211,18 @@ export interface ConventionalUnit {
     readonly disabled?: boolean;
   };
 }
+
+/**
+ * Where a Light Artillery Drone is in its three-turn deployment (14.01).
+ *
+ *  - `pallet` — collapsed cargo. "A LAD on a pallet is treated as a D0 unit;
+ *    it is destroyed by any attack." It may be carried, hidden in a defensive
+ *    setup, pushed a hex a turn by a squad, and is not overrun.
+ *  - `unpacking` — the turn it sets itself up. "It may be targeted, but may
+ *    not attack."
+ *  - `ready` — a drone on its legs. "A LAD that is set up may not be moved."
+ */
+export type DroneState = 'pallet' | 'unpacking' | 'ready';
 
 /** One targetable component on an Ogre's record sheet. */
 export interface OgreWeapon {
@@ -196,6 +271,8 @@ export interface OgreUnit {
    * Absent means the Ogre arrived assembled.
    */
   readonly activatesOn?: number;
+  /** On a Vulcan's tow hitch (15.04.8): a cybertank with no treads left. */
+  readonly towedBy?: UnitId;
 
   readonly destroyed: boolean;
   readonly destroyedBy?: string;
@@ -286,7 +363,13 @@ export type TargetRef =
   | { readonly kind: 'building'; readonly building: string }
   | { readonly kind: 'terrain'; readonly hex: Hex }
   /** A bridge (13.02): the crossing between `hex` and its neighbour `toward`. */
-  | { readonly kind: 'bridge'; readonly hex: Hex; readonly toward: Hex };
+  | { readonly kind: 'bridge'; readonly hex: Hex; readonly toward: Hex }
+  /**
+   * A bridge across a whole hex (13.02.1), named by its centre. It "lies in
+   * three hexes – the river hex and the adjoining road hexes – and can be
+   * attacked by firing at any of them".
+   */
+  | { readonly kind: 'riverBridge'; readonly hex: Hex };
 
 /** One attacking gun: a whole conventional unit, or one weapon on an Ogre. */
 export interface AttackerRef {
@@ -574,6 +657,12 @@ export interface GameState {
    * participate" (15.03). Cleared as each turn opens.
    */
   readonly tasksTried?: readonly string[];
+  /**
+   * Spare Ogre missiles in a Vulcan's hold (15.02.1, 15.04.4), by Vulcan id:
+   * "If a Vulcan is carrying spare missiles, that Vulcan or an accompanying
+   * Heavy Drone may reload either internal or external missile launchers."
+   */
+  readonly vulcanMissiles?: Readonly<Record<string, number>>;
 
   readonly victory: VictoryState | null;
   /** Free-form per-scenario bookkeeping (entry edges, objectives, timers). */
@@ -613,8 +702,21 @@ export const unitsAt = (state: GameState, hex: Hex): Unit[] =>
     (u) => onBoard(u) && u.pos.q === hex.q && u.pos.r === hex.r && !ridingSomething(u),
   );
 
-/** Infantry riding a vehicle are in the vehicle's hex but are not *in* the hex. */
-export const ridingSomething = (u: Unit): boolean => u.kind === 'unit' && u.ridingOn != null;
+/**
+ * A collapsed Light Artillery Drone: cargo, not a combat unit (14.01).
+ *
+ * "A LAD on a pallet is treated as a D0 unit; it is destroyed by any attack"
+ * and "An overrun does not take place when a opponent enters a hex with a
+ * collapsed LAD, as the LAD is not a functioning combat unit at that time."
+ */
+export const isPallet = (u: Unit): boolean => u.kind === 'unit' && u.droneState === 'pallet';
+
+/**
+ * Infantry riding a vehicle are in the vehicle's hex but are not *in* the hex —
+ * and neither is cargo in a Vulcan's hold or on its deck (15.02.1).
+ */
+export const ridingSomething = (u: Unit): boolean =>
+  u.kind === 'unit' && (u.ridingOn != null || u.stowedIn != null);
 
 export const passengersOf = (state: GameState, carrier: UnitId): ConventionalUnit[] =>
   Object.values(state.units).filter(

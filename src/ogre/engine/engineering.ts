@@ -43,14 +43,16 @@ import {
   inBounds,
   isBridge,
   isRouteHex,
+  routeBetween,
   sideFeatureBetween,
   terrainAt,
 } from './map.js';
-import type { DamageResult } from './crt.js';
-import { rollDie } from './rng.js';
+import { type DamageResult, resolve } from './crt.js';
+import { rollDice, rollDie } from './rng.js';
 import {
   type ConventionalUnit,
   type GameState,
+  type OgreUnit,
   type PlayerId,
   type Unit,
   type UnitId,
@@ -61,9 +63,22 @@ import {
   unitsAt,
 } from './types.js';
 import { revetmentAt } from './state.js';
-import { destroyUnit, log, setSideOverride, unitName, updateAnyUnit, withUnit } from './state.js';
+import {
+  addPoints,
+  cutRoute,
+  destroyUnit,
+  log,
+  ogreDamageValue,
+  setSideOverride,
+  setTerrainOverride,
+  unitName,
+  updateAnyUnit,
+  withUnit,
+} from './state.js';
 import { baseTerrain } from './terrain.js';
 import { unitClass } from './units.js';
+import { REPACK_TURNS, isDeployedDrone } from './drone.js';
+import { type CargoArea, cargoOf, spareMissiles, stowCheck, towCheck } from './vulcan.js';
 import { mineAt, minefieldsLeft, minesOf, plantMinefield, removeMinefield } from './concealment.js';
 import { OGRE_WEAPONS, ogreType } from './ogres.js';
 
@@ -222,6 +237,124 @@ export const demolishBridge = (state: GameState, hex: Hex, toward: Hex): GameSta
   return log(next, 'warn', `The bridge at ${key(hex)}–${key(toward)} is down.`, [hex, toward]);
 };
 
+// --- River bridges (13.02.1) -----------------------------------------------
+
+/**
+ * A bridge that crosses a whole hex, rather than a hexside.
+ *
+ * "A bridge which crosses a full hex (such as G1-2013) has a defense strength
+ * of 8. A river bridge lies in three hexes – the river hex and the adjoining
+ * road hexes – and can be attacked by firing at any of them." (13.02.1)
+ *
+ * On this engine's maps that shape is unambiguous: a water hex with a road or
+ * railway running through it is a river bridge, and its span is that hex plus
+ * the route hexes either side of it.
+ */
+export const riverBridgeSpan = (state: GameState, map: GameMap, centre: Hex): Hex[] | null => {
+  if (baseTerrain(terrainAt(map, centre, state.terrainOverrides)) !== 'water') return null;
+  if (!isRouteHex(map, centre)) return null;
+  const ends = neighbors(centre).filter(
+    (n) => inBounds(map, n) && routeBetween(map, centre, n) !== undefined,
+  );
+  return [centre, ...ends];
+};
+
+/** The centre hex of the river bridge `h` belongs to, or null. */
+export const riverBridgeAt = (state: GameState, map: GameMap, h: Hex): Hex | null => {
+  if (riverBridgeSpan(state, map, h)) return h;
+  for (const n of neighbors(h)) {
+    if (!inBounds(map, n)) continue;
+    const span = riverBridgeSpan(state, map, n);
+    if (span?.some((x) => eq(x, h))) return n;
+  }
+  return null;
+};
+
+/** Standing, that is: still water underfoot and the route not yet cut. */
+export const riverBridgeStands = (state: GameState, map: GameMap, centre: Hex): boolean =>
+  riverBridgeSpan(state, map, centre) !== null && !(state.routesCut ?? []).includes(key(centre));
+
+/**
+ * Drop a river bridge (13.02.2).
+ *
+ * "If a river bridge is destroyed, place a 'Bridge Out' overlay on it. No units
+ * can safely cross the river on the destroyed bridge. For movement and defense
+ * purposes, all units treat that hex as swamp.
+ *
+ * When a river bridge is destroyed, any unit on its center hex is also
+ * destroyed, except an Ogre. An Ogre falls into the river in that hex. Four
+ * dice are rolled; this is the amount of damage done to the Ogre's treads. Each
+ * other component of the Ogre immediately suffers a 1-1 attack."
+ */
+export const demolishRiverBridge = (
+  state: GameState,
+  map: GameMap,
+  centre: Hex,
+  credit?: PlayerId,
+): GameState => {
+  if (!riverBridgeStands(state, map, centre)) return state;
+  let next = cutRoute(setTerrainOverride(state, centre, 'swamp'), centre);
+  next = log(next, 'warn', `The river bridge at ${key(centre)} goes into the water.`, [centre]);
+
+  for (const u of unitsAt(next, centre)) {
+    if (!isOgre(u)) {
+      next = destroyUnit(next, u.id, 'went into the river with the bridge', credit);
+      next = log(next, 'bad', `${unitName(u)} goes down with the span.`, [centre]);
+      continue;
+    }
+    const dice = rollDice(next.rng, 4);
+    next = { ...next, rng: dice.state };
+    const lost = Math.min(
+      u.treads,
+      dice.values.reduce((n, v) => n + v, 0),
+    );
+    next = withUnit(next, { ...u, treads: u.treads - lost });
+    if (credit && lost > 0) next = addPoints(next, credit, lost * ogreDamageValue('tread'));
+    next = log(
+      next,
+      'good',
+      `${unitName(u)} falls into the river — four dice, ${String(lost)} tread units.`,
+      [centre],
+    );
+    // "Each other component of the Ogre immediately suffers a 1-1 attack."
+    for (const w of (next.units[u.id] as OgreUnit).weapons) {
+      if (w.destroyed) continue;
+      const die = rollDie(next.rng);
+      next = { ...next, rng: die.state };
+      if (resolve({ kind: 'column', column: '1-1' }, die.value, 'normal') !== 'X') continue;
+      const ogre = next.units[u.id];
+      if (!ogre || !isOgre(ogre)) break;
+      next = withUnit(next, {
+        ...ogre,
+        weapons: ogre.weapons.map((x) => (x.id === w.id ? { ...x, destroyed: true } : x)),
+        internalMissiles:
+          w.kind === 'missileRack' ? Math.max(0, ogre.internalMissiles - 1) : ogre.internalMissiles,
+      });
+      if (credit) next = addPoints(next, credit, ogreDamageValue(w.kind));
+      next = log(
+        next,
+        'good',
+        `The fall costs ${unitName(u)} a ${OGRE_WEAPONS[w.kind].name.toLowerCase()}.`,
+        [centre],
+      );
+    }
+  }
+  return next;
+};
+
+/** Every standing river bridge whose span comes within `radius`, for the interface. */
+export const riverBridgesNear = (
+  state: GameState,
+  map: GameMap,
+  from: Hex,
+  radius: number,
+): Hex[] =>
+  allHexes(map).filter(
+    (h) =>
+      riverBridgeStands(state, map, h) &&
+      riverBridgeSpan(state, map, h)!.some((x) => distance(x, from) <= radius),
+  );
+
 /** Every standing bridge with an end within `radius` of a hex, for the interface. */
 export const bridgesNear = (
   state: GameState,
@@ -285,7 +418,14 @@ export type EngineerTask =
   | 'repairTreads'
   | 'revetSmall'
   | 'revetLarge'
-  | 'detectMines';
+  | 'detectMines'
+  // 14.01 — folding a Light Artillery Drone back onto its pallet
+  | 'repackDrone'
+  // 15.02.1, 15.04.4, 15.04.8 — the Vulcan's logistics
+  | 'loadCargo'
+  | 'unloadCargo'
+  | 'reloadMissile'
+  | 'hitchTow';
 
 /** The printed roll for each task, from the table beside 15.04.1. */
 export const TASK_ROLL: Readonly<Record<EngineerTask, number>> = {
@@ -309,6 +449,18 @@ export const TASK_ROLL: Readonly<Record<EngineerTask, number>> = {
   // on any die, the task is successfully completed" stands in.
   revetSmall: 6,
   revetLarge: 6,
+  // 14.01 prints no roll for re-palletizing a drone: it is a matter of turns,
+  // not luck. The number is here only to keep the table total.
+  repackDrone: 1,
+  // 15.02.2 gives loading and unloading a single item one turn and no roll.
+  loadCargo: 1,
+  unloadCargo: 1,
+  // "Reloading an external missile is an automatic success ... Reloading
+  // internal missiles ... succeeds on a roll of 5 or greater." (15.04.4)
+  reloadMissile: 5,
+  // "Attaching the vehicle to the tow hitch is a Vulcan Task, which succeeds
+  // on a roll of 2+." (15.04.8)
+  hitchTow: 2,
   // 15.03.3: "they need to roll on one die a number greater than the number of
   // hexes they are searching" — one hex at a time here, so a 2 or better.
   detectMines: 2,
@@ -325,6 +477,10 @@ const VULCAN_TASKS: readonly EngineerTask[] = [
   'repairTreads',
   'revetSmall',
   'revetLarge',
+  'loadCargo',
+  'unloadCargo',
+  'reloadMissile',
+  'hitchTow',
 ];
 
 export const isVulcanTask = (task: EngineerTask): boolean => VULCAN_TASKS.includes(task);
@@ -358,15 +514,35 @@ export const entrenchedAt = (state: GameState, h: Hex): boolean => entrenchmentA
  * die, so the count is simply the sum.
  */
 export const engineeringDice = (state: GameState, at: Hex, owner: PlayerId): number => {
+  // "For engineering work, an unaccompanied Drone is worth two Combat
+  // Engineering squads, but only if at least one Combat Engineering squad is in
+  // the same hex or if the Vulcan is in the same or an adjacent hex and
+  // controlling it via a Drone channel." (15.02.3)
+  const squadsHere = unitsAt(state, at).some(
+    (u) => u.owner === owner && isEngineer(u) && canAct(u),
+  );
   let dice = 0;
   for (const u of unitsAt(state, at)) {
     if (u.owner !== owner || !canAct(u)) continue;
     if (isEngineer(u) && u.kind === 'unit') dice += u.squads;
-    else if (isHeavyDrone(u)) dice += 2;
-    else if (isVulcan(u)) dice += 4;
+    else if (isHeavyDrone(u)) {
+      if (squadsHere || droneIsDirected(state, u, at, owner)) dice += 2;
+    } else if (isVulcan(u)) dice += 4;
   }
   return dice;
 };
+
+/** A Heavy Drone with a Vulcan in the same or an adjacent hex to tell it what to do. */
+const droneIsDirected = (state: GameState, drone: Unit, at: Hex, owner: PlayerId): boolean =>
+  Object.values(state.units).some(
+    (v) =>
+      v.owner === owner &&
+      isVulcan(v) &&
+      onBoard(v) &&
+      distance(v.pos, at) <= 1 &&
+      // "controlling it via a Drone channel"
+      (drone.kind !== 'unit' || drone.drivenBy === undefined || drone.drivenBy === v.id),
+  );
 
 /**
  * The dice for a Vulcan task (15.04): "A Vulcan rolls two dice for success;
@@ -400,6 +576,15 @@ const rollPool = (state: GameState, dice: number): { state: GameState; best: num
   return { state: next, best };
 };
 
+/** One fewer spare missile in that Vulcan's hold (15.02.1, 15.04.4). */
+const spendSpareMissile = (state: GameState, vulcan: UnitId): GameState => ({
+  ...state,
+  vulcanMissiles: {
+    ...(state.vulcanMissiles ?? {}),
+    [vulcan]: Math.max(0, spareMissiles(state, vulcan) - 1),
+  },
+});
+
 // --- Once a turn -----------------------------------------------------------
 
 const triedKey = (task: EngineerTask, at: Hex): string => `${task}:${key(at)}`;
@@ -418,6 +603,7 @@ export interface TaskOffer {
   readonly toward?: Hex;
   readonly target?: UnitId;
   readonly weapon?: string;
+  readonly area?: CargoArea;
   readonly label: string;
 }
 
@@ -487,9 +673,74 @@ export const engineerTasks = (state: GameState, map: GameMap, u: Unit): TaskOffe
       out.push({ task: 'demolish', toward: n, label: `Drop the bridge to ${key(n)}` });
     }
   }
+  // 13.02.1: a bridge across a whole hex, from anywhere on its span.
+  const river = riverBridgeAt(state, map, here);
+  if (river && riverBridgeStands(state, map, river)) {
+    out.push({ task: 'demolish', toward: river, label: 'Drop the river bridge' });
+  }
+  // 14.01: a drone standing here, to be folded back onto its pallet.
+  for (const friend of unitsAt(state, here)) {
+    if (friend.owner !== owner || !isDeployedDrone(friend)) continue;
+    const doneSoFar = friend.kind === 'unit' ? (friend.repackProgress ?? 0) : 0;
+    out.push({
+      task: 'repackDrone',
+      target: friend.id,
+      label: isVulcan(u)
+        ? 'Break the drone down and load it'
+        : `Re-palletize the drone (${String(doneSoFar)} of ${String(REPACK_TURNS)} turns)`,
+    });
+  }
 
   // --- 15.04, for the Vulcan and its Drones ---------------------------------
   if (!isVulcan(u) && !isHeavyDrone(u)) return out;
+
+  // 15.04.4: a launcher to fill, out of a hold that has something in it.
+  const store = unitsAt(state, here).find(
+    (x) => x.owner === owner && isVulcan(x) && spareMissiles(state, x.id) > 0,
+  );
+  if (store) {
+    for (const friend of unitsAt(state, here)) {
+      if (friend.owner !== owner || !isOgre(friend)) continue;
+      for (const w of friend.weapons) {
+        if (w.kind !== 'missile' || w.destroyed || !w.fired) continue;
+        out.push({
+          task: 'reloadMissile',
+          target: friend.id,
+          weapon: w.id,
+          label: 'Hang a fresh external missile',
+        });
+        break;
+      }
+      if (
+        friend.weapons.some((w) => w.kind === 'missileRack' && !w.destroyed) &&
+        heavyDronesAt(state, here, owner) >= 1
+      ) {
+        out.push({ task: 'reloadMissile', target: friend.id, label: 'Reload an internal missile' });
+      }
+    }
+  }
+
+  if (!isVulcan(u)) return out;
+
+  // 15.02.1: the two cargo areas, and 15.04.8: the hitch.
+  for (const friend of unitsAt(state, here)) {
+    if (friend.id === u.id) continue;
+    for (const area of ['internal', 'top'] as const) {
+      if (stowCheck(state, u, friend, area) !== null) continue;
+      out.push({
+        task: 'loadCargo',
+        target: friend.id,
+        area,
+        label: `Stow ${unitName(friend)} ${area === 'internal' ? 'in the hold' : 'on the deck'}`,
+      });
+    }
+    if (towCheck(state, u, friend) === null) {
+      out.push({ task: 'hitchTow', target: friend.id, label: `Hitch up ${unitName(friend)}` });
+    }
+  }
+  for (const stowed of cargoOf(state, u.id)) {
+    out.push({ task: 'unloadCargo', target: stowed.id, label: `Set ${unitName(stowed)} down` });
+  }
 
   // 15.04.7: a prepared position. "Entrenchments may not be built within a
   // revetment", and nor the other way about.
@@ -539,6 +790,10 @@ export interface TaskOptions {
   readonly toward?: Hex;
   readonly target?: UnitId;
   readonly weapon?: string;
+  /** 13.04's choice, for `layMine`. */
+  readonly onRoad?: boolean;
+  /** Which of the Vulcan's two cargo areas (15.02.1), for `loadCargo`. */
+  readonly area?: CargoArea;
 }
 
 /**
@@ -576,6 +831,10 @@ export const engineer = (
     return { state, ok: false, reason: 'the engineers must dismount first' };
   if (u.kind === 'unit' && u.firedThisPhase)
     return { state, ok: false, reason: 'the work is their attack for the turn: they have fired' };
+  // "each Sapper may make only one attempt per turn" (15.03).
+  if (isOgre(u) && u.weapons.every((w) => w.fired || w.destroyed)) {
+    return { state, ok: false, reason: 'that Vulcan has already done its work this turn' };
+  }
   if (u.moveUsed > 0)
     return { state, ok: false, reason: 'they must start the turn in the hex and stay in it' };
   if (isVulcanTask(task) && !isVulcan(u) && !isHeavyDrone(u)) {
@@ -589,10 +848,17 @@ export const engineer = (
   const where = toward ?? opts.toward;
   const dice = isVulcanTask(task) ? vulcanDice(state, here, by) : engineeringDice(state, here, by);
 
+  // "Attempting a task counts as that squad's 'attack' for that turn" (15.03),
+  // and a Vulcan's is no different: its guns stay quiet while its arms work.
   const done = (s: GameState): GameState => {
     let out: GameState = { ...s, tasksTried: [...(s.tasksTried ?? []), triedKey(task, here)] };
     if (u.kind === 'unit') {
       out = updateAnyUnit(out, unitId, () => ({ firedThisPhase: true, squadsFired: u.squads }));
+    } else {
+      const ogre = out.units[unitId];
+      if (ogre && isOgre(ogre)) {
+        out = withUnit(out, { ...ogre, weapons: ogre.weapons.map((w) => ({ ...w, fired: true })) });
+      }
     }
     return out;
   };
@@ -640,7 +906,7 @@ export const engineer = (
         };
       }
       const next = log(
-        plantMinefield(roll.state, map, by, here),
+        plantMinefield(roll.state, map, by, here, opts.onRoad),
         'good',
         `${unitName(u)} plant a mine.`,
         [here],
@@ -803,6 +1069,17 @@ export const engineer = (
 
     case 'demolish': {
       if (!where) return refuse('say which bridge');
+      // A bridge across a whole hex is named by its centre, which the sappers
+      // may be standing on (13.02.1).
+      if (riverBridgeStands(state, map, where) && riverBridgeAt(state, map, here) !== null) {
+        const next = log(
+          demolishRiverBridge(state, map, where, by),
+          'good',
+          `${unitName(u)} blow the river bridge.`,
+          [where],
+        );
+        return { state: done(next), ok: true };
+      }
       if (distance(here, where) !== 1) return refuse('the bridge must be next to them');
       if (!bridgeStands(state, map, here, where))
         return refuse('there is no bridge standing there');
@@ -811,6 +1088,183 @@ export const engineer = (
         'good',
         `${unitName(u)} blow the bridge.`,
         [here, where],
+      );
+      return { state: done(next), ok: true };
+    }
+
+    // --- 14.01 ------------------------------------------------------------
+    case 'repackDrone': {
+      const targetId = opts.target;
+      const drone = targetId ? state.units[targetId] : undefined;
+      if (!drone || !onBoard(drone) || !isDeployedDrone(drone)) {
+        return refuse('there is no drone standing here to fold up');
+      }
+      if (!eq(drone.pos, here)) return refuse('it is not in this hex');
+      if (drone.owner !== by) return refuse('that is not your drone');
+      if (drone.kind !== 'unit') return refuse('that is not a drone');
+
+      // "A Vulcan may break down and load an LAD in one turn provided it
+      // performs no other action that turn." (14.01)
+      const inOne = isVulcan(u);
+      const soFar = inOne ? REPACK_TURNS : (drone.repackProgress ?? 0) + 1;
+      if (soFar < REPACK_TURNS) {
+        const next = log(
+          state,
+          'info',
+          `${unitName(u)} work on ${unitName(drone)} — ${String(soFar)} of ` +
+            `${String(REPACK_TURNS)} turns to re-palletize it.`,
+          [here],
+        );
+        return {
+          state: done(updateAnyUnit(next, drone.id, () => ({ repackProgress: soFar }))),
+          ok: true,
+        };
+      }
+
+      let next = updateAnyUnit(state, drone.id, () => ({
+        droneState: 'pallet' as const,
+        repackProgress: 0,
+        // It has been taken apart; it is nobody's gun this turn.
+        firedThisPhase: true,
+      }));
+      next = log(
+        next,
+        'good',
+        inOne
+          ? `${unitName(u)} breaks ${unitName(drone)} down onto its pallet in one turn.`
+          : `${unitName(u)} finish re-palletizing ${unitName(drone)}. One more turn to load it.`,
+        [here],
+      );
+      return { state: done(next), ok: true };
+    }
+
+    // --- 15.02.1, 15.04.4, 15.04.8: the Vulcan's logistics -----------------
+    case 'loadCargo':
+    case 'unloadCargo': {
+      // "To load or unload a single specified item: one turn." (15.02.2)
+      if (!isVulcan(u)) return refuse('only a Vulcan works its own cargo bays');
+      const targetId = opts.target;
+      const cargo = targetId ? state.units[targetId] : undefined;
+      if (!cargo) return refuse('say what to shift');
+      if (task === 'unloadCargo') {
+        if (cargo.kind !== 'unit' || cargo.stowedIn !== u.id) {
+          return refuse('that is not aboard this Vulcan');
+        }
+        const next = log(
+          withUnit(state, { ...cargo, stowedIn: undefined, stowedOn: undefined, pos: here }),
+          'info',
+          `${unitName(u)} sets ${unitName(cargo)} down on the ramp.`,
+          [here],
+        );
+        return { state: done(next), ok: true };
+      }
+      const area: CargoArea = opts.area ?? 'top';
+      const why = stowCheck(state, u, cargo, area);
+      if (why) return refuse(why);
+      const next = log(
+        withUnit(state, {
+          ...(cargo as ConventionalUnit),
+          stowedIn: u.id,
+          stowedOn: area,
+          pos: here,
+          movementEnded: true,
+        }),
+        'info',
+        `${unitName(u)} takes ${unitName(cargo)} ${area === 'internal' ? 'into the hold' : 'onto the deck'}.`,
+        [here],
+      );
+      return { state: done(next), ok: true };
+    }
+
+    case 'reloadMissile': {
+      // "If a Vulcan is carrying spare missiles, that Vulcan or an accompanying
+      // Heavy Drone may reload either internal or external missile launchers."
+      // (15.04.4)
+      const targetId = opts.target;
+      const ogre = targetId ? state.units[targetId] : undefined;
+      if (!ogre || !isOgre(ogre) || !onBoard(ogre)) return refuse('no cybertank here to reload');
+      if (!eq(ogre.pos, here)) return refuse('it is not in this hex');
+      if (ogre.owner !== by) return refuse('that is not yours to reload');
+      // "The Vulcan is required to attempt this task as the missiles as stored
+      // in (or on) it."
+      const holds = unitsAt(state, here).filter(
+        (x) => x.owner === by && isVulcan(x) && spareMissiles(state, x.id) > 0,
+      );
+      const store = holds[0];
+      if (!store) return refuse('no Vulcan here is carrying spare missiles (15.04.4)');
+
+      const weaponId = opts.weapon;
+      const weapon = weaponId ? ogre.weapons.find((w) => w.id === weaponId) : undefined;
+      if (weapon && weapon.kind === 'missile') {
+        // "External missiles may only be reloaded if they were fired; the
+        // launcher is too damaged to reload an external missile that was
+        // destroyed in place. Reloading an external missile is an automatic
+        // success."
+        if (weapon.destroyed) return refuse('that launcher was destroyed in place');
+        if (!weapon.fired) return refuse('that missile is still on the rail');
+        let next = withUnit(state, {
+          ...ogre,
+          weapons: ogre.weapons.map((w) => (w.id === weapon.id ? { ...w, fired: false } : w)),
+        });
+        next = spendSpareMissile(next, store.id);
+        next = log(next, 'good', `${unitName(u)} hangs a fresh missile on ${unitName(ogre)}.`, [
+          here,
+        ]);
+        return { state: done(next), ok: true };
+      }
+
+      // "Reloading internal missiles is more complicated, and requires at least
+      // one Heavy Drone to attempt. This task succeeds on a roll of 5 or
+      // greater. The Ogre being reloaded must have at least one functioning
+      // missile rack."
+      if (heavyDronesAt(state, here, by) < 1) {
+        return refuse('reloading internal missiles needs a Heavy Drone (15.04.4)');
+      }
+      if (!ogre.weapons.some((w) => w.kind === 'missileRack' && !w.destroyed)) {
+        return refuse('it has no missile rack left to feed');
+      }
+      const roll = rollPool(state, dice);
+      if (roll.best < TASK_ROLL.reloadMissile) {
+        return {
+          state: done(
+            log(roll.state, 'info', `The rack will not take it — rolled ${roll.best}.`, [here]),
+          ),
+          ok: true,
+        };
+      }
+      let next = withUnit(roll.state, { ...ogre, internalMissiles: ogre.internalMissiles + 1 });
+      next = spendSpareMissile(next, store.id);
+      next = log(
+        next,
+        'good',
+        `${unitName(u)} feed a missile into ${unitName(ogre)}’s rack (rolled ${roll.best}).`,
+        [here],
+      );
+      return { state: done(next), ok: true };
+    }
+
+    case 'hitchTow': {
+      // "Attaching the vehicle to the tow hitch is a Vulcan Task, which
+      // succeeds on a roll of 2+." (15.04.8)
+      if (!isVulcan(u)) return refuse('only a Vulcan has a tow hitch');
+      const targetId = opts.target;
+      const load = targetId ? state.units[targetId] : undefined;
+      const why = towCheck(state, u, load);
+      if (why) return refuse(why);
+      const roll = rollPool(state, dice);
+      if (roll.best < TASK_ROLL.hitchTow) {
+        return {
+          state: done(
+            log(roll.state, 'info', `The hitch will not seat — rolled ${roll.best}.`, [here]),
+          ),
+          ok: true,
+        };
+      }
+      const next = log(
+        withUnit(roll.state, { ...load!, towedBy: u.id } as Unit),
+        'good',
+        `${unitName(u)} takes ${unitName(load!)} on the hitch.`,
+        [here],
       );
       return { state: done(next), ok: true };
     }

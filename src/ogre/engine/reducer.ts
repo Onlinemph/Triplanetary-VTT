@@ -9,15 +9,18 @@
 import type { GameMap } from './map.js';
 import type { Command, CommandResult } from './commands.js';
 import { fail, ok } from './commands.js';
-import { eq } from './hex.js';
+import { eq, key } from './hex.js';
 import { TRAIN_MAX_SPEED, unitClass } from './units.js';
 import {
+  type ConventionalUnit,
   type GameState,
   type Phase,
+  type Unit,
   type VictoryState,
   activePlayer,
   isInertOgre,
   isOgre,
+  isPallet,
   onBoard,
   passengersOf,
   playerTurnOrdinal,
@@ -27,8 +30,12 @@ import { SETUP_COMMANDS, finishSetup, placeUnit } from './setup.js';
 import { deployReserveCheck } from './reserves.js';
 import { clearBlasts, launchMissile } from './missiles.js';
 import { clearTasks } from './engineering.js';
+import { pushPallet, unpackDrone } from './drone.js';
+import { controlCheck, crewlessPenalty } from './vulcan.js';
+import { trainCounters, trainMoveCheck } from './train.js';
 import {
   apRemaining,
+  clearLaserWatch,
   log,
   makeUnit,
   movementAllowance,
@@ -59,7 +66,9 @@ import {
   isDummy,
   layMinefield,
   mineStopOn,
+  mineWarningOn,
   revealAt,
+  revealMinefield,
   revealUnit,
   revealOnMove,
   tripMinefield,
@@ -191,11 +200,13 @@ const route = (state: GameState, cmd: Command, map: GameMap): ApplyResult => {
     case 'attack':
       return doAttack(state, cmd.attackers, cmd.target, map);
     case 'layMinefield':
-      return wrap(state, layMinefield(state, map, cmd.by, cmd.at));
+      return wrap(state, layMinefield(state, map, cmd.by, cmd.at, cmd.onRoad));
     case 'engineer':
       return wrap(
         state,
         engineer(state, map, cmd.by, cmd.unit, cmd.task, cmd.toward, {
+          ...(cmd.onRoad !== undefined ? { onRoad: cmd.onRoad } : {}),
+          ...(cmd.area !== undefined ? { area: cmd.area } : {}),
           ...(cmd.target !== undefined ? { target: cmd.target } : {}),
           ...(cmd.weapon !== undefined ? { weapon: cmd.weapon } : {}),
         }),
@@ -240,6 +251,14 @@ const route = (state: GameState, cmd: Command, map: GameMap): ApplyResult => {
       return wrap(state, launchMissile(state, map, cmd.unit, cmd.target));
     case 'setTrainSpeed':
       return doSetTrainSpeed(state, cmd.unit, cmd.change);
+    case 'unpackDrone':
+      return wrap(state, unpackDrone(state, cmd.unit));
+    case 'unhitch':
+      return doUnhitch(state, cmd.unit);
+    case 'droneControl':
+      return doDroneControl(state, cmd.unit, cmd.target, cmd.level);
+    case 'pushPallet':
+      return wrap(state, pushPallet(state, map, cmd.unit, cmd.to));
   }
 };
 
@@ -302,7 +321,12 @@ const doSetTrainSpeed = (state: GameState, unitId: string, change: 1 | -1): Appl
       result: fail(change > 0 ? 'the train is at full speed' : 'the train is stopped'),
     };
   }
-  const next = withUnit(state, { ...unit, trainSpeed: speed, trainSpeedSet: true });
+  // "Each train gets one marker, placed on or beside the train as convenient"
+  // (9.03): both counters of a two-counter train carry the same number.
+  let next = state;
+  for (const counter of trainCounters(state, unit)) {
+    next = withUnit(next, { ...counter, trainSpeed: speed, trainSpeedSet: true });
+  }
   return {
     state: log(
       next,
@@ -354,11 +378,51 @@ const doMove = (
   if (unit.kind === 'unit' && unit.ridingOn) {
     return { state, result: fail('that infantry is riding; dismount first') };
   }
+  if (unit.kind === 'unit' && unit.stowedIn) {
+    return { state, result: fail('it is stowed aboard a Vulcan; unload it first (15.02.1)') };
+  }
+  if (unit.towedBy) {
+    return { state, result: fail('it is on a Vulcan’s tow hitch; unhitch it first (15.04.8)') };
+  }
+  // "on its own [an unaided armor unit] will allow an armor unit to move
+  // intelligently over short distances" only with a Vulcan in the loop
+  // (15.02.4): a crewless counter nobody is driving does nothing.
+  if (crewlessPenalty(state, unit) === 'inert') {
+    return { state, result: fail(`${unitName(unit)} has no crew and nothing driving it`) };
+  }
+  // A pallet does not move: it is carried, one hex, by a squad in its hex
+  // (14.01). The order looks the same to the interface.
+  if (isPallet(unit)) {
+    const to = path[path.length - 1];
+    if (!to) return { state, result: fail('nowhere to carry it') };
+    return wrap(state, pushPallet(state, map, unitId, to));
+  }
+  const reversing = trainMoveCheck(state, unit);
+  if (reversing) return { state, result: fail(reversing) };
   if (state.phase === 'gevMovement') {
     const cls = unit.kind === 'unit' ? unitClass(unit.classId) : null;
     if (!cls || cls.secondMove == null) {
       return { state, result: fail('only GEV-type units move again after combat') };
     }
+  }
+
+  // "Whenever a qualifying Ogre is about to enter a hex with a mine ... the
+  // opposing player must acknowledge the presence of a mine ... The Ogre may
+  // then choose to stay still, move elsewhere, or continue into the hex."
+  // (13.04.1) The order is refused, the mine shown, and the next order is the
+  // cybertank's answer.
+  const warned = mineWarningOn(state, unit, path);
+  if (warned) {
+    const shown = revealMinefield(state, warned);
+    return {
+      state: log(
+        shown,
+        'warn',
+        `${unitName(unit)} reads a minefield at ${key(warned)} and holds (13.04.1).`,
+        [warned],
+      ),
+      result: fail(`there is a minefield at ${key(warned)} — order it in again to go through`),
+    };
   }
 
   // A minefield the mover does not know about stops it where it is (13.04):
@@ -512,23 +576,94 @@ const doDismount = (state: GameState, unitId: string): ApplyResult => {
   if (!check.ok) return { state, result: fail(check.reason ?? 'cannot dismount') };
   if (wouldOverstack(state, rider.pos, rider)) return { state, result: fail('that hex is full') };
 
-  // A drone set down is setting up for the rest of the turn (14.01): it
-  // cannot fire until its next fire phase.
-  const settingUp = rider.kind === 'unit' && rider.classId === 'LAD';
+  // "Turn 1: Unloading ... All the transport needs to do is remain in one place
+  // for one turn. Place the LAD pallet in the same hex as the transport."
+  // (14.01) The pallet is cargo, not a passenger climbing down.
+  const pallet = rider.kind === 'unit' && rider.classId === 'LAD';
+  if (pallet) {
+    const carrier = state.units[rider.ridingOn!];
+    if (carrier && carrier.moveUsed > 0) {
+      return { state, result: fail('the transport must stand still for a turn to unload it') };
+    }
+  }
+
   const next = updateAnyUnit(state, unitId, () => ({
     ridingOn: undefined,
     // "may not move 'on its own' on the turn it dismounts" (5.11.3)
     movementEnded: true,
-    ...(settingUp ? { firedThisPhase: true } : {}),
+    ...(pallet ? { firedThisPhase: true } : {}),
   }));
   return {
     state: log(
       next,
       'info',
-      settingUp
-        ? `${unitName(rider)} is set down and begins setting up.`
+      pallet
+        ? `${unitName(rider)} is set down on its pallet. It can unpack next turn.`
         : `${unitName(rider)} drops off.`,
       [rider.pos],
+    ),
+    result: ok(),
+  };
+};
+
+// ---------------------------------------------------------------------------
+// The Vulcan's hitch and its control channels (15.02.4, 15.02.5, 15.04.8)
+// ---------------------------------------------------------------------------
+
+/** "Unhitching a towed vehicle is automatic and is not considered a task." */
+const doUnhitch = (state: GameState, unitId: string): ApplyResult => {
+  const u = state.units[unitId];
+  if (!u || !onBoard(u)) return { state, result: fail('no such unit') };
+  const tug = u.towedBy ? state.units[u.towedBy] : undefined;
+  if (!tug) return { state, result: fail('it is not on anybody’s hitch') };
+  if (tug.owner !== activePlayer(state)) return { state, result: fail('not your Vulcan') };
+  const next = withUnit(state, { ...u, towedBy: undefined } as Unit);
+  return {
+    state: log(next, 'info', `${unitName(tug)} drops ${unitName(u)} off the hitch.`, [u.pos]),
+    result: ok(),
+  };
+};
+
+/**
+ * "The Vulcan determines which four ducklings are under active control at the
+ * beginning of each turn. It can switch which four it controls each turn."
+ * (15.02.5)
+ */
+const doDroneControl = (
+  state: GameState,
+  vulcanId: string,
+  targetId: string,
+  level: 'combat' | 'duckling' | null,
+): ApplyResult => {
+  const vulcan = state.units[vulcanId];
+  const target = state.units[targetId];
+  if (!vulcan || !target) return { state, result: fail('no such unit') };
+  if (vulcan.owner !== activePlayer(state)) return { state, result: fail('not your Vulcan') };
+  if (level === null) {
+    if (target.kind !== 'unit' || target.drivenBy !== vulcanId) {
+      return { state, result: fail('that Vulcan is not driving it') };
+    }
+    const next = withUnit(state, { ...target, drivenBy: undefined, control: undefined });
+    return {
+      state: log(next, 'info', `${unitName(vulcan)} lets ${unitName(target)} go.`, [target.pos]),
+      result: ok(),
+    };
+  }
+  const why = controlCheck(state, vulcan, target, level);
+  if (why) return { state, result: fail(why) };
+  const next = withUnit(state, {
+    ...(target as ConventionalUnit),
+    drivenBy: vulcanId,
+    control: level,
+  });
+  return {
+    state: log(
+      next,
+      'info',
+      level === 'combat'
+        ? `${unitName(vulcan)} takes ${unitName(target)} onto a control channel.`
+        : `${unitName(target)} falls in behind ${unitName(vulcan)} as a duckling.`,
+      [target.pos],
     ),
     result: ok(),
   };
@@ -677,8 +812,12 @@ export const advancePhase = (state: GameState, map: GameMap): GameState => {
       return { ...settled, phase: 'fire' };
     }
 
-    case 'fire':
-      return beginMovementPhase({ ...state, phase: 'gevMovement' }, map, player, 'gevMovement');
+    case 'fire': {
+      // The owner's fire phase is over, so the "preceding enemy turn" of 12.06
+      // is now the one about to begin: the Lasers start watching again.
+      const watching = clearLaserWatch(state, player);
+      return beginMovementPhase({ ...watching, phase: 'gevMovement' }, map, player, 'gevMovement');
+    }
 
     case 'gevMovement': {
       const settled = resolvePendingHazards(state, player);

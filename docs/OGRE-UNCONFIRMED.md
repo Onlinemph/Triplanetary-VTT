@@ -1,16 +1,8 @@
 # What is still not the printed rule
 
 Checked against **Ogre Sixth Edition, Revised: Battlefields**, rules version 6.3
-(August 2019). Everything the rulebook settles has been corrected in the
-engine and cited at the implementation site; this file is what is left.
-
-Two kinds of thing are listed:
-
-1. **Numbers the rules text does not print.** They are on the counters or the
-   record sheets, so they still need somebody with the components.
-2. **Rules the engine models differently.** Each of these is a known,
-   deliberate simplification, not an oversight, and each says what the printed
-   rule is and what it would take to close the gap.
+(August 2019). Everything the rulebook settles is now implemented and quoted at
+the implementation site. This file is what is left, and it is short.
 
 The companion file is `docs/OGRE-RULES-MAPPING.md`, which says where each rule
 is implemented.
@@ -19,116 +11,108 @@ is implemented.
 
 ## 1. Numbers still to read off a counter
 
-| Counter                | Value            | Code now    | Where it lives           |
-| ---------------------- | ---------------- | ----------- | ------------------------ |
-| **Truck** (TK)         | Movement         | 4           | Counter; wheeled, 5.08.5 |
-| **Hovertruck** (HT)    | Movement         | 4 + 3       | Counter; GEV rules, 3.03 |
-|                        | Defence          | 0           | Counter                  |
-| **Laser** (LSR)        | Structure Points | D2 stand-in | Counter / scenario       |
-|                        | Victory points   | 12          | Scenario                 |
-| **Laser Tower** (LTWR) | Structure Points | D4 stand-in | Counter / scenario       |
-|                        | Victory points   | 18          | Scenario                 |
-| **Train**              | Size             | 5           | Scenario                 |
-|                        | Victory points   | 12          | Scenario                 |
-| **Command Post** (CP)  | Size             | 1           | Not in the Size Table    |
+These are not in the rules text at all — they are printed on the counters, or
+left to a scenario — so they need somebody with the components to settle. Each
+is flagged `unconfirmed` at its definition.
 
-Everything else on the counters is now settled. The Armor Units summary gave
-the Mobile Howitzer D2 and the Missile Crawler D2/M1; 1.08 gave the victory
-values (2 a squad, 3 a half-value armour unit, 6 a standard one or a Crawler,
-12 a double-value one or a Cruise Missile); 15.03.6 and 3.02.2 gave the Truck
-1 VP and the Hovertruck 2, for "unit selection and victory calculation" alike.
+| Counter                 | Value            | Code now | Where it lives           |
+| ----------------------- | ---------------- | -------- | ------------------------ |
+| **Truck** (TK)          | Movement         | 4        | Counter; wheeled, 5.08.5 |
+| **Hovertruck** (HT)     | Movement         | 4 + 3    | Counter; GEV rules, 3.03 |
+|                         | Defence          | 0        | Counter                  |
+| **Laser** (LSR)         | Structure Points | 20       | Counter / scenario       |
+|                         | Victory points   | 12       | Scenario                 |
+| **Laser Tower** (LTWR)  | Structure Points | 20       | Counter / scenario       |
+|                         | Victory points   | 18       | Scenario                 |
+| **Train** (per counter) | Size             | 5        | Scenario                 |
+|                         | Victory points   | 12       | Scenario                 |
+| **Command Post** (CP)   | Size             | 1        | Not in the Size Table    |
+
+Everything else on the counters is settled. The Armor Units summary gave the
+Mobile Howitzer D2 and the Missile Crawler D2/M1; 1.08 gave the victory values
+(2 a squad, 3 a half-value armour unit, 6 a standard one or a Crawler, 12 a
+double-value one or a Cruise Missile); 15.03.6 and 3.02.2 gave the Truck 1 VP
+and the Hovertruck 2, for "unit selection and victory calculation" alike.
 
 ---
 
-## 2. Rules the engine simplifies
+## 2. Rules the engine models differently
 
-### Lasers are buildings (§12)
+Three, and each says why.
 
-**Printed:** "Defensively, they are buildings with Structure Points."
-A Laser is damaged at 10 SP and destroyed at 0; a damaged one cannot fire.
-It may attack a unit only if it did not fire at all during the preceding enemy
-turn.
+### A cruise missile's route (10.02)
 
-**Here:** a Laser is an immobile unit with a defence strength standing in for
-its Structure Points. Its attack (2), its ranges (30 and 60) and its double
-strength when overrun are now the printed ones, and so is the line of sight.
-What is missing is SP damage, the damaged state, and the fire restriction.
+**Printed:** "The missile starts at its crawler and immediately moves one hex at
+a time, by any route indicated by its owner, until it is intercepted, or its
+owner states that it has reached its target and is exploding."
 
-**To close it:** the engine already has buildings with Structure Points for
-§11. Moving the two Laser classes onto that machinery is mostly deletion.
+**Here:** a straight line from the crawler to the target hex. Everything else
+about the flight is the printed rule — the 2d6 interception table with its
+tracking bonuses, one shot a gun, premature detonation on a 6, and the blast
+table of 10.04.
 
-### The train is one counter, and should be two (§9)
+**Where it shows:** exactly one place. 10.02.1 says nothing may fly within six
+hexes of this turn's crater, and a dogleg would sometimes get round one where a
+straight line cannot. `launchCheck` refuses such a launch and says so, rather
+than quietly flying the missile through the fallout.
 
-**Printed:** a train is two counters and two hexes long. Destroying the rear
-counter leaves the front running; destroying the front of a moving train
-destroys the whole thing. Each half carries 12 "size points" of cargo, and
-only units of Size 3 or below. It always goes forward unless it is on the
-M0/1 marker, which is also the only marker it may reverse on.
+**To close it:** the launch order would carry a route rather than a target hex,
+and the interface would need a way to draw one.
 
-**Here:** one counter, and cargo counted in squads. Everything else about the
-train is now the printed rule: the M0/1 to M6/7 markers with their two
-distances, the marker changing at the end of the turn, destruction on cut
-track, the collision rules of 9.06, doubled defence in a town, and freedom
-from stacking limits.
+### The two six-turn cargo jobs (15.02.2)
 
-**Also not in:** armed trains (9.03.1), and reinforcements carried aboard
-(9.07).
+**Printed:** six turns "to secure a damaged armor unit in the field and winch it
+onto the top cargo area", and six "to unload all palleted cargo from either the
+top or interior, or to load new cargo that is palletized and ready to go".
 
-### The drone does not deploy (§14.01)
+**Here:** the one-turn single-item job from the same list is a Vulcan task, and
+these two are not. Neither has a die roll, and both are longer than most
+scenarios; the rules themselves treat this stretch of 15.02.2 as a referee's
+table — "referees should extrapolate from this to set logical times for anything
+that a Vulcan could reasonably do". `vulcan.VULCAN_JOBS` holds the numbers for a
+scenario that wants them.
 
-**Printed:** a LAD travels collapsed as a cargo pallet. Turn 1 the transport
-stands still and the pallet is unloaded; turn 2 it unpacks and may be shot at
-but may not fire; turn 3 it can fire. A pallet is a D0 target destroyed by any
-attack, can be hidden in a defensive setup, and is not overrun. Repacking
-takes engineers three turns plus one to load, or a Vulcan one turn. A LAD that
-is set up may not be moved.
+### Assembling a cybertank on the table (15.02.2)
 
-**Here:** the LAD mounts and dismounts like a squad of infantry, and is
-"setting up" — unable to fire — for the rest of the turn it dismounts.
+**Printed:** twelve turns for a Mark II, up to seventy-five for a Ninja,
+shortened by a third for one helping arm and halved for two.
 
-### What the Vulcan still cannot do (§15)
+**Here:** the table is in — `vulcan.ASSEMBLY_TURNS` and `assemblyTurns` — and so
+is the rule that governs the result: "If fire is directed at an unfinished Ogre,
+treat all D results as X. An unfinished Ogre cannot shoot back." What is not is
+a turn-by-turn build order, because thirty turns to raise a Mark III is longer
+than any scenario in the book and the rules say as much: "Ogres larger than a
+Mark III-B are not normally built under combat conditions." A scenario that
+wants one sets `activatesOn` off the table.
 
-Section 15 is nearly complete: the dice pools, the fire-phase timing, one
-attempt per task per turn, and fourteen tasks — entrenchments and revetments,
-planting, sweeping and disarming mines, mending roads and rail, grading
-ridges, finishing off a cybertank, and the Vulcan's work on stuck units, roads
-through wreckage, and an Ogre's weapons and treads.
+Orbital Drop uses its own compressed delay (`assault.assemblyDelay`, Size − 4
+turns, minimum 2). That is that campaign's rule, not 15.02.2's.
 
-What is not:
+---
 
-- **Reloading missiles** (15.04.4), which needs the Vulcan's cargo hold.
-- **Towing** (15.04.8): hitch on a 2+, one vehicle at a time, with the
-  Vulcan's move dropping by the towed vehicle's size.
-- **Everything about Drones as Drones** (15.02.1, 15.02.4, 15.02.5): the
-  Vulcan's cargo capacity, combat Drones, and the sixteen "ducklings" it can
-  drive at half strength. A Heavy Drone is a counter here, and a useful one,
-  but nothing connects it to a Vulcan's four control channels.
-- **Assembly times** (15.02.2): 12 turns for a Mark II up to 75 for a Ninja.
-  The unfinished-Ogre rule that governs the result is already in.
+## 3. Two smaller readings
 
-Two smaller simplifications inside what is there. A mine sweep searches one
-hex at a time, so it always needs a 2 or better; the rules let a squad sweep
-several at once for a worse roll. And 15.04.7 prints no die roll for digging a
-revetment, so the section's general 6 stands in.
+Not gaps so much as places the rules leave room and the engine picked one.
 
-### Smaller known gaps
-
-- **13.02.1 River bridges.** A bridge crossing a whole hex has defence 8, lies
-  in three hexes, and drowns anything on its centre hex when it goes; an Ogre
-  falls in and takes four dice of tread damage. Only stream bridges are in.
-- **13.04 Road mines.** A mine records whether it is on the road, and the
-  engine keeps that flag, but every mine laid in a road hex is treated as a
-  road mine. The rules let the layer choose.
-- **12.05** A Laser can try to intercept an Ogre missile on a 10+.
+- **Mine sweeping** (15.03.3). "They need to roll on one die a number greater
+  than the number of hexes they are searching." A sweep here searches one hex,
+  so it always needs a 2 or better; the rules let a squad search several at once
+  for a worse roll.
+- **Digging a revetment** (15.04.7) prints no die roll of its own, so the
+  section's general "if a 6 is rolled on any die, the task is successfully
+  completed" stands in.
 
 ---
 
 ## Where the numbers live
 
-| Where                            | What                                           |
-| -------------------------------- | ---------------------------------------------- |
-| `src/ogre/engine/units.ts`       | Every counter face, and its `unconfirmed` flag |
-| `src/ogre/engine/missiles.ts`    | `CRUISE_MISSILE` — §10                         |
-| `src/ogre/engine/concealment.ts` | `MINEFIELD` — 13.04                            |
-| `src/ogre/engine/engineering.ts` | `SUPERHEAVY_SHEET`, `SUPERHEAVY_GUN`, `BRIDGE` |
-| `src/ogre/scenarios/custom.ts`   | `HIDDEN_LIMITS` — the builder's caps           |
+| Where                            | What                                            |
+| -------------------------------- | ----------------------------------------------- |
+| `src/ogre/engine/units.ts`       | Every counter face, and its `unconfirmed` flag  |
+| `src/ogre/engine/missiles.ts`    | `CRUISE_MISSILE` — §10                          |
+| `src/ogre/engine/concealment.ts` | `MINEFIELD` — 13.04                             |
+| `src/ogre/engine/engineering.ts` | `SUPERHEAVY_SHEET`, `SUPERHEAVY_GUN`, `BRIDGE`  |
+| `src/ogre/engine/drone.ts`       | `REPACK_TURNS` — 14.01                          |
+| `src/ogre/engine/train.ts`       | `TRAIN_GUN`, `TRAIN_CARGO_PER_HALF` — §9        |
+| `src/ogre/engine/vulcan.ts`      | `VULCAN_CARGO`, `ASSEMBLY_TURNS`, `VULCAN_JOBS` |
+| `src/ogre/scenarios/custom.ts`   | `HIDDEN_LIMITS` — the builder's caps            |

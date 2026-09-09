@@ -32,6 +32,7 @@ import {
   type Unit,
   type UnitId,
   isOgre,
+  isPallet,
   onBoard,
   passengersOf,
   ridingSomething,
@@ -49,6 +50,19 @@ import {
   withUnit,
 } from './state.js';
 import { mobilityOf } from './mobility.js';
+import { advanceDrones, pushCheck } from './drone.js';
+import { outOfContact, towingCost } from './vulcan.js';
+import {
+  TRAIN_GUN,
+  followWithRear,
+  gunsOn,
+  boardTrainCheck,
+  destroyTrainCounter,
+  isTrain,
+  markerOf,
+  runDownUnarmedTrains,
+  trainIsArmed,
+} from './train.js';
 
 // ---------------------------------------------------------------------------
 // Stacking
@@ -112,6 +126,8 @@ export interface StepInfo {
   readonly derails?: boolean;
   /** The train ran into units standing on the track (9.06). */
   readonly collides?: boolean;
+  /** The step runs an unarmed train down where it stands (9.04). */
+  readonly runsDownTrain?: boolean;
   /** The step is along a road or railroad link (2.03.1), so terrain is ignored. */
   readonly onRoute: boolean;
   /** The road bonus is available for this kind of unit on this kind of route (5.07.3). */
@@ -240,6 +256,22 @@ export const stepInfo = (
         collides: true,
       };
     }
+    // "If an unarmed train ... is overrun by, a unit with a regular combat
+    // strength, it is destroyed" (9.04) — so an unarmed train is not something
+    // to go round, and it is not an overrun either. It is run down on entry.
+    if (occupants.every((u) => isTrain(u) && !trainIsArmed(state, u))) {
+      return {
+        ok: true,
+        cost: route !== undefined ? 1 : (terrainEntry.cost ?? 1),
+        onRoute: route !== undefined,
+        bonusEligible: route !== undefined && bonusEligibleFor(unit, route),
+        endsMovement: route !== undefined ? false : terrainEntry.endsMovement,
+        hazard: null,
+        requiresPhaseStart: false,
+        reducesInfantry: false,
+        runsDownTrain: true,
+      };
+    }
     if (canWalkThroughInfantry) {
       // 6.06: not a ram, and it does not count against the ramming limit.
       reducesInfantry = true;
@@ -280,6 +312,9 @@ export const stepInfo = (
 /** A unit's attack strength for the "may I move through it?" test in 5.03. */
 const attackStrengthOf = (u: Unit): number => {
   if (isOgre(u)) return u.weapons.some((w) => !w.destroyed) ? 1 : 0;
+  // "Unless the train is armed (9.03.1), enemy units may enter its hex
+  // freely." (9.02.3) An armed one is a unit like any other in the way.
+  if (u.classId === 'TRAIN') return gunsOn(u) * TRAIN_GUN.attack;
   return unitClass(u.classId).attack;
 };
 
@@ -315,6 +350,20 @@ export interface PathPlan {
  * issue several move commands in a phase, so the "entire phase" part is carried
  * on the unit as `onRouteAllPhase` and narrowed here, never widened.
  */
+/**
+ * Everything that goes where a unit goes: infantry riding it (5.11), cargo
+ * stowed aboard a Vulcan (15.02.1), and whatever is on its tow hitch (15.04.8).
+ */
+const carriedWith = (state: GameState, id: UnitId): Unit[] => {
+  const out: Unit[] = [...passengersOf(state, id)];
+  for (const u of Object.values(state.units)) {
+    if (!onBoard(u) || u.id === id) continue;
+    if (u.kind === 'unit' && u.stowedIn === id) out.push(u);
+    else if (u.towedBy === id) out.push(u);
+  }
+  return out;
+};
+
 export const planPath = (
   state: GameState,
   map: GameMap,
@@ -322,7 +371,12 @@ export const planPath = (
   path: readonly Hex[],
 ): PathPlan => {
   const phase = state.phase;
-  const allowance = movementAllowance(unit, phase, state.options);
+  // "The Vulcan's movement is decreased based upon the size of the vehicle it
+  // attempts to tow." (15.04.8)
+  const allowance = Math.max(
+    0,
+    movementAllowance(unit, phase, state.options) - towingCost(state, unit),
+  );
   const empty: PathPlan = {
     ok: false,
     totalCost: 0,
@@ -386,7 +440,7 @@ export const planPath = (
   // than refused here, so the reachability search can walk on past the hex.
   let tooShort = false;
   if (mobilityOf(unit) === 'rail' && !exits) {
-    const marker = unit.kind === 'unit' ? (unit.trainSpeed ?? 0) : 0;
+    const marker = markerOf(state, unit);
     const derailed = steps.some((st) => st.derails === true);
     tooShort = !derailed && marker > 0 && spent < marker;
   }
@@ -447,7 +501,7 @@ export const applyMove = (
   const plan = planPath(state, map, unit, path);
   if (!plan.ok) return { state, plan };
   if (plan.tooShort === true) {
-    const marker = unit.kind === 'unit' ? (unit.trainSpeed ?? 0) : 0;
+    const marker = markerOf(state, unit);
     return {
       state,
       plan: {
@@ -497,7 +551,7 @@ export const applyMove = (
       moveUsed: unit.moveUsed + derailAt + 1,
       movementEnded: true,
     }));
-    for (const rider of passengersOf(next, unitId)) {
+    for (const rider of carriedWith(next, unitId)) {
       next = updateAnyUnit(next, rider.id, () => ({ pos: wreckAt }));
     }
     next = log(next, 'bad', `${unitName(unit)} runs onto cut track at ${key(wreckAt)}.`, [wreckAt]);
@@ -511,7 +565,7 @@ export const applyMove = (
       offMap: edge,
       moveUsed: unit.moveUsed + plan.totalCost,
     }));
-    for (const rider of passengersOf(next, unitId)) {
+    for (const rider of carriedWith(next, unitId)) {
       next = updateAnyUnit(next, rider.id, () => ({ offMap: edge }));
     }
     return {
@@ -528,9 +582,20 @@ export const applyMove = (
     pendingHazard: hazard ?? u.pendingHazard,
   }));
 
-  // Riders travel with the vehicle; they have no movement of their own.
-  for (const rider of passengersOf(next, unitId)) {
+  // Riders, cargo and a towed vehicle travel with the carrier; none of them
+  // have movement of their own.
+  for (const rider of carriedWith(next, unitId)) {
     next = updateAnyUnit(next, rider.id, () => ({ pos: dest }));
+  }
+
+  // "A standard train is made up of two counters, so it takes up two hexes"
+  // (9.01): the other half comes up behind (9.02).
+  next = followWithRear(next, unitId, path, unit.pos);
+
+  // 9.04: an unarmed train under the wheels of anything armed.
+  if (plan.steps.some((st) => st.runsDownTrain === true)) {
+    const mover = next.units[unitId];
+    if (mover) next = runDownUnarmedTrains(next, dest, mover).state;
   }
 
   return { state: next, plan };
@@ -592,7 +657,9 @@ const collide = (
         next = trainWreckAttack(next, map, victim.id, 1, train.owner);
       }
     }
-    return destroyUnit(next, unitId, 'wrecked on the guns', standing[0]?.owner);
+    // "The train is destroyed" (9.06a) — the front hit the guns at speed, so
+    // 9.03's rule takes the rest of it too.
+    return destroyTrainCounter(next, unitId, 'wrecked on the guns', standing[0]?.owner);
   }
 
   // Unarmed: the train goes through them, and pays for it.
@@ -668,7 +735,15 @@ export interface Reach {
  * it walks the same {@link stepInfo}.
  */
 export const reachable = (state: GameState, map: GameMap, unit: Unit): Reach[] => {
-  const allowance = movementAllowance(unit, state.phase, state.options);
+  // "any infantry squad can move a LAD pallet one hex per turn" (14.01): a
+  // pallet has no movement of its own, so its neighbours are its whole reach.
+  if (isPallet(unit)) {
+    return neighbors(unit.pos)
+      .filter((n) => pushCheck(state, map, unit, n) === null)
+      .map((n) => ({ hex: n, cost: 1, path: [n], endsMovement: true, hazard: null }));
+  }
+
+  const allowance = movementAllowance(unit, state.phase, state.options) - towingCost(state, unit);
   if (allowance <= 0 || unit.movementEnded) return [];
 
   const best = new Map<string, Reach>();
@@ -789,6 +864,25 @@ export const resolvePendingHazards = (state: GameState, player: PlayerId): GameS
       ]);
     }
   }
+  return strandedDucklings(next, player);
+};
+
+/**
+ * "They must either stay within a hex of the Vulcan or stop moving completely,
+ * in which case they are considered disabled." (15.02.5)
+ *
+ * The movement phase is where that bites: whatever a duckling did, if it is
+ * more than a hex from the Vulcan when the dust settles it has lost the thread.
+ */
+const strandedDucklings = (state: GameState, player: PlayerId): GameState => {
+  let next = state;
+  for (const u of Object.values(state.units)) {
+    if (u.owner !== player || u.kind !== 'unit' || !onBoard(u)) continue;
+    if (u.control !== 'duckling' || u.disabled !== 'none') continue;
+    if (!outOfContact(next, u)) continue;
+    next = withUnit(next, { ...(next.units[u.id] as ConventionalUnit), disabled: 'combat' });
+    next = log(next, 'warn', `${unitName(u)} loses the Vulcan and stops dead.`, [u.pos]);
+  }
   return next;
 };
 
@@ -807,7 +901,8 @@ export const resolvePendingHazards = (state: GameState, player: PlayerId): GameS
  * disabled on its own turn by ramming is back for the next.
  */
 export const runRecovery = (state: GameState, player: PlayerId, ordinal: number): GameState => {
-  let next = state;
+  // "Turn 3: The LAD can fire." (14.01)
+  let next = advanceDrones(state, player);
   for (const u of Object.values(state.units)) {
     if (u.kind !== 'unit' || u.owner !== player || !onBoard(u)) continue;
 
@@ -849,11 +944,22 @@ export const canMount = (
 ): { ok: boolean; reason?: string } => {
   // Infantry ride (5.11); so does the Light Artillery Drone, palletised, as
   // one squad's worth of room (14.01).
-  if (
-    rider.kind !== 'unit' ||
-    (unitClass(rider.classId).kind !== 'infantry' && rider.classId !== 'LAD')
-  ) {
+  if (rider.kind !== 'unit') return { ok: false, reason: 'a cybertank rides nothing' };
+  // A train is loaded by size points, and takes armour as well as squads
+  // (9.07), so it is judged before 5.11's rules about who rides what.
+  if (isTrain(carrier)) {
+    const why = boardTrainCheck(state, carrier, rider);
+    if (why) return { ok: false, reason: why };
+    if (rider.moveUsed > 0) return { ok: false, reason: 'boarding costs the whole movement phase' };
+    return { ok: true };
+  }
+  if (unitClass(rider.classId).kind !== 'infantry' && rider.classId !== 'LAD') {
     return { ok: false, reason: 'only infantry and the drone ride' };
+  }
+  // "it can be transported collapsed as a single cargo pallet" — and only
+  // collapsed. "A LAD that is set up may not be moved." (14.01)
+  if (rider.classId === 'LAD' && rider.droneState !== 'pallet') {
+    return { ok: false, reason: 'a drone that is set up may not be moved (14.01)' };
   }
   if (ridingSomething(rider)) return { ok: false, reason: 'already aboard something' };
   if (carrier.kind !== 'unit') return { ok: false, reason: 'Ogres do not give lifts' };

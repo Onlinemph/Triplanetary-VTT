@@ -29,7 +29,7 @@ import { rollDie } from './rng.js';
 import { type Odds, describeOdds, oddsFor, resolve } from './crt.js';
 import { OGRE_WEAPONS } from './ogres.js';
 import { baseTerrain, entryCost } from './terrain.js';
-import { unitClass } from './units.js';
+import { LASER_DAMAGED_AT, unitClass } from './units.js';
 import {
   type AttackerRef,
   type GameState,
@@ -41,6 +41,7 @@ import {
   type Unit,
   type UnitId,
   isOgre,
+  isPallet,
   onBoard,
   unitsAt,
 } from './types.js';
@@ -49,19 +50,22 @@ import {
   defenseOf,
   destroyUnit,
   isFireable,
+  laserDamaged,
   log,
   makeUnit,
   movementAllowance,
   ogreDamageValue,
   ogreIsDestroyed,
   printedDefense,
+  structurePointsOf,
   unitName,
   updateAnyUnit,
   withUnit,
 } from './state.js';
 import { mobilityOf } from './mobility.js';
-import { describeTarget, targetHex } from './combat.js';
+import { applyToRiders, describeTarget, targetHex } from './combat.js';
 import { canRam, resolveRam } from './ram.js';
+import { isTrain, trainIsArmed } from './train.js';
 
 // ---------------------------------------------------------------------------
 // Starting one
@@ -96,7 +100,14 @@ export const canOverrun = (
   if (distance(mover.pos, target) !== 1) return no('overrun an adjacent hex');
   if (!inBounds(map, target)) return no('there is nothing off the map to overrun');
 
-  const enemies = unitsAt(state, target).filter((u) => u.owner !== mover.owner);
+  // "An overrun does not take place when a opponent enters a hex with a
+  // collapsed LAD, as the LAD is not a functioning combat unit at that time.
+  // The unit entering the hex may still fire on the LAD pallet during its Fire
+  // Phase." (14.01) An unarmed train is the same: 9.04 simply destroys it, and
+  // `applyMove` does that on the way in.
+  const enemies = unitsAt(state, target).filter(
+    (u) => u.owner !== mover.owner && !isPallet(u) && (!isTrain(u) || trainIsArmed(state, u)),
+  );
   if (enemies.length === 0) return no('nothing there to overrun');
 
   const terrain = terrainAt(map, target, state.terrainOverrides);
@@ -369,7 +380,7 @@ export const previewOverrunAttack = (
     };
   }
 
-  if (target.kind === 'terrain' || target.kind === 'bridge') {
+  if (target.kind === 'terrain' || target.kind === 'bridge' || target.kind === 'riverBridge') {
     return denyPreview('an overrun is fought between units');
   }
   const targetUnit = state.units[target.unit];
@@ -405,6 +416,9 @@ export const previewOverrunAttack = (
       }
     } else if (p.fired) {
       return denyPreview(`${unitName(u)} has fired this round`);
+    } else if (u.kind === 'unit' && unitClass(u.classId).laser && laserDamaged(u)) {
+      // "However, a damaged Laser (Section 12.07) does not fire at all." (12.09)
+      return denyPreview(`${unitName(u)} is damaged and cannot fire`);
     }
 
     total += overrunStrength(u, ref);
@@ -420,6 +434,27 @@ export const previewOverrunAttack = (
       odds: { kind: 'column', column: '1-1' },
       treadAttack: true,
       summary: `1 to 1 on the treads — a 5 or 6 costs ${total} tread units`,
+    };
+  }
+
+  // "Defensively, they are buildings with Structure Points." (12.01) A Laser
+  // takes flat damage at point-blank range like any other structure.
+  if (
+    target.kind === 'unit' &&
+    targetUnit.kind === 'unit' &&
+    unitClass(targetUnit.classId).structurePoints !== undefined
+  ) {
+    const left = structurePointsOf(targetUnit);
+    const terrain = baseTerrain(terrainAt(map, targetUnit.pos, state.terrainOverrides));
+    const damage = terrain === 'town' || terrain === 'forest' ? total : total * 2;
+    return {
+      ok: true,
+      attackStrength: total,
+      defenseStrength: left,
+      odds: { kind: 'auto' },
+      treadAttack: false,
+      summary: `${damage} structure points off ${left}`,
+      structureDamage: damage,
     };
   }
 
@@ -485,6 +520,30 @@ export const resolveOverrunAttack = (
     return { state: reapOverrun(next, map), ok: true };
   }
 
+  // A Laser emplacement takes its damage without a roll, as a building does.
+  if (target.kind === 'unit' && preview.structureDamage !== undefined) {
+    const victimId = target.unit;
+    const emplacement = next.units[victimId]!;
+    if (emplacement.kind !== 'unit') return { state: next, ok: false, reason: 'no such target' };
+    const before = structurePointsOf(emplacement);
+    const left = Math.max(0, before - preview.structureDamage);
+    const wasWhole = !laserDamaged(emplacement);
+    next = withUnit(next, { ...emplacement, structurePoints: left });
+    next = log(
+      next,
+      left <= 0 ? 'good' : 'info',
+      left <= 0
+        ? `Point-blank fire wrecks ${unitName(emplacement)}.`
+        : `${unitName(emplacement)} takes ${preview.structureDamage} structure points at ` +
+            `point-blank range; ${left} left` +
+            (wasWhole && left <= LASER_DAMAGED_AT ? ' — it can no longer fire.' : '.'),
+      [overrun.hex],
+    );
+    if (left <= 0)
+      next = destroyUnit(next, victimId, 'shot to pieces in an overrun', shooter.owner);
+    return { state: reapOverrun(next, map), ok: true };
+  }
+
   const die = rollDie(next.rng);
   next = { ...next, rng: die.state };
 
@@ -522,6 +581,9 @@ export const resolveOverrunAttack = (
       `${describeOdds(preview.odds)} — rolled ${die.value}: ${result === 'NE' ? 'no effect' : 'destroyed'}.`,
     [targetHex(next, target) ?? overrun.hex],
   );
+
+  // "This procedure is followed in both normal combat and overruns." (5.11.2)
+  next = applyToRiders(next, map, target, preview.attackStrength, die.value, result, shooter.owner);
 
   if (result === 'X') {
     if (target.kind === 'ogreWeapon' && isOgre(victim)) {

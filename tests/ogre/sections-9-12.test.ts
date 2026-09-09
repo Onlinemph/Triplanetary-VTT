@@ -10,20 +10,51 @@ import { applyCommand } from '../../src/ogre/engine/reducer.js';
 import { hexLine, key } from '../../src/ogre/engine/hex.js';
 import { layRoute } from '../../src/ogre/engine/map.js';
 import { terrainAt } from '../../src/ogre/engine/map.js';
-import { previewAttack, previewOrbitalStrike } from '../../src/ogre/engine/combat.js';
+import {
+  previewAttack,
+  previewOrbitalStrike,
+  resolveAttack,
+} from '../../src/ogre/engine/combat.js';
+import { overrunStrength } from '../../src/ogre/engine/overrun.js';
+import { advancePhase } from '../../src/ogre/engine/reducer.js';
 import {
   blastEffect,
   blastsThisTurn,
   interceptionTarget,
   launchCheck,
+  launchMissile,
   trackingBonus,
 } from '../../src/ogre/engine/missiles.js';
 import { laserLineOfSight } from '../../src/ogre/engine/los.js';
-import { movementAllowance, defenseOf } from '../../src/ogre/engine/state.js';
-import { reachable } from '../../src/ogre/engine/movement.js';
+import {
+  MAX_TRAIN_GUNS,
+  TRAIN_CARGO_PER_HALF,
+  TRAIN_GUN,
+  armTrain,
+  couple,
+  destroyTrainCounter,
+  gunsLeft,
+  trainCargoUsed,
+  trainFirepower,
+} from '../../src/ogre/engine/train.js';
+import { canOverrun } from '../../src/ogre/engine/overrun.js';
+import { movementAllowance, defenseOf, laserDamaged } from '../../src/ogre/engine/state.js';
+import { reachable, stepInfo } from '../../src/ogre/engine/movement.js';
 import { canRam } from '../../src/ogre/engine/ram.js';
 import { type Building, type GameState, isOgre } from '../../src/ogre/engine/types.js';
-import { A, B, at, flatMap, inPhase, newGame, put, putOgre } from './helpers.js';
+import {
+  A,
+  B,
+  at,
+  flatMap,
+  inPhase,
+  newGame,
+  patch,
+  put,
+  putOgre,
+  seedForRolls,
+  weaponOf,
+} from './helpers.js';
 import { makeUnit } from '../../src/ogre/engine/state.js';
 import type { UnitClassId } from '../../src/ogre/engine/units.js';
 
@@ -258,6 +289,231 @@ describe('lasers (Section 12)', () => {
     );
     expect(blocked.ok).toBe(false);
     expect(blocked.reason).toMatch(/blocked/);
+  });
+
+  // "Defensively, they are buildings with Structure Points; see Section 11."
+  // (12.01) So a shot at one takes SP off a total, and never rolls.
+  it('take Structure Points off a total instead of rolling on the table', () => {
+    let s = newGame({ seed: 1 });
+    const laser = put(s, A, 'LSR', at(3, 3));
+    s = laser.state;
+    const tank = put(s, B, 'HVY', at(4, 3));
+    s = fireFor(tank.state, B);
+    const map = flatMap(10, 8);
+
+    const preview = previewAttack(s, map, [{ unit: tank.id }], { kind: 'unit', unit: laser.id });
+    expect(preview.ok).toBe(true);
+    // 11.04.1: "Any weapon does damage equal to twice its attack strength."
+    expect(preview.structureDamage).toBe(8);
+    expect(preview.defenseStrength).toBe(20);
+
+    // "If a building is in a town or forest, attacks are halved."
+    const inTown = previewAttack(
+      s,
+      flatMap(10, 8, { [key(at(3, 3))]: 'town' }),
+      [{ unit: tank.id }],
+      { kind: 'unit', unit: laser.id },
+    );
+    expect(inTown.structureDamage).toBe(4);
+  });
+
+  // "When a Laser or Laser Tower is reduced to 10 SP, it is 'damaged' ... The
+  // Laser can no longer fire, but it is not actually destroyed until it is
+  // reduced to 0 SP." (12.07)
+  it('are damaged at ten Structure Points and destroyed at none', () => {
+    let s = newGame({ seed: 1 });
+    const laser = put(s, A, 'LSR', at(3, 3));
+    s = laser.state;
+    const tank = put(s, B, 'HVY', at(4, 3));
+    s = fireFor(tank.state, B);
+    const map = flatMap(10, 8);
+
+    // Two shots of 8 leave 4 SP: damaged, still standing.
+    let out = resolveAttack(s, map, [{ unit: tank.id }], { kind: 'unit', unit: laser.id });
+    s = patch(out.state, tank.id, { firedThisPhase: false });
+    out = resolveAttack(s, map, [{ unit: tank.id }], { kind: 'unit', unit: laser.id });
+    s = out.state;
+
+    const hurt = s.units[laser.id]!;
+    expect(hurt.kind === 'unit' && hurt.structurePoints).toBe(4);
+    expect(hurt.destroyed).toBe(false);
+    expect(hurt.kind === 'unit' && laserDamaged(hurt)).toBe(true);
+    expect(s.log.some((e) => /can no longer fire/.test(e.text))).toBe(true);
+
+    // A damaged Laser may not fire, even with a target in the open.
+    const shot = previewAttack(fireFor(s, A), map, [{ unit: laser.id }], {
+      kind: 'unit',
+      unit: tank.id,
+    });
+    expect(shot.ok).toBe(false);
+    expect(shot.reason).toMatch(/damaged/);
+
+    // The next shot takes it to zero.
+    s = patch(s, tank.id, { firedThisPhase: false });
+    out = resolveAttack(s, map, [{ unit: tank.id }], { kind: 'unit', unit: laser.id });
+    expect(out.state.units[laser.id]!.destroyed).toBe(true);
+  });
+
+  // "If a Laser or Laser Tower did not fire at all during the preceding enemy
+  // turn, it may make one attack during its own fire phase." (12.06)
+  it('may not attack a unit after spending the enemy turn tracking a missile', () => {
+    let s = newGame({ seed: 1 });
+    const laser = put(s, A, 'LSR', at(3, 3));
+    s = laser.state;
+    const tank = put(s, B, 'HVY', at(6, 3));
+    s = fireFor(tank.state, A);
+    const map = flatMap(10, 8);
+    const target = { kind: 'unit' as const, unit: tank.id };
+
+    expect(previewAttack(s, map, [{ unit: laser.id }], target).ok).toBe(true);
+
+    const watched = patch(s, laser.id, { firedInEnemyTurn: true });
+    const refused = previewAttack(watched, map, [{ unit: laser.id }], target);
+    expect(refused.ok).toBe(false);
+    expect(refused.reason).toMatch(/tracking a missile/);
+
+    // The flag lasts exactly as long as its own fire phase: ending that phase
+    // starts the watch over for the enemy turn about to begin.
+    const after = advancePhase(watched, map);
+    expect((after.units[laser.id] as { firedInEnemyTurn?: boolean }).firedInEnemyTurn).toBe(false);
+  });
+
+  // 12.04 and 12.06 together: the interception is what spends the shot.
+  it('spend the shot when they track a cruise missile', () => {
+    let s = newGame({ seed: 3 });
+    const laser = put(s, A, 'LSR', at(6, 4));
+    s = laser.state;
+    const crawler = put(s, B, 'MCRL', at(2, 4));
+    s = crawler.state;
+    const victim = put(s, A, 'HVY', at(12, 4));
+    s = fireFor(victim.state, B);
+    const map = flatMap(16, 8);
+
+    const out = launchMissile(s, map, crawler.id, at(12, 4));
+    expect(out.ok).toBe(true);
+    expect(out.state.log.some((e) => /tracks the missile/.test(e.text))).toBe(true);
+    const after = out.state.units[laser.id] as { firedInEnemyTurn?: boolean };
+    expect(after.firedInEnemyTurn).toBe(true);
+  });
+
+  // "To hit an Ogre missile, the Laser must roll a 10 or above on two dice."
+  // (12.05)
+  it('intercept an Ogre missile on a 10 or better, and nothing else may try', () => {
+    const board = flatMap(16, 8);
+    const setUp = (seed: number): { state: GameState; laser: string; ogre: string } => {
+      let s = newGame({ seed });
+      const laser = put(s, A, 'LSR', at(8, 4));
+      s = laser.state;
+      const ogre = putOgre(s, B, 'MK3', at(4, 4));
+      s = ogre.state;
+      // An Ogre missile reaches five hexes (7.05.2).
+      const mark = put(s, A, 'HVY', at(8, 4));
+      s = fireFor(mark.state, B);
+      return { state: s, laser: laser.id, ogre: ogre.id };
+    };
+
+    const hit = setUp(seedForRolls([5, 5]));
+    const missile = weaponOf(hit.state, hit.ogre, 'missile');
+    const mark = Object.values(hit.state.units).find(
+      (u) => u.owner === A && u.kind === 'unit' && u.classId === 'HVY',
+    )!;
+    const shot = resolveAttack(hit.state, board, [{ unit: hit.ogre, weapon: missile.id }], {
+      kind: 'unit',
+      unit: mark.id,
+    });
+    expect(shot.resolution).toBeNull();
+    expect(shot.reason).toMatch(/shot down/);
+    expect(shot.state.log.some((e) => /needs 10, rolled 10: shot down/.test(e.text))).toBe(true);
+    // The missile is spent all the same, and the target untouched.
+    expect(shot.state.units[mark.id]!.destroyed).toBe(false);
+    expect(weaponOf(shot.state, hit.ogre, 'missile').fired).toBe(true);
+    // And the Laser has spent its own shot (12.06).
+    expect((shot.state.units[hit.laser] as { firedInEnemyTurn?: boolean }).firedInEnemyTurn).toBe(
+      true,
+    );
+
+    // A 9 is not enough.
+    const miss = setUp(seedForRolls([4, 5]));
+    const missile2 = weaponOf(miss.state, miss.ogre, 'missile');
+    const mark2 = Object.values(miss.state.units).find(
+      (u) => u.owner === A && u.kind === 'unit' && u.classId === 'HVY',
+    )!;
+    const through = resolveAttack(miss.state, board, [{ unit: miss.ogre, weapon: missile2.id }], {
+      kind: 'unit',
+      unit: mark2.id,
+    });
+    expect(through.resolution).not.toBeNull();
+    expect(through.state.log.some((e) => /it flies on/.test(e.text))).toBe(true);
+  });
+
+  // "(Missiles from a Missile Tank are too small and fast for a Laser to
+  // attack at all.)" (12.05)
+  it('cannot touch a Missile Tank’s shot', () => {
+    let s = newGame({ seed: seedForRolls([5, 5, 1]) });
+    const laser = put(s, A, 'LSR', at(8, 4));
+    s = laser.state;
+    const msl = put(s, B, 'MSL', at(6, 4));
+    s = msl.state;
+    const mark = put(s, A, 'LT', at(9, 4));
+    s = fireFor(mark.state, B);
+    const out = resolveAttack(s, flatMap(16, 8), [{ unit: msl.id }], {
+      kind: 'unit',
+      unit: mark.id,
+    });
+    expect(out.resolution).not.toBeNull();
+    expect(out.state.log.some((e) => /tracks the Ogre missile/.test(e.text))).toBe(false);
+  });
+
+  // "A Laser attack does not give spillover fire on units stacked with the
+  // target. If a vehicle is the target, the attack does affect infantry riding
+  // on that vehicle." (12.08) The riders are hit by 5.11.2, not by spillover.
+  it('give no spillover, except onto infantry riding the target', () => {
+    const map = flatMap(12, 8);
+    const build = (rider: boolean): { state: GameState; laser: string; inf: string } => {
+      // One die roll for the combination (5.11.2): a 6 is no effect at 1-1 on
+      // the GEV — it is an X — so use a 4: a D on the GEV at 1-1, and an X on
+      // the single squad at 2-1.
+      let s = newGame({ seed: seedForRolls([4]), stackingLimit: 5 });
+      const laser = put(s, A, 'LSR', at(2, 4));
+      s = laser.state;
+      const gev = put(s, B, 'GEV', at(6, 4));
+      s = gev.state;
+      const inf = put(s, B, 'INF', at(6, 4), 1);
+      s = inf.state;
+      if (rider) s = patch(s, inf.id, { ridingOn: gev.id });
+      return { state: fireFor(s, A), laser: laser.id, inf: inf.id };
+    };
+
+    const gevOf = (st: GameState): string =>
+      Object.values(st.units).find((u) => u.kind === 'unit' && u.classId === 'GEV')!.id;
+
+    // Standing in the same hex: nothing touches the infantry.
+    const stacked = build(false);
+    const a = resolveAttack(stacked.state, map, [{ unit: stacked.laser }], {
+      kind: 'unit',
+      unit: gevOf(stacked.state),
+    });
+    expect(a.state.log.some((e) => /Spillover/.test(e.text))).toBe(false);
+    expect(a.state.units[stacked.inf]!.destroyed).toBe(false);
+
+    // Riding it: the same shot is calculated against them too (5.11.2).
+    const riding = build(true);
+    const b = resolveAttack(riding.state, map, [{ unit: riding.laser }], {
+      kind: 'unit',
+      unit: gevOf(riding.state),
+    });
+    expect(b.state.log.some((e) => /Spillover/.test(e.text))).toBe(false);
+    expect(b.state.log.some((e) => /riding/.test(e.text))).toBe(true);
+    expect(b.state.units[riding.inf]!.destroyed).toBe(true);
+  });
+
+  // "A Laser being overrun fires at double strength (4) ... However, a damaged
+  // Laser (Section 12.07) does not fire at all." (12.09)
+  it('fire at double strength in an overrun, unless they are damaged', () => {
+    const laser = makeUnit('l', A, 'LSR', at(1, 1));
+    expect(overrunStrength(laser, { unit: 'l' })).toBe(4);
+    const damaged = { ...laser, structurePoints: 6 };
+    expect(laserDamaged(damaged)).toBe(true);
   });
 });
 
@@ -627,5 +883,213 @@ describe('asteroid rules and the strike preview', () => {
     const whole = previewOrbitalStrike(ogre.state, map, 0, { kind: 'unit', unit: ogre.id });
     expect(whole.ok).toBe(false);
     expect(isOgre(ogre.state.units[ogre.id]!)).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 9.01, 9.03, 9.03.1, 9.07 — the train as two counters
+// ---------------------------------------------------------------------------
+
+describe('a train is two counters (9.01)', () => {
+  const rails = flatMap(14, 6);
+  const line = [
+    at(1, 3),
+    at(2, 3),
+    at(3, 3),
+    at(4, 3),
+    at(5, 3),
+    at(6, 3),
+    at(7, 3),
+    at(8, 3),
+    at(9, 3),
+  ];
+  const b = { terrain: {}, sides: {}, routes: {} as Record<string, 'road' | 'rail'> };
+  layRoute(b, line, 'rail');
+  const railMap = { ...rails, routes: b.routes };
+
+  /** A coupled pair with track on both sides of it: rear at `line[2]`, front at `line[3]`. */
+  const coupledTrain = (seed = 2, speed = 2): { state: GameState; front: string; rear: string } => {
+    let s = newGame({ seed });
+    const rear = put(s, A, 'TRAIN', line[2]!);
+    s = rear.state;
+    const front = put(s, A, 'TRAIN', line[3]!);
+    s = patch(front.state, front.id, { trainSpeed: speed });
+    s = couple(s, front.id, rear.id);
+    const other = put(s, B, 'INF', at(13, 6));
+    return { state: other.state, front: front.id, rear: rear.id };
+  };
+
+  // "The two train counters are identical, and the train may go either
+  // direction. 'Front' and 'back' are always relative to the movement of the
+  // train." (9.02)
+  it('brings the rear up behind the front, one marker between them', () => {
+    const t = coupledTrain();
+    const s = moveFor(t.state, A);
+    expect((s.units[t.rear] as { trainSpeed?: number }).trainSpeed).toBe(2);
+
+    // The M2/3 marker: three hexes, and the rear ends one behind.
+    const next = applyCommand(
+      s,
+      { type: 'moveUnit', by: A, unit: t.front, path: [at(5, 3), at(6, 3), at(7, 3)] },
+      railMap,
+    );
+    expect(next.result.ok).toBe(true);
+    expect(key(next.state.units[t.front]!.pos)).toBe(key(at(7, 3)));
+    expect(key(next.state.units[t.rear]!.pos)).toBe(key(at(6, 3)));
+    expect((next.state.units[t.rear] as { trainHalf?: string }).trainHalf).toBe('rear');
+  });
+
+  // "if it was 0/1, it may either go to 2/3 in the same direction, or 0/1 in
+  // the reverse direction (reverse the arrow)." (9.02.1)
+  it('only reverses on the slowest marker', () => {
+    const rolling = moveFor(coupledTrain(2, 2).state, A);
+    const rearId = Object.values(rolling.units).find(
+      (u) => u.kind === 'unit' && u.trainHalf === 'rear',
+    )!.id;
+    const refused = applyCommand(
+      rolling,
+      { type: 'moveUnit', by: A, unit: rearId, path: [at(2, 3)] },
+      railMap,
+    );
+    expect(refused.result.ok).toBe(false);
+    expect(refused.result.ok ? '' : refused.result.reason).toMatch(/only reverses/);
+
+    // Braked to M0/1 it may back up, and the counter that leads becomes front.
+    const stopped = moveFor(coupledTrain(2, 0).state, A);
+    const rear2 = Object.values(stopped.units).find(
+      (u) => u.kind === 'unit' && u.trainHalf === 'rear',
+    )!;
+    const backed = applyCommand(
+      stopped,
+      { type: 'moveUnit', by: A, unit: rear2.id, path: [at(2, 3)] },
+      railMap,
+    );
+    expect(backed.result.ok).toBe(true);
+    expect((backed.state.units[rear2.id] as { trainHalf?: string }).trainHalf).toBe('front');
+  });
+
+  // "If an attack destroys the rear of the train ... that counter is flipped to
+  // the destroyed side, but the other half of the train is not affected. If an
+  // attack destroys the front of a moving train, the whole train is destroyed
+  // ... If a train counter is destroyed, the rails in those hexes are
+  // considered cut." (9.03)
+  it('loses its rear alone, and the whole train if the front goes at speed', () => {
+    const t = coupledTrain();
+    const rearGone = destroyTrainCounter(t.state, t.rear, 'shot off');
+    expect(rearGone.units[t.rear]!.destroyed).toBe(true);
+    expect(rearGone.units[t.front]!.destroyed).toBe(false);
+    expect(rearGone.routesCut).toContain(key(line[2]!));
+    // The survivor is a one-counter train from here (9.00).
+    expect((rearGone.units[t.front] as { coupledTo?: string }).coupledTo).toBeUndefined();
+
+    const frontGone = destroyTrainCounter(t.state, t.front, 'shot off');
+    expect(frontGone.units[t.front]!.destroyed).toBe(true);
+    expect(frontGone.units[t.rear]!.destroyed).toBe(true);
+
+    // Standing still on M0/1, either half goes on its own.
+    const halted = coupledTrain(2, 0);
+    const one = destroyTrainCounter(halted.state, halted.front, 'shot off');
+    expect(one.units[halted.front]!.destroyed).toBe(true);
+    expect(one.units[halted.rear]!.destroyed).toBe(false);
+  });
+
+  // "For each armor unit given up, he can put one 4/2 gun on each of the train
+  // counters (thus, if he exchanges 4 armor units, the train will have 8
+  // attacks, each with a strength of 4 and range of 2, per turn)." (9.03.1)
+  it('carries up to four 4/2 guns a counter when a scenario arms it', () => {
+    const t = coupledTrain();
+    const armed = armTrain(t.state, t.front, MAX_TRAIN_GUNS);
+    expect(trainFirepower(armed, armed.units[t.front]!)).toBe(8 * TRAIN_GUN.attack);
+
+    let s = fireFor(armed, A);
+    const victim = put(s, B, 'HVY', at(5, 3));
+    s = victim.state;
+    const one = { unit: t.front, squads: 1 };
+    const preview = previewAttack(s, railMap, [one], { kind: 'unit', unit: victim.id });
+    expect(preview.ok).toBe(true);
+    expect(preview.attackStrength).toBe(TRAIN_GUN.attack);
+
+    // Out of range at three hexes: the guns reach two.
+    const far = put(s, B, 'HVY', at(7, 3));
+    expect(previewAttack(far.state, railMap, [one], { kind: 'unit', unit: far.id }).reason).toMatch(
+      /out of range/,
+    );
+
+    // Four separate shots, and then the counter is spent.
+    let firing = s;
+    for (let i = 0; i < MAX_TRAIN_GUNS; i++) {
+      const out = resolveAttack(firing, railMap, [one], { kind: 'unit', unit: victim.id });
+      firing = out.state;
+      if (out.state.units[victim.id]!.destroyed) break;
+    }
+    expect(gunsLeft(firing.units[t.front]!)).toBeLessThan(MAX_TRAIN_GUNS);
+
+    // "Unless the train is armed (9.03.1), enemy units may enter its hex
+    // freely." An armed one is in the way.
+    const enemy = put(moveFor(armed, B), B, 'HVY', at(5, 3));
+    const step = stepInfo(enemy.state, railMap, enemy.state.units[enemy.id]!, at(5, 3), line[3]!);
+    expect(step.ok).toBe(false);
+  });
+
+  // "Only units of Size 3 or below may go on the train. Each half of the train
+  // may carry up to 12 'size points' worth of armor (e.g., 4 Heavy Tanks, or
+  // 12 squads of infantry)." (9.07)
+  it('carries twelve size points a half, and nothing bigger than Size 3', () => {
+    const t = coupledTrain();
+    let s = moveFor(t.state, A);
+    // Four Heavy Tanks (Size 3) fill a half; the fifth is turned away.
+    const ids: string[] = [];
+    for (let i = 0; i < 5; i++) {
+      const tank = put(s, A, 'HVY', line[3]!);
+      s = tank.state;
+      ids.push(tank.id);
+    }
+    for (let i = 0; i < 4; i++) {
+      const out = applyCommand(
+        s,
+        { type: 'mount', by: A, unit: ids[i]!, carrier: t.front },
+        railMap,
+      );
+      expect(out.result.ok).toBe(true);
+      s = out.state;
+    }
+    expect(trainCargoUsed(s, t.front)).toBe(TRAIN_CARGO_PER_HALF);
+    const full = applyCommand(
+      s,
+      { type: 'mount', by: A, unit: ids[4]!, carrier: t.front },
+      railMap,
+    );
+    expect(full.result.ok).toBe(false);
+    expect(full.result.ok ? '' : full.result.reason).toMatch(/size points/);
+
+    // A Superheavy is Size 5 and does not go on the train at all.
+    const big = put(moveFor(t.state, A), A, 'SHVY', line[3]!);
+    const refused = applyCommand(
+      big.state,
+      { type: 'mount', by: A, unit: big.id, carrier: t.front },
+      railMap,
+    );
+    expect(refused.result.ok).toBe(false);
+    expect(refused.result.ok ? '' : refused.result.reason).toMatch(/Size 3 or below/);
+  });
+
+  // "If an unarmed train ... is overrun by, a unit with a regular combat
+  // strength, it is destroyed ... Exception: An overrun onto the rear counter
+  // of the train ... destroys only that counter." (9.04)
+  it('is run down where it stands when it has no guns', () => {
+    const t = coupledTrain();
+    let s = { ...t.state, options: { ...t.state.options, overrunCombat: true } };
+    const tank = put(s, B, 'HVY', at(3, 2));
+    s = moveFor(tank.state, B);
+    // No overrun is fought: the train is simply run down (9.04).
+    expect(canOverrun(s, railMap, s.units[tank.id]!, line[2]!).ok).toBe(false);
+    const out = applyCommand(
+      s,
+      { type: 'moveUnit', by: B, unit: tank.id, path: [line[2]!] },
+      railMap,
+    );
+    expect(out.result.ok).toBe(true);
+    expect(out.state.units[t.rear]!.destroyed).toBe(true);
+    expect(out.state.units[t.front]!.destroyed).toBe(false);
   });
 });
