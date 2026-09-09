@@ -1,0 +1,860 @@
+/**
+ * The one entry point: `applyCommand` routes a command to the module that owns
+ * the rule, and runs the phase machinery between player-turns.
+ *
+ * Everything about a game's progression is here and nowhere else, so the answer
+ * to "when does that happen?" is always a single `switch`.
+ */
+
+import type { GameMap } from './map.js';
+import type { Command, CommandResult } from './commands.js';
+import { fail, ok } from './commands.js';
+import { eq, key } from './hex.js';
+import { TRAIN_MAX_SPEED, unitClass } from './units.js';
+import {
+  type ConventionalUnit,
+  type GameState,
+  type Phase,
+  type Unit,
+  type VictoryState,
+  activePlayer,
+  isInertOgre,
+  isOgre,
+  isPallet,
+  onBoard,
+  passengersOf,
+  playerTurnOrdinal,
+  setupActor,
+} from './types.js';
+import { SETUP_COMMANDS, finishSetup, placeUnit } from './setup.js';
+import { deployReserveCheck } from './reserves.js';
+import { clearBlasts, launchMissile } from './missiles.js';
+import { clearTasks } from './engineering.js';
+import { pushPallet, unpackDrone } from './drone.js';
+import { controlCheck, crewlessPenalty } from './vulcan.js';
+import { trainCounters, trainMoveCheck } from './train.js';
+import {
+  apRemaining,
+  clearLaserWatch,
+  log,
+  makeUnit,
+  movementAllowance,
+  reduceSquad,
+  unitName,
+  updateAnyUnit,
+  withUnit,
+} from './state.js';
+import {
+  applyMove,
+  beginMovementPhase,
+  canDismount,
+  canMount,
+  resolvePendingHazards,
+  runRecovery,
+  wouldOverstack,
+} from './movement.js';
+import { unitsAt } from './types.js';
+import {
+  markAttackersSpent,
+  resetFireFlags,
+  resolveAttack,
+  resolveOrbitalStrike,
+  targetHex,
+} from './combat.js';
+import {
+  concealAll,
+  isDummy,
+  layMinefield,
+  mineStopOn,
+  mineWarningOn,
+  revealAt,
+  revealMinefield,
+  revealUnit,
+  revealOnMove,
+  tripMinefield,
+} from './concealment.js';
+import { resolveRam } from './ram.js';
+import { engineer } from './engineering.js';
+import {
+  beginOverrun,
+  endOverrunRound,
+  overrunActor,
+  overrunRam,
+  resolveOverrunAttack,
+} from './overrun.js';
+
+export interface ApplyResult {
+  readonly state: GameState;
+  readonly result: CommandResult;
+}
+
+/** A scenario's victory test, threaded in so the engine need not know scenarios. */
+export type VictoryCheck = (state: GameState) => VictoryState | null;
+
+export const applyCommand = (
+  state: GameState,
+  cmd: Command,
+  map: GameMap,
+  victoryCheck?: VictoryCheck,
+): ApplyResult => {
+  if (state.victory) return { state, result: fail('the game is over') };
+
+  // Deployment comes before everything: while the counters are going down,
+  // nothing moves, nothing fires, and only the side setting up may act.
+  if (state.setup) {
+    if (!SETUP_COMMANDS.has(cmd.type)) {
+      return {
+        state,
+        result: fail('the counters are still going down — place them and press Ready'),
+      };
+    }
+    const actor = setupActor(state);
+    if (cmd.type !== 'resign' && cmd.by !== actor) {
+      const name = actor ? (state.players[actor]?.name ?? actor) : 'nobody';
+      return { state, result: fail(`it is ${name}’s turn to set up`) };
+    }
+  } else if (state.overrun) {
+    // An overrun suspends the movement phase and hands initiative to whichever
+    // side is firing — "The defender has the first fire round" (8.04). It is
+    // the one place in Ogre where the non-phasing player acts, so the seat
+    // check has to ask the overrun rather than the turn.
+    if (!OVERRUN_COMMANDS.has(cmd.type) && cmd.type !== 'resign') {
+      return { state, result: fail('finish the overrun first') };
+    }
+    const actor = overrunActor(state);
+    if (cmd.by !== actor && cmd.type !== 'resign') {
+      return { state, result: fail('it is not your fire round') };
+    }
+  } else if (cmd.by !== activePlayer(state) && cmd.type !== 'resign') {
+    // Outside an overrun, Ogre is strictly sequential: one player-turn at a
+    // time, and there is no reaction fire anywhere in the game.
+    return { state, result: fail('it is not your turn') };
+  }
+
+  const step = route(state, cmd, map);
+  if (!step.result.ok) return step;
+
+  const next = victoryCheck ? { ...step.state, victory: victoryCheck(step.state) } : step.state;
+  return { state: next, result: step.result };
+};
+
+const OVERRUN_COMMANDS = new Set<Command['type']>([
+  'overrunAttack',
+  'overrunRam',
+  'endFireRound',
+  'dismount',
+]);
+
+const route = (state: GameState, cmd: Command, map: GameMap): ApplyResult => {
+  switch (cmd.type) {
+    case 'moveUnit':
+      return doMove(state, cmd.unit, cmd.path, map);
+    case 'ram': {
+      const guard = inertGuard(state, cmd.unit);
+      if (guard) return guard;
+      // A ram at a hex of dummies calls the bluff instead: nothing to hit.
+      const called = bluffCalled(state, cmd.target);
+      if (called) return { state: called, result: ok('That was a dummy.') };
+      const out = doRam(state, cmd.unit, cmd.target, map);
+      return out.result.ok
+        ? { ...out, state: revealAt(revealUnit(out.state, cmd.unit), cmd.target) }
+        : out;
+    }
+    case 'reduceInfantry': {
+      const guard = inertGuard(state, cmd.unit);
+      if (guard) return guard;
+      const out = doReduceInfantry(state, cmd.unit, cmd.target);
+      return out.result.ok
+        ? { ...out, state: revealUnit(revealUnit(out.state, cmd.unit), cmd.target) }
+        : out;
+    }
+    case 'mount':
+      return doMount(state, cmd.unit, cmd.carrier);
+    case 'dismount':
+      return doDismount(state, cmd.unit);
+    case 'splitInfantry':
+      return doSplit(state, cmd.unit, cmd.squads);
+    case 'combineInfantry':
+      return doCombine(state, cmd.units);
+    case 'overrun': {
+      const guard = inertGuard(state, cmd.unit);
+      if (guard) return guard;
+      const called = bluffCalled(state, cmd.target);
+      if (called) return { state: called, result: ok('That was a dummy.') };
+      // Everybody in the hex is seen the moment the fight starts; so is the
+      // mover, and a minefield under the hex goes off under it.
+      const out = wrap(state, beginOverrun(state, map, cmd.unit, cmd.target));
+      if (!out.result.ok) return out;
+      let next = revealAt(revealUnit(out.state, cmd.unit), cmd.target);
+      next = tripMinefield(next, map, cmd.unit);
+      return { state: next, result: out.result };
+    }
+    case 'overrunAttack': {
+      const out = wrap(state, resolveOverrunAttack(state, map, cmd.attackers, cmd.target));
+      return out.result.ok ? { ...out, state: revealShooters(out.state, cmd.attackers) } : out;
+    }
+    case 'overrunRam':
+      return wrap(state, overrunRam(state, map, cmd.unit, cmd.target));
+    case 'endFireRound':
+      return wrap(state, endOverrunRound(state, map));
+    case 'attack':
+      return doAttack(state, cmd.attackers, cmd.target, map);
+    case 'layMinefield':
+      return wrap(state, layMinefield(state, map, cmd.by, cmd.at, cmd.onRoad));
+    case 'engineer':
+      return wrap(
+        state,
+        engineer(state, map, cmd.by, cmd.unit, cmd.task, cmd.toward, {
+          ...(cmd.onRoad !== undefined ? { onRoad: cmd.onRoad } : {}),
+          ...(cmd.area !== undefined ? { area: cmd.area } : {}),
+          ...(cmd.target !== undefined ? { target: cmd.target } : {}),
+          ...(cmd.weapon !== undefined ? { weapon: cmd.weapon } : {}),
+        }),
+      );
+    case 'endPhase':
+      return { state: advancePhase(state, map), result: ok() };
+    case 'resign':
+      return doResign(state, cmd.by);
+    case 'deployReserve':
+      return doDeployReserve(state, cmd.unit, cmd.at, map);
+    case 'orbitalStrike': {
+      if (state.phase !== 'fire') {
+        return { state, result: fail('orbital fire arrives in the fire phase') };
+      }
+      const side = state.scenarioData['orbitalStrikeSide'];
+      if (typeof side === 'string' && cmd.by !== side) {
+        return { state, result: fail('the fleet overhead is not yours') };
+      }
+      // A strike called on a dummy finds nothing there; the strike is kept.
+      if (cmd.target.kind === 'unit') {
+        const t = state.units[cmd.target.unit];
+        if (t && t.concealed && isDummy(t)) {
+          return { state: revealUnit(state, t.id), result: ok('That was a dummy.') };
+        }
+      }
+      const out = wrap(state, resolveOrbitalStrike(state, map, cmd.strike, cmd.target));
+      if (!out.result.ok) return out;
+      const where = targetHex(out.state, cmd.target);
+      return { ...out, state: where ? revealAt(out.state, where) : out.state };
+    }
+    case 'placeUnit':
+      return wrap(state, placeUnit(state, map, cmd.unit, cmd.at));
+    case 'finishSetup': {
+      const out = wrap(state, finishSetup(state));
+      // The counters are down: with camouflage on, or dummies in play, every
+      // side's counters go face down now (13.05, 13.06).
+      return out.result.ok && out.state.setup === null
+        ? { ...out, state: concealAll(out.state) }
+        : out;
+    }
+    case 'launchCruiseMissile':
+      return wrap(state, launchMissile(state, map, cmd.unit, cmd.target));
+    case 'setTrainSpeed':
+      return doSetTrainSpeed(state, cmd.unit, cmd.change);
+    case 'unpackDrone':
+      return wrap(state, unpackDrone(state, cmd.unit));
+    case 'unhitch':
+      return doUnhitch(state, cmd.unit);
+    case 'droneControl':
+      return doDroneControl(state, cmd.unit, cmd.target, cmd.level);
+    case 'pushPallet':
+      return wrap(state, pushPallet(state, map, cmd.unit, cmd.to));
+  }
+};
+
+/**
+ * Orbital Drop §3.03: the reaction force enters from the defender's map edge,
+ * any or all of it, on any turn from the scenario's reaction turn on. A unit
+ * arrives with its move spent — the turn went on getting back to the alarm.
+ */
+const doDeployReserve = (
+  state: GameState,
+  unitId: string,
+  at: { q: number; r: number },
+  map: GameMap,
+): ApplyResult => {
+  const unit = state.units[unitId];
+  if (!unit) return { state, result: fail('that unit is not waiting in reserve') };
+  if (unit.owner !== activePlayer(state)) return { state, result: fail('not your unit') };
+  const why = deployReserveCheck(state, map, unit, at);
+  if (why) return { state, result: fail(why) };
+
+  const next = withUnit(state, {
+    ...unit,
+    offMap: undefined,
+    pos: at,
+    phaseStart: at,
+    moveUsed: movementAllowance(unit, 'movement', state.options),
+    movementEnded: true,
+  });
+  return {
+    state: log(next, 'warn', `${unitName(unit)} races back from dispersal.`, [at]),
+    result: ok(),
+  };
+};
+
+/**
+ * The train's speed marker moves one step a turn, before the train does
+ * (9.02): a driver who sees cut track ahead has as many turns to brake as
+ * the marker has steps.
+ */
+const doSetTrainSpeed = (state: GameState, unitId: string, change: 1 | -1): ApplyResult => {
+  // "At the end of each turn, the player owning the train may change its speed
+  // by one marker faster or slower." (9.02.1) So it is set after the train has
+  // run, and the new marker is what it moves at next turn — which is the whole
+  // point: a driver who sees cut track ahead has as many turns to brake as the
+  // marker has steps.
+  if (state.phase !== 'fire' && state.phase !== 'gevMovement') {
+    return { state, result: fail('the speed changes at the end of the turn (9.02.1)') };
+  }
+  const unit = state.units[unitId];
+  if (!unit || unit.kind !== 'unit' || unit.classId !== 'TRAIN' || !onBoard(unit)) {
+    return { state, result: fail('that is not a train') };
+  }
+  if (unit.owner !== activePlayer(state)) return { state, result: fail('not your train') };
+  if (unit.trainSpeedSet) return { state, result: fail('the speed changes once a turn (9.02)') };
+  // One marker at a time: M0/1 to M2/3 to M4/5 to M6/7 and back.
+  const speed = Math.max(0, Math.min(TRAIN_MAX_SPEED, (unit.trainSpeed ?? 0) + change * 2));
+  if (speed === (unit.trainSpeed ?? 0)) {
+    return {
+      state,
+      result: fail(change > 0 ? 'the train is at full speed' : 'the train is stopped'),
+    };
+  }
+  // "Each train gets one marker, placed on or beside the train as convenient"
+  // (9.03): both counters of a two-counter train carry the same number.
+  let next = state;
+  for (const counter of trainCounters(state, unit)) {
+    next = withUnit(next, { ...counter, trainSpeed: speed, trainSpeedSet: true });
+  }
+  return {
+    state: log(
+      next,
+      'info',
+      `The train ${change > 0 ? 'opens up' : 'brakes'} to M${String(speed)}/${String(speed + 1)}.`,
+      [unit.pos],
+    ),
+    result: ok(),
+  };
+};
+
+/** An Ogre still assembling can do nothing at all; `null` means "carry on". */
+const inertGuard = (state: GameState, unitId: string): ApplyResult | null => {
+  const unit = state.units[unitId];
+  if (unit && isInertOgre(unit, state.turn)) {
+    return { state, result: fail(`${unitName(unit)} is still assembling`) };
+  }
+  return null;
+};
+
+/** Adapt the `{state, ok, reason}` shape the combat modules return. */
+const wrap = (
+  before: GameState,
+  outcome: { state: GameState; ok: boolean; reason?: string },
+): ApplyResult =>
+  outcome.ok
+    ? { state: outcome.state, result: ok() }
+    : { state: before, result: fail(outcome.reason ?? 'not legal') };
+
+// ---------------------------------------------------------------------------
+// Movement
+// ---------------------------------------------------------------------------
+
+const inMovementPhase = (phase: Phase): boolean => phase === 'movement' || phase === 'gevMovement';
+
+const doMove = (
+  state: GameState,
+  unitId: string,
+  path: readonly { q: number; r: number }[],
+  map: GameMap,
+): ApplyResult => {
+  if (!inMovementPhase(state.phase)) return { state, result: fail('not a movement phase') };
+  const unit = state.units[unitId];
+  if (!unit || !onBoard(unit)) return { state, result: fail('no such unit') };
+  if (unit.owner !== activePlayer(state)) return { state, result: fail('not your unit') };
+  if (isInertOgre(unit, state.turn)) {
+    return { state, result: fail(`${unitName(unit)} is still assembling`) };
+  }
+  if (unit.kind === 'unit' && unit.ridingOn) {
+    return { state, result: fail('that infantry is riding; dismount first') };
+  }
+  if (unit.kind === 'unit' && unit.stowedIn) {
+    return { state, result: fail('it is stowed aboard a Vulcan; unload it first (15.02.1)') };
+  }
+  if (unit.towedBy) {
+    return { state, result: fail('it is on a Vulcan’s tow hitch; unhitch it first (15.04.8)') };
+  }
+  // "on its own [an unaided armor unit] will allow an armor unit to move
+  // intelligently over short distances" only with a Vulcan in the loop
+  // (15.02.4): a crewless counter nobody is driving does nothing.
+  if (crewlessPenalty(state, unit) === 'inert') {
+    return { state, result: fail(`${unitName(unit)} has no crew and nothing driving it`) };
+  }
+  // A pallet does not move: it is carried, one hex, by a squad in its hex
+  // (14.01). The order looks the same to the interface.
+  if (isPallet(unit)) {
+    const to = path[path.length - 1];
+    if (!to) return { state, result: fail('nowhere to carry it') };
+    return wrap(state, pushPallet(state, map, unitId, to));
+  }
+  const reversing = trainMoveCheck(state, unit);
+  if (reversing) return { state, result: fail(reversing) };
+  if (state.phase === 'gevMovement') {
+    const cls = unit.kind === 'unit' ? unitClass(unit.classId) : null;
+    if (!cls || cls.secondMove == null) {
+      return { state, result: fail('only GEV-type units move again after combat') };
+    }
+  }
+
+  // "Whenever a qualifying Ogre is about to enter a hex with a mine ... the
+  // opposing player must acknowledge the presence of a mine ... The Ogre may
+  // then choose to stay still, move elsewhere, or continue into the hex."
+  // (13.04.1) The order is refused, the mine shown, and the next order is the
+  // cybertank's answer.
+  const warned = mineWarningOn(state, unit, path);
+  if (warned) {
+    const shown = revealMinefield(state, warned);
+    return {
+      state: log(
+        shown,
+        'warn',
+        `${unitName(unit)} reads a minefield at ${key(warned)} and holds (13.04.1).`,
+        [warned],
+      ),
+      result: fail(`there is a minefield at ${key(warned)} — order it in again to go through`),
+    };
+  }
+
+  // A minefield the mover does not know about stops it where it is (13.04):
+  // the path is cut there, the rest of the plan is judged as given, and the
+  // mines go off once the counter is in the hex.
+  const stop = mineStopOn(state, unit, path);
+  const walked = stop >= 0 ? path.slice(0, stop + 1) : path;
+  const { state: moved, plan } = applyMove(state, map, unitId, walked);
+  if (!plan.ok) return { state, result: fail(plan.reason ?? 'illegal move') };
+  // "As soon as any camouflaged unit moves ... or as soon as an enemy unit
+  // moves through ... its hex, the ? marker is replaced by the real unit."
+  // (13.05)
+  let next = revealOnMove(moved, unitId, walked);
+  if (stop >= 0) {
+    next = updateAnyUnit(next, unitId, () => ({ movementEnded: true }));
+    next = tripMinefield(next, map, unitId);
+    return {
+      state: next,
+      result: ok(stop + 1 < path.length ? 'Stopped short: a minefield.' : undefined),
+    };
+  }
+  return { state: next, result: ok() };
+};
+
+/**
+ * A hex that holds nothing but the enemy's dummies: the bluff is called, the
+ * dummies come off, and there is nothing to fight. Null when the hex holds
+ * anything real, or nothing at all.
+ */
+const bluffCalled = (state: GameState, target: { q: number; r: number }): GameState | null => {
+  const here = unitsAt(state, target).filter((u) => u.owner !== activePlayer(state));
+  if (here.length === 0 || !here.every((u) => u.concealed && isDummy(u))) return null;
+  let next = state;
+  for (const u of here) next = revealUnit(next, u.id);
+  return next;
+};
+
+/** Attackers are seen firing (13.05). */
+const revealShooters = (state: GameState, attackers: readonly { unit: string }[]): GameState => {
+  let next = state;
+  for (const a of attackers) next = revealUnit(next, a.unit);
+  return next;
+};
+
+const doRam = (
+  state: GameState,
+  unitId: string,
+  target: { q: number; r: number },
+  map: GameMap,
+): ApplyResult => {
+  if (!inMovementPhase(state.phase)) return { state, result: fail('ramming happens while moving') };
+  if (state.options.overrunCombat) {
+    return { state, result: fail('this game uses overrun combat, not ramming (6.00)') };
+  }
+  const unit = state.units[unitId];
+  if (!unit || !onBoard(unit)) return { state, result: fail('no such unit') };
+  if (unit.owner !== activePlayer(state)) return { state, result: fail('not your unit') };
+
+  const outcome = resolveRam(state, map, unitId, target);
+  return outcome.ok
+    ? { state: outcome.state, result: ok() }
+    : { state, result: fail(outcome.reason ?? 'that ram is not legal') };
+};
+
+/**
+ * "An Ogre/SHVY in a hex with infantry may expend a movement point, stay in the
+ * same hex, and reduce the infantry again." (6.06)
+ */
+const doReduceInfantry = (state: GameState, unitId: string, targetId: string): ApplyResult => {
+  if (!inMovementPhase(state.phase)) return { state, result: fail('not a movement phase') };
+  const unit = state.units[unitId];
+  const target = state.units[targetId];
+  if (!unit || !onBoard(unit)) return { state, result: fail('no such unit') };
+  if (!target || !onBoard(target)) return { state, result: fail('no such target') };
+  if (unit.owner !== activePlayer(state)) return { state, result: fail('not your unit') };
+  if (!eq(unit.pos, target.pos)) return { state, result: fail('not in the same hex') };
+  if (target.kind !== 'unit' || unitClass(target.classId).kind !== 'infantry') {
+    return { state, result: fail('that is not infantry') };
+  }
+  if (target.owner === unit.owner) return { state, result: fail('those are your own troops') };
+
+  const hasAp = isOgre(unit)
+    ? apRemaining(unit) > 0
+    : unit.kind === 'unit' && unit.classId === 'SHVY';
+  if (!hasAp) return { state, result: fail('no antipersonnel weapons left') };
+
+  if (unit.moveUsed + 1 > movementAllowance(unit, state.phase, state.options)) {
+    return { state, result: fail('no movement point left to spend') };
+  }
+
+  let next = updateAnyUnit(state, unitId, (u) => ({ moveUsed: u.moveUsed + 1 }));
+  next = reduceSquad(next, targetId, 'crushed by an Ogre', unit.owner);
+  next = log(next, 'bad', `${unitName(unit)} grinds another squad into the ground.`, [unit.pos]);
+  return { state: next, result: ok() };
+};
+
+// ---------------------------------------------------------------------------
+// Passengers
+// ---------------------------------------------------------------------------
+
+const doMount = (state: GameState, unitId: string, carrierId: string): ApplyResult => {
+  if (state.phase !== 'movement') return { state, result: fail('mount during the movement phase') };
+  const rider = state.units[unitId];
+  const carrier = state.units[carrierId];
+  if (!rider || !carrier || !onBoard(rider) || !onBoard(carrier)) {
+    return { state, result: fail('no such unit') };
+  }
+  if (rider.owner !== activePlayer(state)) return { state, result: fail('not your unit') };
+
+  const check = canMount(state, rider, carrier);
+  if (!check.ok) return { state, result: fail(check.reason ?? 'cannot mount') };
+
+  const next = updateAnyUnit(state, unitId, () => ({
+    ridingOn: carrierId,
+    mountedThisTurn: true,
+    // "an infantry squad must spend its entire movement for the turn" (5.11.3)
+    movementEnded: true,
+  }));
+  return {
+    state: log(next, 'info', `${unitName(rider)} climbs aboard ${unitName(carrier)}.`, [rider.pos]),
+    result: ok(),
+  };
+};
+
+const doDismount = (state: GameState, unitId: string): ApplyResult => {
+  if (!inMovementPhase(state.phase)) return { state, result: fail('not a movement phase') };
+  const rider = state.units[unitId];
+  if (!rider || !onBoard(rider)) return { state, result: fail('no such unit') };
+
+  // "Infantry riding on vehicles may dismount at the beginning of the overrun.
+  // They cannot remount after the combat." (8.06.1) That window belongs to
+  // whoever owns the rider, not to the phasing player.
+  if (state.overrun) {
+    if (state.overrun.step !== 'dismount') {
+      return { state, result: fail('the dismount window has closed') };
+    }
+    if (rider.owner !== overrunActor(state)) return { state, result: fail('not your unit') };
+    const next = updateAnyUnit(state, unitId, () => ({ ridingOn: undefined, movementEnded: true }));
+    return { state: log(next, 'info', `${unitName(rider)} bails out.`, [rider.pos]), result: ok() };
+  }
+
+  if (rider.owner !== activePlayer(state)) return { state, result: fail('not your unit') };
+  if (state.phase === 'gevMovement') {
+    return {
+      state,
+      result: fail('infantry may not dismount during the second movement phase (5.11.3)'),
+    };
+  }
+
+  const check = canDismount(rider);
+  if (!check.ok) return { state, result: fail(check.reason ?? 'cannot dismount') };
+  if (wouldOverstack(state, rider.pos, rider)) return { state, result: fail('that hex is full') };
+
+  // "Turn 1: Unloading ... All the transport needs to do is remain in one place
+  // for one turn. Place the LAD pallet in the same hex as the transport."
+  // (14.01) The pallet is cargo, not a passenger climbing down.
+  const pallet = rider.kind === 'unit' && rider.classId === 'LAD';
+  if (pallet) {
+    const carrier = state.units[rider.ridingOn!];
+    if (carrier && carrier.moveUsed > 0) {
+      return { state, result: fail('the transport must stand still for a turn to unload it') };
+    }
+  }
+
+  const next = updateAnyUnit(state, unitId, () => ({
+    ridingOn: undefined,
+    // "may not move 'on its own' on the turn it dismounts" (5.11.3)
+    movementEnded: true,
+    ...(pallet ? { firedThisPhase: true } : {}),
+  }));
+  return {
+    state: log(
+      next,
+      'info',
+      pallet
+        ? `${unitName(rider)} is set down on its pallet. It can unpack next turn.`
+        : `${unitName(rider)} drops off.`,
+      [rider.pos],
+    ),
+    result: ok(),
+  };
+};
+
+// ---------------------------------------------------------------------------
+// The Vulcan's hitch and its control channels (15.02.4, 15.02.5, 15.04.8)
+// ---------------------------------------------------------------------------
+
+/** "Unhitching a towed vehicle is automatic and is not considered a task." */
+const doUnhitch = (state: GameState, unitId: string): ApplyResult => {
+  const u = state.units[unitId];
+  if (!u || !onBoard(u)) return { state, result: fail('no such unit') };
+  const tug = u.towedBy ? state.units[u.towedBy] : undefined;
+  if (!tug) return { state, result: fail('it is not on anybody’s hitch') };
+  if (tug.owner !== activePlayer(state)) return { state, result: fail('not your Vulcan') };
+  const next = withUnit(state, { ...u, towedBy: undefined } as Unit);
+  return {
+    state: log(next, 'info', `${unitName(tug)} drops ${unitName(u)} off the hitch.`, [u.pos]),
+    result: ok(),
+  };
+};
+
+/**
+ * "The Vulcan determines which four ducklings are under active control at the
+ * beginning of each turn. It can switch which four it controls each turn."
+ * (15.02.5)
+ */
+const doDroneControl = (
+  state: GameState,
+  vulcanId: string,
+  targetId: string,
+  level: 'combat' | 'duckling' | null,
+): ApplyResult => {
+  const vulcan = state.units[vulcanId];
+  const target = state.units[targetId];
+  if (!vulcan || !target) return { state, result: fail('no such unit') };
+  if (vulcan.owner !== activePlayer(state)) return { state, result: fail('not your Vulcan') };
+  if (level === null) {
+    if (target.kind !== 'unit' || target.drivenBy !== vulcanId) {
+      return { state, result: fail('that Vulcan is not driving it') };
+    }
+    const next = withUnit(state, { ...target, drivenBy: undefined, control: undefined });
+    return {
+      state: log(next, 'info', `${unitName(vulcan)} lets ${unitName(target)} go.`, [target.pos]),
+      result: ok(),
+    };
+  }
+  const why = controlCheck(state, vulcan, target, level);
+  if (why) return { state, result: fail(why) };
+  const next = withUnit(state, {
+    ...(target as ConventionalUnit),
+    drivenBy: vulcanId,
+    control: level,
+  });
+  return {
+    state: log(
+      next,
+      'info',
+      level === 'combat'
+        ? `${unitName(vulcan)} takes ${unitName(target)} onto a control channel.`
+        : `${unitName(target)} falls in behind ${unitName(vulcan)} as a duckling.`,
+      [target.pos],
+    ),
+    result: ok(),
+  };
+};
+
+// ---------------------------------------------------------------------------
+// Infantry bookkeeping (5.02.3)
+// ---------------------------------------------------------------------------
+
+const doSplit = (state: GameState, unitId: string, squads: number): ApplyResult => {
+  if (state.phase !== 'movement') {
+    return { state, result: fail('infantry regroup during their own movement phase') };
+  }
+  const u = state.units[unitId];
+  if (!u || u.kind !== 'unit' || !onBoard(u)) return { state, result: fail('no such unit') };
+  if (u.owner !== activePlayer(state)) return { state, result: fail('not your unit') };
+  if (unitClass(u.classId).kind !== 'infantry') return { state, result: fail('not infantry') };
+  if (squads < 1 || squads >= u.squads) return { state, result: fail('split off 1 or 2 squads') };
+
+  const id = `${u.owner}-inf-${state.nextUnitSerial}`;
+  const piece = makeUnit(id, u.owner, u.classId, u.pos, squads);
+  let next = withUnit(state, { ...u, squads: u.squads - squads });
+  next = withUnit(next, {
+    ...piece,
+    moveUsed: u.moveUsed,
+    phaseStart: u.phaseStart,
+    onRouteAllPhase: u.onRouteAllPhase,
+  });
+  next = { ...next, nextUnitSerial: next.nextUnitSerial + 1 };
+
+  if (wouldOverstack(next, u.pos, piece)) {
+    return { state, result: fail('that hex cannot hold another counter') };
+  }
+  return { state: next, result: ok() };
+};
+
+const doCombine = (state: GameState, ids: readonly string[]): ApplyResult => {
+  if (state.phase !== 'movement') {
+    return { state, result: fail('infantry regroup during their own movement phase') };
+  }
+  if (ids.length < 2) return { state, result: fail('name at least two counters') };
+
+  const units = ids.map((id) => state.units[id]);
+  const first = units[0];
+  if (!first || first.kind !== 'unit') return { state, result: fail('no such unit') };
+  if (first.owner !== activePlayer(state)) return { state, result: fail('not your unit') };
+
+  let total = 0;
+  for (const u of units) {
+    if (!u || u.kind !== 'unit' || !onBoard(u)) return { state, result: fail('no such unit') };
+    if (unitClass(u.classId).kind !== 'infantry') return { state, result: fail('not infantry') };
+    if (u.classId !== first.classId) return { state, result: fail('only like squads combine') };
+    if (!eq(u.pos, first.pos)) return { state, result: fail('they are not in the same hex') };
+    if (u.ridingOn !== first.ridingOn) return { state, result: fail('mount status differs') };
+    total += u.squads;
+  }
+  if (total > 3) return { state, result: fail('three squads to a counter (3.02)') };
+
+  let next = withUnit(state, {
+    ...first,
+    squads: total,
+    // The merged counter is as spent as its most-spent component.
+    moveUsed: Math.max(...units.map((u) => u!.moveUsed)),
+    squadsFired: Math.max(...units.map((u) => (u!.kind === 'unit' ? u!.squadsFired : 0))),
+  });
+  for (const u of units.slice(1)) {
+    next = withUnit(next, { ...u!, destroyed: true, destroyedBy: 'merged' });
+  }
+  return { state: next, result: ok() };
+};
+
+// ---------------------------------------------------------------------------
+// Combat
+// ---------------------------------------------------------------------------
+
+const doAttack = (
+  state: GameState,
+  attackers: Parameters<typeof resolveAttack>[2],
+  target: Parameters<typeof resolveAttack>[3],
+  map: GameMap,
+): ApplyResult => {
+  if (state.phase !== 'fire') {
+    return { state, result: fail('the fire phase comes after movement (7.01)') };
+  }
+  for (const ref of attackers) {
+    const u = state.units[ref.unit];
+    if (!u) return { state, result: fail('no such attacker') };
+    if (u.owner !== activePlayer(state)) return { state, result: fail('not your unit') };
+  }
+
+  // A shot at a dummy is a shot spent on nothing (13.06): the guns are
+  // marked fired, the counter comes off, and the log says what it was.
+  if (target.kind === 'unit') {
+    const t = state.units[target.unit];
+    if (t && t.concealed && isDummy(t)) {
+      const spent = markAttackersSpent(state, attackers, target);
+      return {
+        state: revealShooters(revealUnit(spent, t.id, ' The shot is wasted.'), attackers),
+        result: ok('That was a dummy.'),
+      };
+    }
+  }
+
+  const outcome = resolveAttack(state, map, attackers, target);
+  if (!outcome.resolution) {
+    return { state, result: fail(outcome.reason ?? 'that attack is not legal') };
+  }
+  // Firing reveals the shooters; being fired on, and spillover, reveals the
+  // hex (13.05).
+  let next = revealShooters(outcome.state, attackers);
+  const where = targetHex(next, target);
+  if (where) next = revealAt(next, where);
+  return { state: next, result: ok() };
+};
+
+const doResign = (state: GameState, by: string): ApplyResult => {
+  const winners = state.playerOrder.filter((p) => p !== by);
+  const next: GameState = {
+    ...state,
+    victory: { winners, level: 'standard', reason: `${state.players[by]?.name ?? by} resigned.` },
+  };
+  return { state: log(next, 'bad', `${state.players[by]?.name ?? by} resigns.`), result: ok() };
+};
+
+// ---------------------------------------------------------------------------
+// The turn sequence (4.02)
+// ---------------------------------------------------------------------------
+
+/**
+ *   1. Recovery
+ *   2. Movement phase
+ *   3. Disable check      — bookkeeping; folded into the end of movement
+ *   4. Fire phase
+ *   5. Second (GEV) movement phase
+ */
+export const advancePhase = (state: GameState, map: GameMap): GameState => {
+  const player = activePlayer(state);
+
+  switch (state.phase) {
+    case 'recovery':
+      return beginMovementPhase({ ...state, phase: 'movement' }, map, player, 'movement');
+
+    case 'movement': {
+      // Step 3 of the sequence happens here, before anybody shoots.
+      const settled = resolvePendingHazards(state, player);
+      return { ...settled, phase: 'fire' };
+    }
+
+    case 'fire': {
+      // The owner's fire phase is over, so the "preceding enemy turn" of 12.06
+      // is now the one about to begin: the Lasers start watching again.
+      const watching = clearLaserWatch(state, player);
+      return beginMovementPhase({ ...watching, phase: 'gevMovement' }, map, player, 'gevMovement');
+    }
+
+    case 'gevMovement': {
+      const settled = resolvePendingHazards(state, player);
+      return startNextPlayerTurn(settled, map);
+    }
+  }
+};
+
+const startNextPlayerTurn = (state: GameState, _map: GameMap): GameState => {
+  const nextIndex = (state.activePlayerIndex + 1) % state.playerOrder.length;
+  const wrapped = nextIndex === 0;
+  let next: GameState = clearTasks(
+    clearBlasts({
+      ...state,
+      activePlayerIndex: nextIndex,
+      turn: wrapped ? state.turn + 1 : state.turn,
+      phase: 'recovery',
+    }),
+  );
+
+  const player = activePlayer(next);
+  next = resetFireFlags(next, player);
+  next = runRecovery(next, player, playerTurnOrdinal(next));
+  next = log(next, 'info', `${next.players[player]?.name ?? player} takes the turn.`);
+  return next;
+};
+
+/** Enemy units sharing a hex with one of yours — the 6.08 situation. */
+export const contestedHexes = (state: GameState): string[] => {
+  const out: string[] = [];
+  for (const u of Object.values(state.units)) {
+    if (!onBoard(u)) continue;
+    const others = unitsAt(state, u.pos).filter((o) => o.owner !== u.owner);
+    if (others.length > 0) out.push(u.id);
+  }
+  return out;
+};
+
+/** Passengers, re-exported so the shell need not import two modules. */
+export { passengersOf };

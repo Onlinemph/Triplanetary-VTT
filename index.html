@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="color-scheme" content="dark" />
+    <meta name="description" content="A rules-accurate virtual tabletop for Triplanetary." />
+    <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
+    <title>Triplanetary</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <noscript
+      >Triplanetary needs JavaScript: the chart, the vectors and the dice all run in your
+      browser.</noscript
+    >
+    <script type="module" src="/src/main.ts"></script>
+    <script>
+      // Diagnostic for a misconfigured deploy, not part of the game.
+      //
+      // The tag above is Vite's *development* entry: it names a TypeScript
+      // module, which no browser can execute. It is rewritten to the compiled
+      // bundle by `vite build`. So if this file is ever served as-is -- which
+      // is what GitHub Pages does when its Source is "Deploy from a branch"
+      // rather than "GitHub Actions" -- the script silently fails, #root stays
+      // empty, and the dark colour-scheme leaves a blank grey page with
+      // nothing in the console to explain it. Say so instead.
+      setTimeout(function () {
+        var root = document.getElementById('root');
+        if (!root || root.childElementCount > 0) return;
+        root.innerHTML =
+          '<div style="max-width:46rem;margin:12vh auto;padding:0 1.5rem;' +
+          'font:16px/1.6 ui-sans-serif,system-ui,sans-serif;color:#c7d3e3">' +
+          '<h1 style="font-size:1.4rem;margin:0 0 .75rem">Triplanetary did not start</h1>' +
+          '<p style="margin:0 0 1rem;color:#8fa3bd">This page is the unbuilt development ' +
+          'entry point, so there is nothing to run. The compiled site was not the thing ' +
+          'that got served.</p>' +
+          '<p style="margin:0 0 1rem;color:#8fa3bd">On GitHub Pages this means ' +
+          '<strong style="color:#c7d3e3">Settings &rarr; Pages &rarr; Build and deployment ' +
+          '&rarr; Source</strong> is set to <em>Deploy from a branch</em>. It needs to be ' +
+          '<strong style="color:#c7d3e3">GitHub Actions</strong>, which publishes the ' +
+          'output of <code style="color:#9ecbff">npm run build</code>.</p>' +
+          '<p style="margin:0;color:#8fa3bd">Running locally? Use ' +
+          '<code style="color:#9ecbff">npm run dev</code> rather than opening this file.</p>' +
+          '</div>';
+      }, 2000);
+    </script>
+  </body>
+</html>

@@ -1,0 +1,101 @@
+/**
+ * The boundary between the campaign and a battle.
+ *
+ * Both halves of the war live here — the space game, and the ground game under
+ * `src/ogre/` — so these two types are an in-process seam as much as a wire
+ * format. They are kept as a boundary rather than folded away because that is
+ * what lets a battle be fought anywhere: at this keyboard, at an online table
+ * that the referee opens on its own, or on another machine entirely from a
+ * pasted token. A battle is *launched* with an `OrderOfBattle` and hands back
+ * a `BattleResult`, and nothing else crosses.
+ *
+ * They are deliberately small — `docs/OGRE-HANDOFF.md` is the design rationale,
+ * written before either engine consumed them. `codec.ts` is the wire format,
+ * and it is tested.
+ *
+ * Conventions the types themselves cannot state:
+ *
+ *  - `sides[0]` is the attacker and moves first; `sides[1]` defends.
+ *  - `forces` speaks each engine's own vocabulary. For Triplanetary that is
+ *    `ShipClass` keys, plus `freight` for cargo lots (ten tons each). For
+ *    Ogre it is `UnitClassId` and `OgreTypeId` keys, infantry in squads.
+ *  - `terms` is free-form on purpose. A scenario reads the keys it documents
+ *    and ignores the rest, which is what lets the campaign grow new terms
+ *    without a lockstep change everywhere else.
+ */
+
+export interface OrderSide {
+  /** The campaign's id for this combatant; it becomes the battle's PlayerId. */
+  readonly player: string;
+  readonly faction: string;
+  /** Engine-specific unit ids with counts: 'HVY' x4, or 'destroyer' x2. */
+  readonly forces: Readonly<Record<string, number>>;
+}
+
+/** What the campaign hands a battle. */
+export interface OrderOfBattle {
+  readonly battleId: string;
+  readonly seed: number;
+  readonly scenarioId: string;
+  readonly sides: readonly OrderSide[];
+  /** Free-form terms the scenario understands (entry edges, turn limits). */
+  readonly terms: Readonly<Record<string, unknown>>;
+}
+
+/**
+ * A cybertank's record sheet between battles (Orbital Drop §7, "Damage
+ * carries over"): what it has lost, in the engine's own vocabulary, so the
+ * next battle can build it worn and the base can price its repair.
+ */
+export interface OgreRecord {
+  /** An `OgreTypeId`: 'MK3', 'MK5'… */
+  readonly type: string;
+  readonly treads: number;
+  /** Components destroyed, by weapon kind: `{ main: 1, ap: 3 }`. */
+  readonly lost: Readonly<Record<string, number>>;
+  /** External missiles fired and not replaced. */
+  readonly missilesSpent: number;
+  readonly internalMissiles: number;
+}
+
+/** What a battle hands back. */
+export interface BattleResult {
+  readonly battleId: string;
+  readonly winners: readonly string[];
+  readonly level: 'complete' | 'standard' | 'marginal';
+  /** Per side: what walked away, in the same vocabulary as `forces`. */
+  readonly survivors: Readonly<Record<string, Readonly<Record<string, number>>>>;
+  readonly victoryPoints: Readonly<Record<string, number>>;
+  /** Per side: the record sheets of the cybertanks that survived, worn as they are. */
+  readonly ogres?: Readonly<Record<string, readonly OgreRecord[]>>;
+  /** The whole battle, for replay: its seed and its command log. */
+  readonly replay: { readonly seed: number; readonly log: readonly unknown[] };
+}
+
+/** Where a scenario finds the order it was built from. */
+export const ORDER_KEY = 'order';
+
+/**
+ * Whether an order came from a campaign, as opposed to being a scenario's own
+ * printed default. The convention, held on both sides of the boundary: a
+ * default order's battleId ends in `-default` (`transfer-default`,
+ * `landing-default`), and a campaign never mints one that does. The victory
+ * screen uses this to offer a result token only for battles with somewhere to
+ * send it.
+ */
+export const isCampaignBattle = (order: OrderOfBattle): boolean =>
+  !order.battleId.endsWith('-default');
+
+/**
+ * The order a state was built from, if it was built from one.
+ *
+ * The order rides in `scenarioData` — the free-form channel the campaign
+ * design told both engines to keep free-form for exactly this — so a battle
+ * carries its own terms of reference, and the result reader needs nothing but
+ * the state and the log.
+ */
+export const orderOf = (scenarioData: Readonly<Record<string, unknown>>): OrderOfBattle | null => {
+  const raw = scenarioData[ORDER_KEY];
+  if (typeof raw !== 'object' || raw === null) return null;
+  return raw as OrderOfBattle;
+};
