@@ -341,6 +341,19 @@ export const demolishRiverBridge = (
   return next;
 };
 
+/** Every standing river bridge whose span comes within `radius`, for the interface. */
+export const riverBridgesNear = (
+  state: GameState,
+  map: GameMap,
+  from: Hex,
+  radius: number,
+): Hex[] =>
+  allHexes(map).filter(
+    (h) =>
+      riverBridgeStands(state, map, h) &&
+      riverBridgeSpan(state, map, h)!.some((x) => distance(x, from) <= radius),
+  );
+
 /** Every standing bridge with an end within `radius` of a hex, for the interface. */
 export const bridgesNear = (
   state: GameState,
@@ -611,6 +624,11 @@ export const engineerTasks = (state: GameState, map: GameMap, u: Unit): TaskOffe
       out.push({ task: 'demolish', toward: n, label: `Drop the bridge to ${key(n)}` });
     }
   }
+  // 13.02.1: a bridge across a whole hex, from anywhere on its span.
+  const river = riverBridgeAt(state, map, here);
+  if (river && riverBridgeStands(state, map, river)) {
+    out.push({ task: 'demolish', toward: river, label: 'Drop the river bridge' });
+  }
   // 14.01: a drone standing here, to be folded back onto its pallet.
   for (const friend of unitsAt(state, here)) {
     if (friend.owner !== owner || !isDeployedDrone(friend)) continue;
@@ -675,6 +693,8 @@ export interface TaskOptions {
   readonly toward?: Hex;
   readonly target?: UnitId;
   readonly weapon?: string;
+  /** 13.04's choice, for `layMine`. */
+  readonly onRoad?: boolean;
 }
 
 /**
@@ -776,7 +796,7 @@ export const engineer = (
         };
       }
       const next = log(
-        plantMinefield(roll.state, map, by, here),
+        plantMinefield(roll.state, map, by, here, opts.onRoad),
         'good',
         `${unitName(u)} plant a mine.`,
         [here],
@@ -939,6 +959,17 @@ export const engineer = (
 
     case 'demolish': {
       if (!where) return refuse('say which bridge');
+      // A bridge across a whole hex is named by its centre, which the sappers
+      // may be standing on (13.02.1).
+      if (riverBridgeStands(state, map, where) && riverBridgeAt(state, map, here) !== null) {
+        const next = log(
+          demolishRiverBridge(state, map, where, by),
+          'good',
+          `${unitName(u)} blow the river bridge.`,
+          [where],
+        );
+        return { state: done(next), ok: true };
+      }
       if (distance(here, where) !== 1) return refuse('the bridge must be next to them');
       if (!bridgeStands(state, map, here, where))
         return refuse('there is no bridge standing there');

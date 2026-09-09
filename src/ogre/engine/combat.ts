@@ -18,7 +18,16 @@
  *    at half strength and one step down the results (7.12).
  */
 
-import { BRIDGE, applySheetDamage, bridgeStands, demolishBridge, sheetOf } from './engineering.js';
+import {
+  BRIDGE,
+  applySheetDamage,
+  bridgeStands,
+  demolishBridge,
+  demolishRiverBridge,
+  riverBridgeSpan,
+  riverBridgeStands,
+  sheetOf,
+} from './engineering.js';
 import { type Hex, distance, eq, hexLine, key, label } from './hex.js';
 import { type GameMap, terrainAt } from './map.js';
 import { rollDie } from './rng.js';
@@ -90,8 +99,8 @@ export const targetHex = (state: GameState, target: TargetRef) => {
     case 'building':
       return state.buildings[target.building]?.pos ?? null;
     case 'terrain':
-      return target.hex;
     case 'bridge':
+    case 'riverBridge':
       return target.hex;
   }
 };
@@ -118,6 +127,8 @@ export const describeTarget = (state: GameState, target: TargetRef): string => {
       return 'the hex itself';
     case 'bridge':
       return 'the bridge';
+    case 'riverBridge':
+      return 'the river bridge';
   }
 };
 
@@ -353,6 +364,42 @@ export const previewAttack = (
     };
   }
 
+  // --- A bridge across a whole hex (13.02.1) --------------------------------
+  if (target.kind === 'riverBridge') {
+    if (!state.options.terrainDamage) return denyPreview('terrain damage is not in play');
+    const span = riverBridgeStands(state, map, target.hex)
+      ? riverBridgeSpan(state, map, target.hex)
+      : null;
+    if (!span) return denyPreview('there is no river bridge standing there');
+    // "If a river bridge is attacked by a unit in one of its own three hexes,
+    // it is automatically destroyed."
+    const pointBlank = attackers.some((a) => {
+      const u = state.units[a.unit];
+      return !!u && onBoard(u) && span.some((h) => eq(h, u.pos));
+    });
+    if (pointBlank) {
+      return {
+        ok: true,
+        attackStrength: total,
+        defenseStrength: BRIDGE.riverDefense,
+        odds: AUTO_KILL,
+        treadAttack: false,
+        treadHitOn: 5,
+        summary: 'charges on the span — the bridge goes into the river',
+      };
+    }
+    const odds = oddsFor(total, BRIDGE.riverDefense);
+    return {
+      ok: true,
+      attackStrength: total,
+      defenseStrength: BRIDGE.riverDefense,
+      odds,
+      treadAttack: false,
+      treadHitOn: 5,
+      summary: `${describeOdds(odds)} against the river bridge`,
+    };
+  }
+
   // --- Terrain -----------------------------------------------------------
   if (target.kind === 'terrain') {
     if (!state.options.terrainDamage) return denyPreview('terrain damage is not in play');
@@ -434,7 +481,12 @@ const submergedTargetPenalty = (
   target: TargetRef,
   attackers: readonly AttackerRef[],
 ): { ok: false; reason: string } | { ok: true; halved: boolean } => {
-  if (target.kind === 'terrain' || target.kind === 'building' || target.kind === 'bridge') {
+  if (
+    target.kind === 'terrain' ||
+    target.kind === 'building' ||
+    target.kind === 'bridge' ||
+    target.kind === 'riverBridge'
+  ) {
     return { ok: true, halved: false };
   }
   const victim = state.units[target.unit];
@@ -774,6 +826,10 @@ const finishAttack = (
   // under them, because they may outlive it.
   next = applyToRiders(next, map, target, preview.attackStrength, roll, result, attackerOwner);
   next = applyResult(next, map, target, result, attackerOwner);
+  // "Exception: An attack on a unit on the center hex of the bridge gives an
+  // automatic, separate attack, of the same strength, on the bridge itself."
+  // (13.02.1)
+  next = spillOntoRiverBridge(next, map, target, preview.attackStrength, attackerOwner);
   next = applySpillover(next, map, attackers, target, preview.attackStrength, attackerOwner);
   next = checkOgreDeath(next, target, attackerOwner);
 
@@ -998,6 +1054,13 @@ const applyResult = (
         return log(state, 'info', 'The bridge shakes and stands.', [target.hex]);
       }
       return demolishBridge(state, target.hex, target.toward);
+    }
+
+    case 'riverBridge': {
+      if (result !== 'X') {
+        return log(state, 'info', 'The river bridge shakes and stands.', [target.hex]);
+      }
+      return demolishRiverBridge(state, map, target.hex, credit);
     }
   }
 
@@ -1227,6 +1290,39 @@ const resolveEmplacementAttack = (
  * spillover is calculated in an overrun, riders are resolved with their vehicle
  * rather than separately, and "Ogres and buildings ignore spillover fire".
  */
+/**
+ * The one thing a river bridge is not armoured against (13.02.1).
+ *
+ * "River bridges are considered to be BPC-armored, and are not affected by
+ * anything except direct attacks. Exception: An attack on a unit on the center
+ * hex of the bridge gives an automatic, separate attack, of the same strength,
+ * on the bridge itself."
+ */
+const spillOntoRiverBridge = (
+  state: GameState,
+  map: GameMap,
+  target: TargetRef,
+  strength: number,
+  credit: string,
+): GameState => {
+  if (target.kind !== 'unit') return state;
+  if (!state.options.terrainDamage) return state;
+  const where = state.units[target.unit]?.pos;
+  if (!where) return state;
+  if (!riverBridgeSpan(state, map, where)) return state;
+  if (!riverBridgeStands(state, map, where)) return state;
+
+  const odds = oddsFor(strength, BRIDGE.riverDefense);
+  if (odds.kind === 'none') return state;
+  const die = rollDie(state.rng);
+  let next: GameState = { ...state, rng: die.state };
+  if (resolve(odds, die.value, 'normal') !== 'X') {
+    return log(next, 'info', 'The same shot shakes the bridge under it, and no more.', [where]);
+  }
+  next = log(next, 'warn', 'The same shot brings the span down under them.', [where]);
+  return demolishRiverBridge(next, map, where, credit);
+};
+
 /** Whether every gun in this attack is a Laser or Laser Tower (12.08). */
 export const isLaserAttack = (state: GameState, attackers: readonly AttackerRef[]): boolean =>
   attackers.length > 0 &&
@@ -1416,6 +1512,7 @@ export const previewOrbitalStrike = (
   if (target.kind === 'building') {
     return denyStrike('the base is what the drop is for; the fleet does not bombard it');
   }
+  if (target.kind === 'riverBridge') return denyStrike('the fleet does not shoot at bridges');
   const targetUnit = state.units[target.unit];
   if (!targetUnit || !onBoard(targetUnit)) return denyStrike('that target is gone');
   let defense: number;
@@ -1507,6 +1604,9 @@ export const resolveOrbitalStrike = (
     return { state: next, ok: true };
   }
 
+  if (target.kind === 'riverBridge') {
+    return { state, ok: false, reason: 'the fleet does not shoot at bridges' };
+  }
   const targetUnit = state.units[target.unit];
   if (!targetUnit || !onBoard(targetUnit))
     return { state, ok: false, reason: 'that target is gone' };

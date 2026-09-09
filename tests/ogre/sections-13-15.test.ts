@@ -15,6 +15,7 @@ import {
   sideFeatureBetween,
 } from '../../src/ogre/engine/map.js';
 import type { GameMap } from '../../src/ogre/engine/map.js';
+import { terrainAt } from '../../src/ogre/engine/map.js';
 import { previewAttack } from '../../src/ogre/engine/combat.js';
 import { stepInfo } from '../../src/ogre/engine/movement.js';
 import {
@@ -30,6 +31,10 @@ import { rollDie } from '../../src/ogre/engine/rng.js';
 import {
   SUPERHEAVY_SHEET,
   bridgeStands,
+  demolishRiverBridge,
+  riverBridgeAt,
+  riverBridgeSpan,
+  riverBridgeStands,
   engineerTasks,
   engineeringDice,
   entrenchmentAt,
@@ -53,6 +58,7 @@ import {
   put,
   putOgre,
   seedForRoll,
+  seedForRolls,
 } from './helpers.js';
 
 const map = flatMap();
@@ -316,6 +322,112 @@ describe('bridges as targets (13.02)', () => {
       toward: at(6, 6),
     });
     expect(preview.ok).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 13.02.1 — a bridge across a whole hex
+// ---------------------------------------------------------------------------
+
+describe('river bridges (13.02.1)', () => {
+  /** A road east along row 6, running over the water in column 5. */
+  const rivered = (): GameMap => {
+    const b = emptyBuilder();
+    layRoute(b, [at(3, 6), at(4, 6), at(5, 6), at(6, 6), at(7, 6)], 'road');
+    b.terrain[key(at(5, 6))] = 'water';
+    return { ...flatMap(), terrain: b.terrain, sides: b.sides, routes: b.routes };
+  };
+  const CENTRE = at(5, 6);
+
+  // "A river bridge lies in three hexes – the river hex and the adjoining road
+  // hexes – and can be attacked by firing at any of them."
+  it('lies in three hexes and defends at 8', () => {
+    const m = rivered();
+    const s = withOptions(newGame({ seed: 1 }), { terrainDamage: true });
+    const span = riverBridgeSpan(s, m, CENTRE);
+    expect(span?.map(key).sort()).toEqual([at(4, 6), at(5, 6), at(6, 6)].map(key).sort());
+    // Every hex of it names the same bridge.
+    for (const h of span!) expect(riverBridgeAt(s, m, h)).toEqual(CENTRE);
+    expect(riverBridgeAt(s, m, at(3, 6))).toBeNull();
+
+    let g = s;
+    const hwz = put(g, A, 'HWZ', at(3, 8));
+    g = fireFor(hwz.state, A);
+    const preview = previewAttack(g, m, [{ unit: hwz.id }], { kind: 'riverBridge', hex: CENTRE });
+    expect(preview.ok).toBe(true);
+    expect(preview.defenseStrength).toBe(8);
+  });
+
+  // "If a river bridge is attacked by a unit in one of its own three hexes, it
+  // is automatically destroyed."
+  it('goes down automatically to a unit standing on it', () => {
+    const m = rivered();
+    let s = withOptions(newGame({ seed: 1 }), { terrainDamage: true });
+    const inf = put(s, A, 'INF', at(4, 6));
+    s = fireFor(inf.state, A);
+    const preview = previewAttack(s, m, [{ unit: inf.id }], { kind: 'riverBridge', hex: CENTRE });
+    expect(preview.odds).toEqual({ kind: 'auto' });
+    const next = run(
+      s,
+      {
+        type: 'attack',
+        by: A,
+        attackers: [{ unit: inf.id }],
+        target: { kind: 'riverBridge', hex: CENTRE },
+      },
+      m,
+    );
+    expect(riverBridgeStands(next, m, CENTRE)).toBe(false);
+  });
+
+  // "For movement and defense purposes, all units treat that hex as swamp ...
+  // any unit on its center hex is also destroyed, except an Ogre. An Ogre falls
+  // into the river ... Four dice are rolled."
+  it('drowns what stands on it, and drops an Ogre in for four dice of treads', () => {
+    const m = rivered();
+    let s = withOptions(newGame({ seed: 4, stackingLimit: 5 }), { terrainDamage: true });
+    const truck = put(s, B, 'HVY', CENTRE);
+    s = truck.state;
+    const ogre = putOgre(s, B, 'MK3', CENTRE);
+    s = ogre.state;
+    const before = (s.units[ogre.id] as { treads: number }).treads;
+
+    const next = demolishRiverBridge(s, m, CENTRE, A);
+    expect(next.units[truck.id]!.destroyed).toBe(true);
+    const fallen = next.units[ogre.id] as { treads: number; destroyed: boolean };
+    expect(fallen.destroyed).toBe(false);
+    // Four dice: between 4 and 24 tread units, capped by what it had.
+    expect(fallen.treads).toBeLessThanOrEqual(before - 4);
+    expect(next.log.some((e) => /falls into the river/.test(e.text))).toBe(true);
+    // "For movement and defense purposes, all units treat that hex as swamp."
+    expect(terrainAt(m, CENTRE, next.terrainOverrides)).toBe('swamp');
+    expect(riverBridgeStands(next, m, CENTRE)).toBe(false);
+  });
+
+  // "Exception: An attack on a unit on the center hex of the bridge gives an
+  // automatic, separate attack, of the same strength, on the bridge itself."
+  it('takes a separate shot whenever something on its centre hex is fired on', () => {
+    const m = rivered();
+    // 6 against the bridge's 8 is 1-2, where a 6 is an X.
+    let s = withOptions(newGame({ seed: seedForRolls([1, 6]) }), { terrainDamage: true });
+    const victim = put(s, B, 'HVY', CENTRE);
+    s = victim.state;
+    const hwz = put(s, A, 'HWZ', at(3, 8));
+    s = fireFor(hwz.state, A);
+    const next = run(
+      s,
+      {
+        type: 'attack',
+        by: A,
+        attackers: [{ unit: hwz.id }],
+        target: { kind: 'unit', unit: victim.id },
+      },
+      m,
+    );
+    expect(next.log.some((e) => /brings the span down under them/.test(e.text))).toBe(true);
+    expect(riverBridgeStands(next, m, CENTRE)).toBe(false);
+    // And the unit that was standing on it went into the water with it.
+    expect(next.units[victim.id]!.destroyed).toBe(true);
   });
 });
 

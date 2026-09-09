@@ -86,13 +86,6 @@ revetment, so the section's general 6 stands in.
 
 ### Smaller known gaps
 
-- **13.02.1 River bridges.** A bridge crossing a whole hex has defence 8, lies
-  in three hexes, and drowns anything on its centre hex when it goes; an Ogre
-  falls in and takes four dice of tread damage. Only stream bridges are in.
-- **13.04 Road mines.** A mine records whether it is on the road, and the
-  engine keeps that flag, but every mine laid in a road hex is treated as a
-  road mine. The rules let the layer choose.
-
 ---
 
 ## Where the numbers live

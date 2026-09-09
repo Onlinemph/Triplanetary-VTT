@@ -376,7 +376,7 @@ export const previewOverrunAttack = (
     };
   }
 
-  if (target.kind === 'terrain' || target.kind === 'bridge') {
+  if (target.kind === 'terrain' || target.kind === 'bridge' || target.kind === 'riverBridge') {
     return denyPreview('an overrun is fought between units');
   }
   const targetUnit = state.units[target.unit];

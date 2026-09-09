@@ -327,7 +327,13 @@ export type TargetRef =
   | { readonly kind: 'building'; readonly building: string }
   | { readonly kind: 'terrain'; readonly hex: Hex }
   /** A bridge (13.02): the crossing between `hex` and its neighbour `toward`. */
-  | { readonly kind: 'bridge'; readonly hex: Hex; readonly toward: Hex };
+  | { readonly kind: 'bridge'; readonly hex: Hex; readonly toward: Hex }
+  /**
+   * A bridge across a whole hex (13.02.1), named by its centre. It "lies in
+   * three hexes – the river hex and the adjoining road hexes – and can be
+   * attacked by firing at any of them".
+   */
+  | { readonly kind: 'riverBridge'; readonly hex: Hex };
 
 /** One attacking gun: a whole conventional unit, or one weapon on an Ogre. */
 export interface AttackerRef {

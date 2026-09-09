@@ -130,6 +130,7 @@ export const layMinefield = (
   map: GameMap,
   by: PlayerId,
   at: Hex,
+  onRoad?: boolean,
 ): { state: GameState; ok: boolean; reason?: string } => {
   if (!state.setup) return { state, ok: false, reason: 'minefields are laid while setting up' };
   if (setupActor(state) !== by) return { state, ok: false, reason: 'it is not your setup' };
@@ -148,10 +149,15 @@ export const layMinefield = (
   // time." (13.04) — so no one-to-a-hex rule.
 
   const id = `mine-${by}-${minesOf(state).length + 1}`;
-  // "recording the hex numbers and whether they are on the road" (13.04): a
-  // mine laid on a road hex is a road mine, and goes off under anything that
-  // uses the road.
-  const mine: Minefield = { id, owner: by, pos: at, revealed: false, onRoad: isRouteHex(map, at) };
+  // "recording the hex numbers and whether they are on the road" (13.04): the
+  // layer's choice, and only a choice where there is a road to be on.
+  const mine: Minefield = {
+    id,
+    owner: by,
+    pos: at,
+    revealed: false,
+    onRoad: isRouteHex(map, at) && onRoad !== false,
+  };
   const next: GameState = {
     ...state,
     mines: [...minesOf(state), mine],
@@ -172,11 +178,18 @@ export const plantMinefield = (
   map: GameMap,
   by: PlayerId,
   at: Hex,
+  onRoad?: boolean,
 ): GameState => {
   const left = minefieldsLeft(state, by);
   if (left <= 0) return state;
   const id = `mine-${by}-${minesOf(state).length + 1}`;
-  const mine: Minefield = { id, owner: by, pos: at, revealed: false, onRoad: isRouteHex(map, at) };
+  const mine: Minefield = {
+    id,
+    owner: by,
+    pos: at,
+    revealed: false,
+    onRoad: isRouteHex(map, at) && onRoad !== false,
+  };
   return {
     ...state,
     mines: [...minesOf(state), mine],

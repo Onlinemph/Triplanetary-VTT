@@ -227,6 +227,14 @@ export interface SetTrainSpeedCommand extends CommandBase {
 export interface LayMinefieldCommand extends CommandBase {
   readonly type: 'layMinefield';
   readonly at: Hex;
+  /**
+   * "recording the hex numbers and whether they are on the road" (13.04). A
+   * road mine goes off under anything that uses the road and is unaffected by
+   * anything that does not; one laid beside the road takes its chances on a 6.
+   * Only meaningful in a hex the road runs through; omitted, a mine there is
+   * laid on the road.
+   */
+  readonly onRoad?: boolean;
 }
 
 /**
@@ -247,6 +255,8 @@ export interface EngineerCommand extends CommandBase {
   readonly toward?: Hex;
   readonly target?: UnitId;
   readonly weapon?: string;
+  /** Laying a mine: whether it goes on the road (13.04). Defaults to yes. */
+  readonly onRoad?: boolean;
 }
 
 /**

@@ -88,6 +88,7 @@ import {
   engineerTasks,
   entrenchedAt,
   sheetOf,
+  riverBridgesNear,
 } from '../engine/engineering.js';
 import { REPACK_TURNS, pushers, unpackCheck } from '../engine/drone.js';
 import { canDismount, canMount } from '../engine/movement.js';
@@ -188,6 +189,8 @@ interface UiState {
   aiming: UnitId | null;
   /** Laying minefields during the setup: the next zone hex clicked gets one. */
   laying: boolean;
+  /** 13.04: whether the next mine goes on the road, where there is one. */
+  mineOnRoad: boolean;
   showHexNumbers: boolean;
   helpOpen: boolean;
 }
@@ -236,6 +239,7 @@ export const createOgreBattle = (opts: OgreBattleOptions): OgreBattle => {
     strike: null,
     aiming: null,
     laying: false,
+    mineOnRoad: true,
     showHexNumbers: false,
     helpOpen: false,
   };
@@ -481,7 +485,7 @@ export const createOgreBattle = (opts: OgreBattleOptions): OgreBattle => {
     // --- Deployment: pick up a counter, put it down --------------------
     if (s.state.setup) {
       if (ui.laying) {
-        dispatch({ type: 'layMinefield', by: me(), at: h });
+        dispatch({ type: 'layMinefield', by: me(), at: h, onRoad: ui.mineOnRoad });
         if (minefieldsLeft(s.state, me()) <= 0) ui.laying = false;
         draw();
         return;
@@ -621,12 +625,15 @@ export const createOgreBattle = (opts: OgreBattleOptions): OgreBattle => {
     if (a.kind === 'building' || b.kind === 'building') {
       return a.kind === 'building' && b.kind === 'building' && a.building === b.building;
     }
+    if (a.kind === 'riverBridge' || b.kind === 'riverBridge') {
+      return a.kind === 'riverBridge' && b.kind === 'riverBridge' && eq(a.hex, b.hex);
+    }
     return a.unit === b.unit;
   };
 
   /** Where the current target stands, so the panel can list its neighbours. */
   const targetHex = (state: GameState, t: TargetRef): Hex | null => {
-    if (t.kind === 'terrain' || t.kind === 'bridge') return t.hex;
+    if (t.kind === 'terrain' || t.kind === 'bridge' || t.kind === 'riverBridge') return t.hex;
     if (t.kind === 'building') return state.buildings[t.building]?.pos ?? null;
     const u = state.units[t.unit];
     return u ? u.pos : null;
@@ -655,7 +662,9 @@ export const createOgreBattle = (opts: OgreBattleOptions): OgreBattle => {
               ? hexLabel(c.hex)
               : c.kind === 'bridge'
                 ? `the bridge ${hexLabel(c.hex)}–${hexLabel(c.toward)}`
-                : unitName(state.units[c.unit]!),
+                : c.kind === 'riverBridge'
+                  ? `the river bridge at ${hexLabel(c.hex)}`
+                  : unitName(state.units[c.unit]!),
           () => {
             ui.target = c;
             draw();
@@ -1088,6 +1097,19 @@ export const createOgreBattle = (opts: OgreBattleOptions): OgreBattle => {
                 },
                 { class: ui.laying ? 'chip active' : 'chip' },
               ),
+              // "recording the hex numbers and whether they are on the road"
+              // (13.04). A road mine catches anything that uses the road; one
+              // laid beside it needs a 6, but survives a column driving past.
+              ui.laying
+                ? button(
+                    ui.mineOnRoad ? 'On the road' : 'Off the road',
+                    () => {
+                      ui.mineOnRoad = !ui.mineOnRoad;
+                      draw();
+                    },
+                    { class: 'chip' },
+                  )
+                : null,
             )
           : null,
         state.options.camouflage === true || (state.options.dummies ?? 0) > 0
@@ -1662,6 +1684,27 @@ export const createOgreBattle = (opts: OgreBattleOptions): OgreBattle => {
             ),
         ),
       );
+      const rivers = from ? riverBridgesNear(state, session.map, from.pos, reach) : [];
+      if (rivers.length > 0) {
+        kids.push(
+          el(
+            'div',
+            { class: 'chips targets' },
+            ...rivers.map((h) =>
+              button(
+                `River bridge ${hexLabel(h)}`,
+                () => {
+                  ui.target = { kind: 'riverBridge', hex: h };
+                  draw();
+                },
+                {
+                  class: sameThing({ kind: 'riverBridge', hex: h }, ui.target) ? 'chip on' : 'chip',
+                },
+              ),
+            ),
+          ),
+        );
+      }
       if (inReach.length > 0) {
         kids.push(
           el(
@@ -1689,7 +1732,10 @@ export const createOgreBattle = (opts: OgreBattleOptions): OgreBattle => {
     const target = ui.target;
     if (target && ui.attackers.length > 0) {
       const targetUnit =
-        target.kind === 'terrain' || target.kind === 'building' || target.kind === 'bridge'
+        target.kind === 'terrain' ||
+        target.kind === 'building' ||
+        target.kind === 'bridge' ||
+        target.kind === 'riverBridge'
           ? null
           : state.units[target.unit];
       const chips = hexTargetChips(state);

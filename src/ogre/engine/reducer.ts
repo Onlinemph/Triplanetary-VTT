@@ -194,11 +194,12 @@ const route = (state: GameState, cmd: Command, map: GameMap): ApplyResult => {
     case 'attack':
       return doAttack(state, cmd.attackers, cmd.target, map);
     case 'layMinefield':
-      return wrap(state, layMinefield(state, map, cmd.by, cmd.at));
+      return wrap(state, layMinefield(state, map, cmd.by, cmd.at, cmd.onRoad));
     case 'engineer':
       return wrap(
         state,
         engineer(state, map, cmd.by, cmd.unit, cmd.task, cmd.toward, {
+          ...(cmd.onRoad !== undefined ? { onRoad: cmd.onRoad } : {}),
           ...(cmd.target !== undefined ? { target: cmd.target } : {}),
           ...(cmd.weapon !== undefined ? { weapon: cmd.weapon } : {}),
         }),
