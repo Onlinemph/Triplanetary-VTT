@@ -720,6 +720,17 @@ export class MapRenderer {
    */
   private drawMines(state: GameState, view: RenderView, size: number): void {
     const ctx = this.ctx;
+    // Revetments (15.04.7): a solid berm inside the hex, heavier for a large
+    // one, drawn under the trench ring so a hex can show both.
+    for (const [k, holds] of Object.entries(state.revetments ?? {})) {
+      const comma = k.indexOf(',');
+      const h = { q: Number(k.slice(0, comma)), r: Number(k.slice(comma + 1)) };
+      this.path(ctx, h, size, size * 0.3);
+      ctx.strokeStyle = rgba('#6b5a3a', 0.85);
+      ctx.lineWidth = Math.max(1.5, size * (holds >= 5 ? 0.13 : 0.08));
+      ctx.setLineDash([]);
+      ctx.stroke();
+    }
     // Entrenchments (15): a ring of trench around the hex.
     for (const k of Object.keys(state.entrenched ?? {})) {
       const comma = k.indexOf(',');

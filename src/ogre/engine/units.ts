@@ -47,6 +47,8 @@ export type UnitClassId =
   | 'TK'
   | 'HT'
   | 'TRAIN'
+  | 'ME'
+  | 'HWTM'
   | 'HDRN'
   | 'LSR'
   | 'LTWR'
@@ -497,6 +499,38 @@ export const UNIT_CLASSES: Readonly<Record<UnitClassId, UnitClass>> = {
     note: 'Fully stated: a one-shot "heavy weapon attack at Attack Strength 3 and Range 4", plus "an inherent Attack 1 at Range 1"; 4 VP per squad (3.02.2).',
   },
 
+  ME: {
+    id: 'ME',
+    name: 'Marine Engineers',
+    abbr: 'ME',
+    kind: 'infantry',
+    mobility: 'infantry',
+    attack: 1,
+    range: 1,
+    defense: 1,
+    move: 2,
+    size: 1,
+    armorUnits: 1 / 3,
+    vp: 6,
+    note: '"Marine Engineers are treated for all purposes like regular Combat Engineers, except that they move and attack equally well on land and water, and have double defense in water hexes ... Marine Engineers cost 6 VP per squad, (or 3× the cost of regular infantry.)" (15.01.1)',
+  },
+
+  HWTM: {
+    id: 'HWTM',
+    name: 'Marine Heavy Weapons Team',
+    abbr: 'HWTM',
+    kind: 'infantry',
+    mobility: 'infantry',
+    attack: 1,
+    range: 1,
+    defense: 1,
+    move: 2,
+    size: 1,
+    armorUnits: 1 / 3,
+    vp: 6,
+    note: '"treated for all purposes like regular Heavy Weapons Teams, except that they move and attack equally well on land and water, and have double defense in water hexes ... Marine Heavy Weapons Teams cost 6 VP per squad" (3.02.3). Their heavy weapon works on surface and submerged targets alike.',
+  },
+
   HDRN: {
     id: 'HDRN',
     name: 'Heavy Drone',
@@ -583,6 +617,15 @@ export const HEAVY_WEAPON = { attack: 3, range: 4 } as const;
  * so the bands here are even sixths: full move down to 13 treads, then a hex
  * less for every six lost.
  */
+/**
+ * The battlesuit troops who work in water as well as on land: Marines
+ * (3.02.1), Marine Heavy Weapons Teams (3.02.3) and Marine Engineers
+ * (15.01.1). All three "move and attack equally well on land and water, and
+ * have double defense in water hexes".
+ */
+export const isMarine = (classId: UnitClassId): boolean =>
+  classId === 'MAR' || classId === 'HWTM' || classId === 'ME';
+
 export const superheavyMove = (treads: number): number => {
   if (treads >= 13) return 3;
   if (treads >= 7) return 2;
@@ -627,6 +670,9 @@ export const SELECTABLE_CLASSES: readonly UnitClassId[] = [
   'MCRL',
   'TK',
   'HT',
+  'CE',
+  'ME',
+  'HWTM',
   // The Vulcan's Heavy Drones: no weapons, but they are what makes a Vulcan
   // worth bringing (15.02.3).
   'HDRN',

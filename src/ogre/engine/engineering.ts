@@ -40,6 +40,7 @@ import {
   type GameMap,
   allHexes,
   hasRoute,
+  inBounds,
   isBridge,
   isRouteHex,
   sideFeatureBetween,
@@ -59,10 +60,11 @@ import {
   onBoard,
   unitsAt,
 } from './types.js';
+import { revetmentAt } from './state.js';
 import { destroyUnit, log, setSideOverride, unitName, updateAnyUnit, withUnit } from './state.js';
 import { baseTerrain } from './terrain.js';
 import { unitClass } from './units.js';
-import { mineAt, minefieldsLeft, plantMinefield, removeMinefield } from './concealment.js';
+import { mineAt, minefieldsLeft, minesOf, plantMinefield, removeMinefield } from './concealment.js';
 import { OGRE_WEAPONS, ogreType } from './ogres.js';
 
 // ---------------------------------------------------------------------------
@@ -280,7 +282,10 @@ export type EngineerTask =
   | 'repairRail'
   | 'clearDamagedRoad'
   | 'repairWeapon'
-  | 'repairTreads';
+  | 'repairTreads'
+  | 'revetSmall'
+  | 'revetLarge'
+  | 'detectMines';
 
 /** The printed roll for each task, from the table beside 15.04.1. */
 export const TASK_ROLL: Readonly<Record<EngineerTask, number>> = {
@@ -300,7 +305,17 @@ export const TASK_ROLL: Readonly<Record<EngineerTask, number>> = {
   clearDamagedRoad: 4,
   repairWeapon: 6,
   repairTreads: 6,
+  // 15.04.7 prints no roll of its own; the section's general "if a 6 is rolled
+  // on any die, the task is successfully completed" stands in.
+  revetSmall: 6,
+  revetLarge: 6,
+  // 15.03.3: "they need to roll on one die a number greater than the number of
+  // hexes they are searching" — one hex at a time here, so a 2 or better.
+  detectMines: 2,
 };
+
+/** "A small revetment can offer protection to a unit size 3 or smaller." (15.04.7) */
+export const REVETMENT = { small: 3, large: 5, defense: 2 } as const;
 
 const VULCAN_TASKS: readonly EngineerTask[] = [
   'freeStuck',
@@ -308,11 +323,15 @@ const VULCAN_TASKS: readonly EngineerTask[] = [
   'clearDamagedRoad',
   'repairWeapon',
   'repairTreads',
+  'revetSmall',
+  'revetLarge',
 ];
 
 export const isVulcanTask = (task: EngineerTask): boolean => VULCAN_TASKS.includes(task);
 
-export const isEngineer = (u: Unit): boolean => u.kind === 'unit' && u.classId === 'CE';
+/** Combat Engineers, and the Marine Engineers who are "treated for all purposes like" them (15.01.1). */
+export const isEngineer = (u: Unit): boolean =>
+  u.kind === 'unit' && (u.classId === 'CE' || u.classId === 'ME');
 export const isHeavyDrone = (u: Unit): boolean => u.kind === 'unit' && u.classId === 'HDRN';
 export const isVulcan = (u: Unit): boolean => isOgre(u) && u.typeId === 'VULCAN';
 /** "the term 'Sapper' encompasses human Combat Engineers as well as Vulcans and/or their Heavy Drones." */
@@ -427,6 +446,13 @@ export const engineerTasks = (state: GameState, map: GameMap, u: Unit): TaskOffe
   if (minefieldsLeft(state, owner) > 0 && !mineAt(state, here)) {
     out.push({ task: 'layMine', label: 'Plant a mine' });
   }
+  // 15.03.3: sweep one neighbouring hex for mines.
+  for (const n of neighbors(here)) {
+    if (!inBounds(map, n)) continue;
+    const known = mineAt(state, n);
+    if (known && (known.revealed || known.owner === owner)) continue;
+    out.push({ task: 'detectMines', toward: n, label: `Sweep ${key(n)} for mines` });
+  }
   // 15.03.2 and 15.03.4
   const mine = mineAt(state, here);
   if (mine && (mine.revealed || mine.owner === owner)) {
@@ -465,6 +491,12 @@ export const engineerTasks = (state: GameState, map: GameMap, u: Unit): TaskOffe
   // --- 15.04, for the Vulcan and its Drones ---------------------------------
   if (!isVulcan(u) && !isHeavyDrone(u)) return out;
 
+  // 15.04.7: a prepared position. "Entrenchments may not be built within a
+  // revetment", and nor the other way about.
+  if (revetmentAt(state, here) === 0 && !entrenchedAt(state, here) && ground !== 'water') {
+    out.push({ task: 'revetSmall', label: 'Dig a small revetment' });
+    out.push({ task: 'revetLarge', label: 'Dig a large revetment' });
+  }
   if (cut && isRouteHex(map, here)) {
     // 15.04.2 rail, 15.04.3 roads cut by damaged terrain.
     if (hasRoute(map, here, 'rail') && raw !== 'damagedTown' && raw !== 'damagedForest') {
@@ -574,6 +606,8 @@ export const engineer = (
         return refuse('entrenchments only help in clear, forest or rubble (15.03.5)');
       }
       if (entrenchedAt(state, here)) return refuse('that hex is entrenched already');
+      // "Entrenchments may not be built within a revetment." (15.03.5)
+      if (revetmentAt(state, here) > 0) return refuse('there is a revetment here already');
       const roll = rollPool(state, dice);
       // "On a roll of a 1-4, one squad-equivalent ... protect one squad ... a
       // roll of a 5 ... two squads, and a roll of a 6 a 3-squad entrenchment."
@@ -864,6 +898,68 @@ export const engineer = (
         next,
         'good',
         `${unitName(u)} bring a ${OGRE_WEAPONS[w.kind].name.toLowerCase()} back on line.`,
+        [here],
+      );
+      return { state: done(next), ok: true };
+    }
+
+    case 'detectMines': {
+      if (!where) return refuse('say which hex to sweep');
+      if (distance(here, where) !== 1) return refuse('they sweep the hexes around them');
+      const roll = rollPool(state, dice);
+      if (roll.best < TASK_ROLL.detectMines) {
+        return {
+          state: done(
+            log(roll.state, 'info', `The sweep of ${key(where)} turns up nothing.`, [where]),
+          ),
+          ok: true,
+        };
+      }
+      const found = mineAt(roll.state, where);
+      if (!found || found.owner === by) {
+        return {
+          state: done(log(roll.state, 'info', `${key(where)} is clear.`, [where])),
+          ok: true,
+        };
+      }
+      const next = log(
+        {
+          ...roll.state,
+          mines: minesOf(roll.state).map((m) => (m.id === found.id ? { ...m, revealed: true } : m)),
+        },
+        'good',
+        `${unitName(u)} sweep ${key(where)} and find a minefield.`,
+        [where],
+      );
+      return { state: done(next), ok: true };
+    }
+
+    case 'revetSmall':
+    case 'revetLarge': {
+      if (revetmentAt(state, here) > 0) return refuse('there is a revetment here already');
+      if (entrenchedAt(state, here))
+        return refuse('the hex is entrenched; a revetment needs open ground');
+      if (baseTerrain(terrainAt(map, here, state.terrainOverrides)) === 'water') {
+        return refuse('there is nothing to dig into there');
+      }
+      const size = task === 'revetLarge' ? REVETMENT.large : REVETMENT.small;
+      const roll = rollPool(state, dice);
+      if (roll.best < TASK_ROLL[task]) {
+        return {
+          state: done(
+            log(roll.state, 'info', `The digging goes on — rolled ${roll.best}.`, [here]),
+          ),
+          ok: true,
+        };
+      }
+      let next: GameState = {
+        ...roll.state,
+        revetments: { ...(roll.state.revetments ?? {}), [key(here)]: size },
+      };
+      next = log(
+        next,
+        'good',
+        `${unitName(u)} dig a ${task === 'revetLarge' ? 'large' : 'small'} revetment at ${key(here)}.`,
         [here],
       );
       return { state: done(next), ok: true };

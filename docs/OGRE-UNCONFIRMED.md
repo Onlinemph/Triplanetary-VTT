@@ -87,34 +87,30 @@ is set up may not be moved.
 **Here:** the LAD mounts and dismounts like a squad of infantry, and is
 "setting up" — unable to fire — for the rest of the turn it dismounts.
 
-### Combat engineering, and what the Vulcan still cannot do (§15)
+### What the Vulcan still cannot do (§15)
 
-Most of Section 15 is in: the dice pools (a Combat Engineer squad a die, a
-Heavy Drone two, a Vulcan four; a Vulcan task is two dice for the Vulcan and
-one for each Drone), the fire-phase timing, one attempt per task per turn, and
-eleven of the tasks — entrenchments with the die setting how many squads they
-shelter, planting and disarming mines, mending a road, grading a ridge,
-finishing off a weaponless cybertank, and the Vulcan's own work on stuck
-units, cut rail, roads through wreckage, and an Ogre's weapons and treads.
+Section 15 is nearly complete: the dice pools, the fire-phase timing, one
+attempt per task per turn, and fourteen tasks — entrenchments and revetments,
+planting, sweeping and disarming mines, mending roads and rail, grading
+ridges, finishing off a cybertank, and the Vulcan's work on stuck units, roads
+through wreckage, and an Ogre's weapons and treads.
 
 What is not:
 
-- **Active mine detection** (15.03.3): searching adjacent hexes on a roll
-  greater than the number searched.
 - **Reloading missiles** (15.04.4), which needs the Vulcan's cargo hold.
-- **Revetments** (15.04.7): a prepared position adding +1 defence after the
-  terrain multiplier, targetable in its own right at D2, small for size 3 and
-  large for size 5. This is the most valuable of the four.
-- **Towing** (15.04.8): hitch on a 2+, with the Vulcan's move dropping by the
-  towed vehicle's size.
+- **Towing** (15.04.8): hitch on a 2+, one vehicle at a time, with the
+  Vulcan's move dropping by the towed vehicle's size.
 - **Everything about Drones as Drones** (15.02.1, 15.02.4, 15.02.5): the
   Vulcan's cargo capacity, combat Drones, and the sixteen "ducklings" it can
   drive at half strength. A Heavy Drone is a counter here, and a useful one,
   but nothing connects it to a Vulcan's four control channels.
 - **Assembly times** (15.02.2): 12 turns for a Mark II up to 75 for a Ninja.
   The unfinished-Ogre rule that governs the result is already in.
-- **Marine Engineers** (15.01.1), who cost 6 VP and double their defence in
-  water.
+
+Two smaller simplifications inside what is there. A mine sweep searches one
+hex at a time, so it always needs a 2 or better; the rules let a squad sweep
+several at once for a worse roll. And 15.04.7 prints no die roll for digging a
+revetment, so the section's general 6 stands in.
 
 ### Smaller known gaps
 
@@ -124,12 +120,9 @@ What is not:
 - **13.04 Road mines.** A mine records whether it is on the road, and the
   engine keeps that flag, but every mine laid in a road hex is treated as a
   road mine. The rules let the layer choose.
-- **13.04.1 Passive detection.** An Ogre of Size 8 or more, a Ninja or a Vulcan
-  is warned before entering a mined hex and then sets one off only on a 6.
 - **9.03.1 Armed trains**, **9.06 collisions**, **9.07 reinforcements from the
   train**: none are in.
 - **12.05** A Laser can try to intercept an Ogre missile on a 10+.
-- **15.01.1 Marine Engineers** (6 VP, double defence in water) are not a class.
 
 ---
 
