@@ -167,6 +167,7 @@ printed board.
 | 5.08.1–5.08.5 The five terrain tables                                 | `terrain.entryCost`                               |
 | 5.09 The minimum move                                                 | `movement.planPath`                               |
 | 5.11 Infantry riding vehicles, mount/dismount sequencing              | `movement.canMount`, `canDismount`                |
+| 5.11.2 One roll for the combination, odds and results kept separate   | `combat.applyToRiders`                            |
 | 5.12 Leaving the map                                                  | `movement.applyMove`, `Unit.offMap`               |
 
 ### 6 – Ramming
@@ -291,15 +292,26 @@ refuses the launch and says so, rather than quietly flying it through.
 
 Combat-engineer bonuses (Section 15) are not in.
 
-### 12 – Lasers (provisional values)
+### 12 – Lasers
 
-"The only rule in the game with line of sight." `LSR` and `LTWR` are immobile
-structure units that fire at any range down a clear line (`los.laserLineOfSight`,
-consulted by `combat.previewAttack`): a standard laser is blocked by forest,
-swamp, town or rubble in between (12.02); a tower fires over them but not into
-them (12.03). Both take interception shots at cruise missiles in flight. Their
-attack and defence values are placeholders flagged `unconfirmed` in
-`src/ogre/engine/units.ts`.
+| Rule                                                                    | Where                                                                 |
+| ----------------------------------------------------------------------- | --------------------------------------------------------------------- |
+| 12.01 "Defensively, they are buildings with Structure Points"           | `state.structurePointsOf`, `combat.resolveEmplacementAttack`          |
+| 12.02 A standard Laser's line of fire, blocked by raised terrain        | `los.laserLineOfSight`, consulted by `combat.previewAttack`           |
+| 12.03 A tower fires over terrain but not into it                        | `los.laserLineOfSight`, `terrain.hidesFromLaserTower`                 |
+| 12.04 One shot at each Cruise Missile that comes in range               | `missiles.shotsAgainst`                                               |
+| 12.05 An Ogre missile intercepted on a 10 or better, on two dice        | `combat.interceptOgreMissiles`, `OGRE_MISSILE_INTERCEPT`              |
+| 12.06 No attack on a unit after firing in the preceding enemy turn      | `state.markFiredInEnemyTurn`, `clearLaserWatch`, `combat.spentReason` |
+| 12.07 Damaged at 10 SP, destroyed at 0                                  | `units.LASER_DAMAGED_AT`, `state.laserDamaged`                        |
+| 12.08 No spillover on units stacked with the target, but riders are hit | `combat.isLaserAttack`, `applySpillover`, `applyToRiders`             |
+| 12.09 Double strength when overrun; a damaged Laser does not fire       | `overrun.overrunStrength`, `previewOverrunAttack`                     |
+
+A Laser is a unit that carries a building's defence: a shot at one takes
+Structure Points off a total rather than rolling on the Combat Results Table,
+and a cruise-missile blast reads it on the building rows of 10.04 and takes it
+five points at a time. `LSR` and `LTWR` both start at 20 SP — the one number in
+this section that is on the counter rather than in the rules text, and still
+flagged `unconfirmed` in `src/ogre/engine/units.ts`.
 
 ### 13 – Optional rules (partial)
 
@@ -382,7 +394,7 @@ engine's shape.
 | --------------------------- | ---------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **9 – The train**           | The two-counter train, armed trains (9.03.1), reinforcements aboard (9.07)                                             | The markers, the end-of-turn speed change, cut track, collisions, the town doubling and stacking freedom are all as printed. See above.                         |
 | **10 – Cruise missiles**    | The owner's choice of route; the engine flies a straight line                                                          | Immediate flight, the 2d6 interception table with its tracking bonuses, premature detonation, six-hex fratricide and the printed blast table are all in.        |
-| **12 – Lasers**             | Structure Points, the damaged state, the fire restriction                                                              | Attack 2, ranges 30 and 60, the line of sight and the double strength when overrun are the printed ones (12.02, 12.03, 12.06, 12.09).                           |
+| **12 – Lasers**             | Nothing; only the 20 SP on the counter is unconfirmed                                                                  | Structure Points, the damaged state, the fire restriction, Ogre-missile interception and the spillover exception are all as printed (12.01–12.09).              |
 | **13 – Optional rules**     | River bridges (13.02.1), the layer's choice of road mine, passive detection (13.04.1)                                  | Terrain damage (13.01), bridges at D6 (13.02), mines (13.04), camouflage (13.05), dummies (13.06) and the Superheavy's record sheet (13.07) are all as printed. |
 | **14 – Advanced units**     | The LAD's three-turn deployment from a cargo pallet                                                                    | Both units' statistics are in, and the Ninja's stealth; the drone rides a vehicle as one squad and sets up the turn it is set down.                             |
 | **15 – Combat engineering** | Reloading missiles (15.04.4), towing (15.04.8), Drone control and cargo (15.02.1, 15.02.4-5), assembly times (15.02.2) | The dice pools, entrenchments, revetments and fourteen tasks are in, the Vulcan's own among them. See above.                                                    |
@@ -397,9 +409,9 @@ to call provisional is now quoted and cited at the implementation site.
 
 `docs/OGRE-UNCONFIRMED.md` is what is left: the handful of numbers that are on
 the counters rather than in the rules text, and the rules the engine knowingly
-models differently — cruise missile flight and interception, Lasers as
-Structure Point buildings, the train as two counters, the drone's three-turn
-deployment, the engineers' dice pools, and the whole of the Vulcan's work.
+models differently — cruise missile flight and interception, the train as two
+counters, the drone's three-turn deployment, the engineers' dice pools, and the
+whole of the Vulcan's work.
 
 ## Reporting a rules bug
 

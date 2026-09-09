@@ -22,6 +22,7 @@ import {
 import {
   type UnitClassId,
   HEAVY_WEAPON,
+  LASER_DAMAGED_AT,
   MAX_SQUADS_PER_GROUP,
   UNIT_CLASSES,
   isMarine,
@@ -135,6 +136,10 @@ export const makeUnit = (
   stuck: false,
   pendingHazard: null,
   ...freshMovementFields(pos),
+  // A Laser carries its Structure Points from the moment it is placed (12.01).
+  ...(UNIT_CLASSES[classId].structurePoints !== undefined
+    ? { structurePoints: UNIT_CLASSES[classId].structurePoints }
+    : {}),
   firedThisPhase: false,
   squadsFired: 0,
   heavyWeaponFired: false,
@@ -295,6 +300,46 @@ export const printedAttack = (u: ConventionalUnit): number => {
   // A Superheavy on its record sheet (13.07) shoots with the guns it has left.
   if (u.sheet) return u.sheet.guns * 3;
   return unitClass(u.classId).attack * (unitClass(u.classId).kind === 'infantry' ? u.squads : 1);
+};
+
+/** A Laser emplacement's Structure Points now: its own, or the class's full count. */
+export const structurePointsOf = (u: ConventionalUnit): number =>
+  u.structurePoints ?? unitClass(u.classId).structurePoints ?? 0;
+
+/** "reduced to 10 SP, it is 'damaged' ... can no longer fire" (12.07). */
+export const laserDamaged = (u: ConventionalUnit): boolean => {
+  const full = unitClass(u.classId).structurePoints;
+  return full !== undefined && structurePointsOf(u) <= LASER_DAMAGED_AT;
+};
+
+/**
+ * Remember that a Laser spent a shot while it was not its owner's turn.
+ *
+ * "If a Laser or Laser Tower did not fire at all during the preceding enemy
+ * turn, it may make one attack during its own fire phase." (12.06) A Laser's
+ * only chance to fire in the enemy's turn is interception — at a Cruise
+ * Missile (12.04) or an Ogre missile (12.05) — so the flag is set there and
+ * read by `canStillFire` one turn later.
+ */
+export const markFiredInEnemyTurn = (state: GameState, id: UnitId): GameState => {
+  const u = state.units[id];
+  if (!u || u.kind !== 'unit') return state;
+  if (unitClass(u.classId).laser === undefined) return state;
+  return withUnit(state, { ...u, firedInEnemyTurn: true });
+};
+
+/**
+ * Forget it again, at the end of the owner's own fire phase: from here on the
+ * "preceding enemy turn" is the one about to start.
+ */
+export const clearLaserWatch = (state: GameState, player: PlayerId): GameState => {
+  let next = state;
+  for (const u of Object.values(state.units)) {
+    if (u.owner !== player || u.kind !== 'unit') continue;
+    if (u.firedInEnemyTurn !== true) continue;
+    next = withUnit(next, { ...u, firedInEnemyTurn: false });
+  }
+  return next;
 };
 
 export const printedDefense = (u: ConventionalUnit): number =>

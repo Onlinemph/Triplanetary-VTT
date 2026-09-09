@@ -115,6 +115,18 @@ export interface ConventionalUnit {
   readonly trainSpeed?: number;
   /** The train's speed has been set this turn; it changes once per turn. */
   readonly trainSpeedSet?: boolean;
+  /**
+   * A Laser emplacement's Structure Points (12.01, 12.07). Absent means the
+   * class's full count. "When a Laser or Laser Tower is reduced to 10 SP, it
+   * is 'damaged' ... The Laser can no longer fire, but it is not actually
+   * destroyed until it is reduced to 0 SP."
+   */
+  readonly structurePoints?: number;
+  /**
+   * The laser shot at something during the enemy's turn, so it may not attack
+   * a unit in its own fire phase (12.06). Cleared as its fire phase ends.
+   */
+  readonly firedInEnemyTurn?: boolean;
 
   readonly destroyed: boolean;
   readonly destroyedBy?: string;
@@ -137,6 +149,23 @@ export interface ConventionalUnit {
    */
   readonly concealed?: boolean;
   /**
+   * A Light Artillery Drone's deployment (14.01). Absent on everything else,
+   * and on a drone that a scenario simply put on the board ready to fire.
+   *
+   * "Turn 1: Unloading ... Place the LAD pallet in the same hex as the
+   * transport. Turn 2: The LAD unpacks itself, sets itself up, and runs
+   * diagnostics ... It may be targeted, but may not attack ... Turn 3: The LAD
+   * can fire."
+   */
+  readonly droneState?: DroneState;
+  /**
+   * Turns of work done towards putting a drone back on its pallet: "It takes a
+   * squad of Combat Engineers three turns to re-palletize a LAD, and one
+   * further turn to load it onto a Truck. A Vulcan may break down and load an
+   * LAD in one turn." (14.01)
+   */
+  readonly repackProgress?: number;
+  /**
    * A Superheavy's record sheet (13.07), once it has taken damage under that
    * option. Absent means the full sheet; see `engineering.ts`.
    */
@@ -148,6 +177,18 @@ export interface ConventionalUnit {
     readonly disabled?: boolean;
   };
 }
+
+/**
+ * Where a Light Artillery Drone is in its three-turn deployment (14.01).
+ *
+ *  - `pallet` — collapsed cargo. "A LAD on a pallet is treated as a D0 unit;
+ *    it is destroyed by any attack." It may be carried, hidden in a defensive
+ *    setup, pushed a hex a turn by a squad, and is not overrun.
+ *  - `unpacking` — the turn it sets itself up. "It may be targeted, but may
+ *    not attack."
+ *  - `ready` — a drone on its legs. "A LAD that is set up may not be moved."
+ */
+export type DroneState = 'pallet' | 'unpacking' | 'ready';
 
 /** One targetable component on an Ogre's record sheet. */
 export interface OgreWeapon {

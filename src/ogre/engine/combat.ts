@@ -19,7 +19,7 @@
  */
 
 import { BRIDGE, applySheetDamage, bridgeStands, demolishBridge, sheetOf } from './engineering.js';
-import { type Hex, distance, eq, key } from './hex.js';
+import { type Hex, distance, eq, hexLine, key, label } from './hex.js';
 import { type GameMap, terrainAt } from './map.js';
 import { rollDie } from './rng.js';
 import {
@@ -34,7 +34,7 @@ import {
 import { OGRE_WEAPONS } from './ogres.js';
 import { baseTerrain, degradeTerrain, treadHitRollIn } from './terrain.js';
 import { mobilityOf } from './mobility.js';
-import { isMarine, unitClass } from './units.js';
+import { LASER_DAMAGED_AT, isMarine, unitClass } from './units.js';
 import { laserLineOfSight } from './los.js';
 import {
   type AttackResolution,
@@ -50,6 +50,7 @@ import {
   isInertOgre,
   isOgre,
   onBoard,
+  passengersOf,
   unitsAt,
 } from './types.js';
 import {
@@ -59,13 +60,16 @@ import {
   defenseOf,
   destroyUnit,
   isFireable,
+  laserDamaged,
   log,
+  markFiredInEnemyTurn,
   ogreDamageValue,
   ogreIsDestroyed,
   ogreWeaponDefense,
   printedAttack,
   reduceSquad,
   setTerrainOverride,
+  structurePointsOf,
   unitName,
   updateAnyUnit,
   withUnit,
@@ -269,6 +273,28 @@ export const previewAttack = (
       treadHitOn: hitOn,
       summary: `1 to 1 on the treads — ${hitOn === 6 ? 'a 6' : 'a 5 or 6'} destroys ${total} tread unit${total === 1 ? '' : 's'}`,
     };
+  }
+
+  // --- A Laser emplacement: "buildings with Structure Points" (12.01) -------
+  if (target.kind === 'unit' && targetUnit?.kind === 'unit') {
+    const sp = unitClass(targetUnit.classId).structurePoints;
+    if (sp !== undefined) {
+      if (anyAp) return denyPreview('AP weapons have no effect on an emplacement');
+      const terrain = baseTerrain(terrainAt(map, targetUnit.pos, state.terrainOverrides));
+      // Buildings halve incoming fire in a town or forest (11.04.1).
+      const damage = terrain === 'town' || terrain === 'forest' ? total : total * 2;
+      const left = structurePointsOf(targetUnit);
+      return {
+        ok: true,
+        attackStrength: total,
+        defenseStrength: left,
+        odds: AUTO_KILL,
+        treadAttack: false,
+        treadHitOn: 5,
+        structureDamage: damage,
+        summary: `${damage} structure points off ${left}`,
+      };
+    }
   }
 
   // --- Buildings ---------------------------------------------------------
@@ -486,6 +512,18 @@ const spentReason = (
     return null;
   }
 
+  if (unitClass(u.classId).laser !== undefined) {
+    // "When a Laser or Laser Tower is reduced to 10 SP, it is 'damaged' ...
+    // The Laser can no longer fire" (12.07).
+    if (laserDamaged(u)) return `${unitName(u)} is damaged and cannot fire`;
+    // "If a Laser or Laser Tower did not fire at all during the preceding
+    // enemy turn, it may make one attack during its own fire phase." (12.06)
+    if (u.firedInEnemyTurn === true) {
+      return `${unitName(u)} spent its shot tracking a missile`;
+    }
+    return u.firedThisPhase ? 'that unit has already fired this turn' : null;
+  }
+
   if (ref.heavyWeapon) {
     // Only a Heavy Weapons Team carries one (3.02.2, 3.02.3).
     if (u.classId !== 'HWT' && u.classId !== 'HWTM') {
@@ -511,6 +549,123 @@ export interface AttackOutcome {
   readonly reason?: string;
 }
 
+/**
+ * Ogre missiles under a Laser's guns (12.05).
+ *
+ * "A Laser or Laser Tower can attempt to intercept each Ogre missile on the
+ * turn it is fired. No other unit may do so – Ogre missiles are smaller and
+ * faster than Cruise Missiles. To hit an Ogre missile, the Laser must roll a
+ * 10 or above on two dice. (Missiles from a Missile Tank are too small and
+ * fast for a Laser to attack at all.) Ogre missiles fired during overruns may
+ * not be intercepted."
+ *
+ * Only an Ogre's own missiles and missile racks qualify: a Missile Tank's
+ * shot is a conventional attack and never comes through here. The Laser
+ * shoots at the flight rather than at the firer, so it takes its chance at
+ * the nearest hex of the missile's line it can reach — a standard Laser
+ * needing its line of fire to that hex (12.02), a tower needing only the
+ * range, since the missile flies over terrain rather than hiding in it
+ * (12.03).
+ */
+export const OGRE_MISSILE_INTERCEPT = 10;
+
+const isOgreMissile = (state: GameState, ref: AttackerRef): boolean => {
+  const u = state.units[ref.unit];
+  if (!u || !isOgre(u)) return false;
+  const w = u.weapons.find((x) => x.id === ref.weapon);
+  return w !== undefined && (w.kind === 'missile' || w.kind === 'missileRack');
+};
+
+/** The hex a Laser would take its shot at, or null when it cannot reach one. */
+const interceptHex = (
+  state: GameState,
+  map: GameMap,
+  laser: ConventionalUnit,
+  from: Hex,
+  to: Hex,
+): Hex | null => {
+  const cls = unitClass(laser.classId);
+  let best: Hex | null = null;
+  let bestRange = Infinity;
+  for (const h of hexLine(from, to)) {
+    const range = distance(laser.pos, h);
+    if (range > cls.range || range >= bestRange) continue;
+    if (cls.laser === 'standard' && laserLineOfSight(state, map, laser.pos, h, 'standard')) {
+      continue;
+    }
+    best = h;
+    bestRange = range;
+  }
+  return best;
+};
+
+interface Screened {
+  readonly state: GameState;
+  readonly survivors: readonly AttackerRef[];
+}
+
+const interceptOgreMissiles = (
+  state: GameState,
+  map: GameMap,
+  attackers: readonly AttackerRef[],
+  target: TargetRef,
+): Screened => {
+  const missiles = attackers.filter((a) => isOgreMissile(state, a));
+  if (missiles.length === 0) return { state, survivors: attackers };
+  const to = targetHex(state, target);
+  if (!to) return { state, survivors: attackers };
+  const owner = state.units[attackers[0]!.unit]?.owner;
+
+  const lasers = Object.values(state.units)
+    .filter(
+      (u): u is ConventionalUnit =>
+        u.kind === 'unit' &&
+        u.owner !== owner &&
+        onBoard(u) &&
+        canAct(u) &&
+        unitClass(u.classId).laser !== undefined &&
+        !laserDamaged(u),
+    )
+    .sort((a, b) => (a.id < b.id ? -1 : 1));
+  if (lasers.length === 0) return { state, survivors: attackers };
+
+  let next = state;
+  const shot = new Set<string>();
+  for (const ref of missiles) {
+    const from = next.units[ref.unit]?.pos;
+    if (!from) continue;
+    for (const laser of lasers) {
+      // "Each Laser or Laser Tower can fire once at each" missile.
+      const seen = `${laser.id}>${ref.unit}:${ref.weapon ?? ''}`;
+      if (shot.has(seen)) continue;
+      const at = interceptHex(next, map, laser, from, to);
+      if (!at) continue;
+      shot.add(seen);
+
+      const a = rollDie(next.rng);
+      const b = rollDie(a.state);
+      next = markFiredInEnemyTurn({ ...next, rng: b.state }, laser.id);
+      const total = a.value + b.value;
+      const hit = total >= OGRE_MISSILE_INTERCEPT;
+      next = log(
+        next,
+        hit ? 'good' : 'info',
+        `${unitName(laser)} tracks the Ogre missile over ${label(at)} — needs ` +
+          `${String(OGRE_MISSILE_INTERCEPT)}, rolled ${String(total)}: ` +
+          (hit ? 'shot down.' : 'it flies on.'),
+        [at],
+      );
+      if (hit) {
+        return {
+          state: next,
+          survivors: attackers.filter((x) => x !== ref),
+        };
+      }
+    }
+  }
+  return { state: next, survivors: attackers };
+};
+
 export const resolveAttack = (
   state: GameState,
   map: GameMap,
@@ -523,16 +678,51 @@ export const resolveAttack = (
   const firstAttacker = state.units[attackers[0]!.unit]!;
   const attackerOwner = firstAttacker.owner;
 
-  let next = markAttackersSpent(state, attackers, target);
+  const spent = markAttackersSpent(state, attackers, target);
+
+  // "A Laser or Laser Tower can attempt to intercept each Ogre missile on the
+  // turn it is fired." (12.05) A missile that is brought down never reaches the
+  // target, and the shot is spent all the same. Anything else in the volley
+  // fires on, so the surviving guns are re-priced before they resolve.
+  const screened = interceptOgreMissiles(spent, map, attackers, target);
+  if (screened.survivors.length === 0) {
+    return { state: screened.state, resolution: null, reason: 'the missile was shot down' };
+  }
+  // A volley that lost a missile is re-priced, on the state before the guns
+  // were marked spent — that is the one the odds were read from.
+  const shot =
+    screened.survivors.length === attackers.length
+      ? preview
+      : previewAttack(state, map, screened.survivors, target);
+  if (!shot.ok) return { state: screened.state, resolution: null, reason: shot.reason };
+
+  return finishAttack(screened.state, map, screened.survivors, target, attackerOwner, shot);
+};
+
+/** The rest of an attack, once it is certain the shot is on its way. */
+const finishAttack = (
+  state: GameState,
+  map: GameMap,
+  attackers: readonly AttackerRef[],
+  target: TargetRef,
+  attackerOwner: string,
+  preview: AttackPreview,
+): AttackOutcome => {
+  const firstAttacker = state.units[attackers[0]!.unit]!;
+  let next = state;
 
   // Treads bypass the table entirely.
   if (preview.treadAttack) {
     return resolveTreadAttack(next, map, attackers, target, preview, attackerOwner);
   }
 
-  // Buildings take flat damage and never roll (11.04.1).
+  // Buildings take flat damage and never roll (11.04.1), and so does a Laser
+  // emplacement, which is one (12.01).
   if (target.kind === 'building') {
     return resolveBuildingAttack(next, attackers, target, preview, attackerOwner);
+  }
+  if (target.kind === 'unit' && preview.structureDamage !== undefined) {
+    return resolveEmplacementAttack(next, attackers, target, preview, attackerOwner);
   }
 
   const die = rollDie(next.rng);
@@ -570,11 +760,72 @@ export const resolveAttack = (
     [targetHex(next, target) ?? firstAttacker.pos],
   );
 
+  // 5.11.2: the riders are resolved on this same die roll, before the vehicle
+  // under them, because they may outlive it.
+  next = applyToRiders(next, map, target, preview.attackStrength, roll, result, attackerOwner);
   next = applyResult(next, map, target, result, attackerOwner);
   next = applySpillover(next, map, attackers, target, preview.attackStrength, attackerOwner);
   next = checkOgreDeath(next, target, attackerOwner);
 
   return { state: next, resolution };
+};
+
+/**
+ * Infantry riding the target (5.11.2).
+ *
+ * "If the vehicle + infantry combination is fired on, the attacker makes one
+ * die roll for each attack on the combination, but calculates the odds
+ * separately for the vehicle and all the infantry and applies the results
+ * separately. Example: A Howitzer fires on a Superheavy Tank carrying two
+ * squads of infantry. The die roll is a 3. The attack is a 3-to-1 on the two
+ * infantry (so a 3 eliminates both), but only a 1-to-1 on the Superheavy (so a
+ * 3 disables it) ... a tank will often survive a hit that kills its riders, but
+ * if the vehicle is a Truck, the battlesuited riders may survive the hit that
+ * kills the vehicle."
+ *
+ * That last clause is why this runs first: riders who came through their own
+ * roll are put down in the hex before the carrier is destroyed, rather than
+ * being swept up by it.
+ */
+export const applyToRiders = (
+  state: GameState,
+  map: GameMap,
+  target: TargetRef,
+  strength: number,
+  roll: number,
+  carrierResult: DamageResult,
+  credit: string,
+): GameState => {
+  if (target.kind !== 'unit') return state;
+  const riders = passengersOf(state, target.unit);
+  if (riders.length === 0) return state;
+
+  // "calculates the odds ... for ... all the infantry": one calculation for
+  // everything aboard, and one result applied to all of it.
+  const defense = riders.reduce((n, r) => n + defenseOf(state, map, r), 0);
+  const odds = oddsFor(strength, defense);
+  const result = odds.kind === 'none' ? 'NE' : resolve(odds, roll, 'normal');
+
+  let next = state;
+  if (result !== 'NE') {
+    next = log(
+      next,
+      'warn',
+      `The same shot is ${describeOdds(odds)} on the ${riders.length === 1 ? 'squad' : 'squads'} ` +
+        `riding ${unitName(state.units[target.unit]!)}.`,
+      [riders[0]!.pos],
+    );
+    for (const r of riders) next = applyToUnit(next, r.id, result, credit);
+  }
+
+  // Survivors of a carrier that is about to go are set down where it stood.
+  if (carrierResult !== 'X') return next;
+  for (const r of riders) {
+    const alive = next.units[r.id];
+    if (!alive || alive.kind !== 'unit' || alive.destroyed) continue;
+    next = withUnit(next, { ...alive, ridingOn: undefined, movementEnded: true });
+  }
+  return next;
 };
 
 const resultWord = (r: DamageResult): string =>
@@ -900,6 +1151,57 @@ const resolveBuildingAttack = (
   };
 };
 
+/**
+ * A Laser emplacement under fire (12.01, 12.07).
+ *
+ * "Defensively, they are buildings with Structure Points" — so the shot does
+ * flat damage rather than rolling. "When a Laser or Laser Tower is reduced to
+ * 10 SP, it is 'damaged' ... The Laser can no longer fire, but it is not
+ * actually destroyed until it is reduced to 0 SP."
+ */
+const resolveEmplacementAttack = (
+  state: GameState,
+  attackers: readonly AttackerRef[],
+  target: TargetRef,
+  preview: AttackPreview,
+  credit: string,
+): AttackOutcome => {
+  const id = (target as { unit: string }).unit;
+  const u = state.units[id];
+  if (!u || u.kind !== 'unit') return { state, resolution: null, reason: 'no such emplacement' };
+
+  const before = structurePointsOf(u);
+  const damage = preview.structureDamage ?? 0;
+  const left = Math.max(0, before - damage);
+  let next = withUnit(state, { ...u, structurePoints: left });
+  const wasWhole = !laserDamaged(u);
+  const nowDamaged = left <= LASER_DAMAGED_AT;
+  next = log(
+    next,
+    left <= 0 ? 'good' : 'info',
+    left <= 0
+      ? `${unitName(u)} is wrecked.`
+      : `${unitName(u)} takes ${String(damage)} structure points; ${String(left)} left` +
+          (wasWhole && nowDamaged ? ' — it can no longer fire.' : '.'),
+    [u.pos],
+  );
+  if (left <= 0) next = destroyUnit(next, id, 'shot to pieces', credit);
+
+  return {
+    state: next,
+    resolution: {
+      attackers,
+      target,
+      attackStrength: preview.attackStrength,
+      defenseStrength: before,
+      column: null,
+      automatic: true,
+      roll: 0,
+      result: left <= 0 ? 'X' : 'NE',
+    },
+  };
+};
+
 // ---------------------------------------------------------------------------
 // Spillover
 // ---------------------------------------------------------------------------
@@ -913,6 +1215,14 @@ const resolveBuildingAttack = (
  * spillover is calculated in an overrun, riders are resolved with their vehicle
  * rather than separately, and "Ogres and buildings ignore spillover fire".
  */
+/** Whether every gun in this attack is a Laser or Laser Tower (12.08). */
+export const isLaserAttack = (state: GameState, attackers: readonly AttackerRef[]): boolean =>
+  attackers.length > 0 &&
+  attackers.every((a) => {
+    const u = state.units[a.unit];
+    return !!u && u.kind === 'unit' && unitClass(u.classId).laser !== undefined;
+  });
+
 const applySpillover = (
   state: GameState,
   map: GameMap,
@@ -931,12 +1241,17 @@ const applySpillover = (
 
   const attackerIds = new Set(attackers.map((a) => a.unit));
   const targetId = target.kind === 'unit' ? target.unit : null;
+  // "A Laser attack does not give spillover fire on units stacked with the
+  // target. If a vehicle is the target, the attack does affect infantry riding
+  // on that vehicle." (12.08)
+  const laser = isLaserAttack(state, attackers);
 
   let next = state;
   for (const other of unitsAt(state, where)) {
     if (other.id === targetId) continue;
     if (attackerIds.has(other.id)) continue;
     if (isOgre(other)) continue;
+    if (laser && (other.kind !== 'unit' || other.ridingOn !== targetId)) continue;
 
     const defense = defenseOf(next, map, other, { spillover: true });
     const odds = oddsFor(half, defense);

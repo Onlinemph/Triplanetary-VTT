@@ -15,6 +15,7 @@ import {
   flatMap,
   inPhase,
   newGame,
+  patch,
   put,
   putOgre,
   seedForRoll,
@@ -455,5 +456,56 @@ describe('water (7.14.4)', () => {
     expect(
       previewAttack(g, waterMap, [{ unit: gev.id }], { kind: 'unit', unit: enemy.id }).ok,
     ).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 5.11.2 — the vehicle and what is riding it
+// ---------------------------------------------------------------------------
+
+describe('infantry riding a vehicle under fire (5.11.2)', () => {
+  // "A Howitzer fires on a Superheavy Tank carrying two squads of infantry. The
+  // die roll is a 3. The attack is a 3-to-1 on the two infantry (so a 3
+  // eliminates both), but only a 1-to-1 on the Superheavy (so a 3 disables
+  // it)."
+  it('plays the printed example: one roll, two sets of odds, two results', () => {
+    let g = inPhase(newGame({ stackingLimit: 5 }), 'fire');
+    const shvy = put(g, B, 'SHVY', at(4, 4));
+    g = shvy.state;
+    const riders = put(g, B, 'INF', at(4, 4), 2);
+    g = patch(riders.state, riders.id, { ridingOn: shvy.id });
+    const hwz = put(g, A, 'HWZ', at(4, 8));
+    g = withRoll(hwz.state, 3);
+
+    const out = resolveAttack(g, map, [{ unit: hwz.id }], { kind: 'unit', unit: shvy.id });
+    expect(out.resolution?.roll).toBe(3);
+    expect(out.resolution?.column).toBe('1-1');
+    expect(out.resolution?.result).toBe('D');
+    expect(out.state.units[shvy.id]!.destroyed).toBe(false);
+    const tank = out.state.units[shvy.id]!;
+    expect(tank.kind === 'unit' && tank.disabled).toBe('combat');
+    // "so a 3 eliminates both"
+    expect(out.state.units[riders.id]!.destroyed).toBe(true);
+  });
+
+  // "a tank will often survive a hit that kills its riders, but if the vehicle
+  // is a Truck, the battlesuited riders may survive the hit that kills the
+  // vehicle."
+  it('sets down riders who came through the roll their carrier did not', () => {
+    let g = inPhase(newGame({ stackingLimit: 5 }), 'fire');
+    const truck = put(g, B, 'TK', at(4, 4));
+    g = truck.state;
+    const riders = put(g, B, 'INF', at(4, 4), 1);
+    g = patch(riders.state, riders.id, { ridingOn: truck.id });
+    // A Light GEV's 1 against a D0 Truck is automatic; against one squad in the
+    // open behind the truck's cover it is 1-1, where a 1 is no effect.
+    const lgev = put(g, A, 'LGEV', at(4, 6));
+    g = withRoll(lgev.state, 1);
+
+    const out = resolveAttack(g, map, [{ unit: lgev.id }], { kind: 'unit', unit: truck.id });
+    expect(out.state.units[truck.id]!.destroyed).toBe(true);
+    const squad = out.state.units[riders.id]!;
+    expect(squad.destroyed).toBe(false);
+    expect(squad.kind === 'unit' && squad.ridingOn).toBeUndefined();
   });
 });

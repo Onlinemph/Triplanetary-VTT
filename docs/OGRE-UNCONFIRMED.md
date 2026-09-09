@@ -19,18 +19,18 @@ is implemented.
 
 ## 1. Numbers still to read off a counter
 
-| Counter                | Value            | Code now    | Where it lives           |
-| ---------------------- | ---------------- | ----------- | ------------------------ |
-| **Truck** (TK)         | Movement         | 4           | Counter; wheeled, 5.08.5 |
-| **Hovertruck** (HT)    | Movement         | 4 + 3       | Counter; GEV rules, 3.03 |
-|                        | Defence          | 0           | Counter                  |
-| **Laser** (LSR)        | Structure Points | D2 stand-in | Counter / scenario       |
-|                        | Victory points   | 12          | Scenario                 |
-| **Laser Tower** (LTWR) | Structure Points | D4 stand-in | Counter / scenario       |
-|                        | Victory points   | 18          | Scenario                 |
-| **Train**              | Size             | 5           | Scenario                 |
-|                        | Victory points   | 12          | Scenario                 |
-| **Command Post** (CP)  | Size             | 1           | Not in the Size Table    |
+| Counter                | Value            | Code now | Where it lives           |
+| ---------------------- | ---------------- | -------- | ------------------------ |
+| **Truck** (TK)         | Movement         | 4        | Counter; wheeled, 5.08.5 |
+| **Hovertruck** (HT)    | Movement         | 4 + 3    | Counter; GEV rules, 3.03 |
+|                        | Defence          | 0        | Counter                  |
+| **Laser** (LSR)        | Structure Points | 20       | Counter / scenario       |
+|                        | Victory points   | 12       | Scenario                 |
+| **Laser Tower** (LTWR) | Structure Points | 20       | Counter / scenario       |
+|                        | Victory points   | 18       | Scenario                 |
+| **Train**              | Size             | 5        | Scenario                 |
+|                        | Victory points   | 12       | Scenario                 |
+| **Command Post** (CP)  | Size             | 1        | Not in the Size Table    |
 
 Everything else on the counters is now settled. The Armor Units summary gave
 the Mobile Howitzer D2 and the Missile Crawler D2/M1; 1.08 gave the victory
@@ -41,21 +41,6 @@ values (2 a squad, 3 a half-value armour unit, 6 a standard one or a Crawler,
 ---
 
 ## 2. Rules the engine simplifies
-
-### Lasers are buildings (§12)
-
-**Printed:** "Defensively, they are buildings with Structure Points."
-A Laser is damaged at 10 SP and destroyed at 0; a damaged one cannot fire.
-It may attack a unit only if it did not fire at all during the preceding enemy
-turn.
-
-**Here:** a Laser is an immobile unit with a defence strength standing in for
-its Structure Points. Its attack (2), its ranges (30 and 60) and its double
-strength when overrun are now the printed ones, and so is the line of sight.
-What is missing is SP damage, the damaged state, and the fire restriction.
-
-**To close it:** the engine already has buildings with Structure Points for
-§11. Moving the two Laser classes onto that machinery is mostly deletion.
 
 ### The train is one counter, and should be two (§9)
 
@@ -119,7 +104,6 @@ revetment, so the section's general 6 stands in.
 - **13.04 Road mines.** A mine records whether it is on the road, and the
   engine keeps that flag, but every mine laid in a road hex is treated as a
   road mine. The rules let the layer choose.
-- **12.05** A Laser can try to intercept an Ogre missile on a 10+.
 
 ---
 

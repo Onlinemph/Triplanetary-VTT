@@ -55,8 +55,10 @@ import {
   cutRoute,
   destroyUnit,
   log,
+  markFiredInEnemyTurn,
   ogreDamageValue,
   printedDefense,
+  structurePointsOf,
   setTerrainOverride,
   unitName,
   withUnit,
@@ -296,6 +298,8 @@ export const launchMissile = (
         const a = rollDie(next.rng);
         const b = rollDie(a.state);
         next = { ...next, rng: b.state };
+        // A Laser that shoots at a missile has spent the turn's shot (12.06).
+        next = markFiredInEnemyTurn(next, gun.id);
         const bonus = trackingBonus(flown);
         const total = a.value + b.value + bonus;
         const hit = total >= shot.needs;
@@ -419,10 +423,17 @@ export const blastEffect = (row: BlastRow, hexes: number): Odds => {
   }
 };
 
+/** Which row of the building rows a Structure Point total reads. */
+export const buildingRow = (sp: number): BlastRow =>
+  sp > 50 ? 'buildingLarge' : sp > 20 ? 'buildingMedium' : 'buildingSmall';
+
 /** Which row of the table a conventional unit reads. */
 const rowFor = (u: Unit): BlastRow => {
   if (u.kind !== 'unit') return 'ogreComponent';
   const cls = unitClass(u.classId);
+  // "Defensively, they are buildings with Structure Points" (12.01): a Laser
+  // reads the building rows, not the armour ones.
+  if (cls.structurePoints !== undefined) return buildingRow(structurePointsOf(u));
   if (cls.kind === 'infantry') return 'infantry';
   // "Any D0 unit or any GEV" — a hovercraft is fragile whatever its counter says.
   if (cls.mobility === 'gev' || cls.defense === 0) return 'd0';
@@ -514,13 +525,7 @@ const detonate = (state: GameState, map: GameMap, gz: Hex, credit: PlayerId): Ga
 
     for (const b of Object.values(next.buildings)) {
       if (b.destroyed || !eq(b.pos, h)) continue;
-      const row: BlastRow =
-        b.structurePoints > 50
-          ? 'buildingLarge'
-          : b.structurePoints > 20
-            ? 'buildingMedium'
-            : 'buildingSmall';
-      const odds = blastEffect(row, away);
+      const odds = blastEffect(buildingRow(b.structurePoints), away);
       if (odds.kind === 'none') continue;
       // "divide the total number of SPs ... by 5. Round up, and roll that many
       // separate attacks. Each X destroys 5 SPs."
@@ -638,6 +643,33 @@ const blastUnit = (
 
   const odds = blastEffect(rowFor(u), away);
   if (odds.kind === 'none') return next;
+
+  // A Laser takes it as a building does: "divide the total number of SPs ... by
+  // 5. Round up, and roll that many separate attacks. Each X destroys 5 SPs."
+  if (u.kind === 'unit' && unitClass(u.classId).structurePoints !== undefined) {
+    const before = structurePointsOf(u);
+    let left = before;
+    const tries = Math.ceil(before / 5);
+    for (let i = 0; i < tries && left > 0; i++) {
+      const r = blastRoll(next, odds);
+      next = r.state;
+      if (r.result === 'X') left = Math.max(0, left - 5);
+    }
+    if (left === before) return next;
+    next = withUnit(next, { ...u, structurePoints: left });
+    next = log(
+      next,
+      left <= 0 ? 'good' : 'warn',
+      left <= 0
+        ? `The shockwave brings ${unitName(u)} down.`
+        : `The shockwave takes ${String(before - left)} structure points off ${unitName(u)}; ` +
+            `${String(left)} left.`,
+      [u.pos],
+    );
+    if (left <= 0) next = destroyUnit(next, id, 'flattened by a cruise missile', credit);
+    return next;
+  }
+
   // "Infantry (each squad)" — a counter is rolled for a squad at a time.
   const rolls = u.kind === 'unit' && unitClass(u.classId).kind === 'infantry' ? u.squads : 1;
   for (let i = 0; i < rolls; i++) {

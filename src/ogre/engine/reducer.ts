@@ -29,6 +29,7 @@ import { clearBlasts, launchMissile } from './missiles.js';
 import { clearTasks } from './engineering.js';
 import {
   apRemaining,
+  clearLaserWatch,
   log,
   makeUnit,
   movementAllowance,
@@ -677,8 +678,12 @@ export const advancePhase = (state: GameState, map: GameMap): GameState => {
       return { ...settled, phase: 'fire' };
     }
 
-    case 'fire':
-      return beginMovementPhase({ ...state, phase: 'gevMovement' }, map, player, 'gevMovement');
+    case 'fire': {
+      // The owner's fire phase is over, so the "preceding enemy turn" of 12.06
+      // is now the one about to begin: the Lasers start watching again.
+      const watching = clearLaserWatch(state, player);
+      return beginMovementPhase({ ...watching, phase: 'gevMovement' }, map, player, 'gevMovement');
+    }
 
     case 'gevMovement': {
       const settled = resolvePendingHazards(state, player);

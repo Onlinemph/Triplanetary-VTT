@@ -46,7 +46,14 @@ import {
   setupActor,
   unitsAt,
 } from '../engine/types.js';
-import { attackerRange, isFireable, movementAllowance, unitName } from '../engine/state.js';
+import {
+  attackerRange,
+  isFireable,
+  laserDamaged,
+  movementAllowance,
+  structurePointsOf,
+  unitName,
+} from '../engine/state.js';
 import { reachable } from '../engine/movement.js';
 import {
   canStillFire,
@@ -1321,7 +1328,20 @@ export const createOgreBattle = (opts: OgreBattleOptions): OgreBattle => {
           ),
         );
       }
-      rows.push(row('Defence', String(cls.defense * (cls.kind === 'infantry' ? u.squads : 1))));
+      if (cls.structurePoints !== undefined) {
+        // "Defensively, they are buildings with Structure Points." (12.01)
+        const sp = structurePointsOf(u);
+        rows.push(
+          row(
+            'Structure',
+            `${sp} / ${cls.structurePoints} SP`,
+            laserDamaged(u) ? 'warn' : undefined,
+          ),
+        );
+        if (laserDamaged(u)) rows.push(row('Damaged', 'it can no longer fire (12.07)', 'warn'));
+      } else {
+        rows.push(row('Defence', String(cls.defense * (cls.kind === 'infantry' ? u.squads : 1))));
+      }
       if (cls.mobility === 'rail') {
         rows.push(row('Speed', `${u.trainSpeed ?? 0} of ${TRAIN_MAX_SPEED}`));
       } else {

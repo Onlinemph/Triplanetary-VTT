@@ -106,6 +106,13 @@ export interface UnitClass {
    * over it but cannot fire *into* it.
    */
   readonly laser?: 'standard' | 'tower';
+  /**
+   * "Defensively, they are buildings with Structure Points" (12.01). A class
+   * with this is shot at like a building — flat damage rather than the Combat
+   * Results Table — and is "damaged" at `LASER_DAMAGED_AT`. The count is on
+   * the counter, not in the rules text.
+   */
+  readonly structurePoints?: number;
 
   /** Where the cited numbers come from. */
   readonly note: string;
@@ -429,6 +436,7 @@ export const UNIT_CLASSES: Readonly<Record<UnitClassId, UnitClass>> = {
     armorUnits: 2,
     vp: 12,
     laser: 'standard',
+    structurePoints: 20,
     note: '"A standard Laser turret has a range of 30 hexes. Its line of fire is blocked by ridge hexsides or any raised terrain – i.e., forest, swamp ..., towns, or rubble." (12.02) It has "an attack strength of 2" and may fire at a unit only if it did not fire at all during the preceding enemy turn (12.06); overrun, it fires at double strength (12.09). In the printed rules a Laser is a building with Structure Points (12.01, 12.07: damaged at 10 SP, destroyed at 0); the defence strength here stands in for that until buildings carry the Laser.',
     unconfirmed: ['defense', 'vp'],
   },
@@ -447,6 +455,7 @@ export const UNIT_CLASSES: Readonly<Record<UnitClassId, UnitClass>> = {
     armorUnits: 3,
     vp: 18,
     laser: 'tower',
+    structurePoints: 20,
     note: '"A Laser Tower mounts the same type of Laser that a standard emplacement does. Its height makes it more vulnerable, but also gives it a much greater range: 60 hexes. A Laser Tower can fire over any type of terrain, but cannot attack a unit that is actually in a town, swamp, forest, or rubble hex." (12.03) Attack 2 per 12.06, as the standard Laser. Like the Laser it is a building with Structure Points in print (12.01); the defence strength stands in for that.',
     unconfirmed: ['defense', 'vp'],
   },
@@ -641,6 +650,9 @@ export const superheavyMove = (treads: number): number => {
  * hexes (as the owning player chooses)." So a marker is stored as its lower
  * number — 0, 2, 4 or 6 — and the train runs that far or one hex further.
  */
+/** "When a Laser or Laser Tower is reduced to 10 SP, it is 'damaged'." (12.07) */
+export const LASER_DAMAGED_AT = 10;
+
 export const TRAIN_MARKERS: readonly number[] = [0, 2, 4, 6];
 export const TRAIN_MAX_SPEED = 6;
 /** A marker's faster reading: "either 4 or 5 hexes". */

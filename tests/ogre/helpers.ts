@@ -9,9 +9,16 @@
 import { type Hex, hex } from '../../src/ogre/engine/hex.js';
 import type { GameMap } from '../../src/ogre/engine/map.js';
 import type { Terrain } from '../../src/ogre/engine/terrain.js';
-import type { OgreTypeId } from '../../src/ogre/engine/ogres.js';
+import type { OgreTypeId, OgreWeaponKind } from '../../src/ogre/engine/ogres.js';
 import type { UnitClassId } from '../../src/ogre/engine/units.js';
-import { type GameState, type Phase } from '../../src/ogre/engine/types.js';
+import {
+  type ConventionalUnit,
+  type GameState,
+  type OgreWeapon,
+  type Phase,
+  isOgre,
+} from '../../src/ogre/engine/types.js';
+import { createRng, rollDice } from '../../src/ogre/engine/rng.js';
 import {
   createGame,
   makeOgre,
@@ -90,12 +97,46 @@ export const seedForRoll = (want: number, from = 0): number => {
   throw new Error(`no seed produces a ${want}`);
 };
 
+/**
+ * A seed whose first rolls are exactly `want`, for the two-dice tables.
+ *
+ * The generator is walked for real rather than reimplemented, so the search
+ * stays honest about what the engine will actually roll.
+ */
+export const seedForRolls = (want: readonly number[], from = 0): number => {
+  for (let seed = from; seed < from + 200000; seed++) {
+    const out = rollDice(createRng(seed), want.length);
+    if (want.every((v, i) => out.values[i] === v)) return seed;
+  }
+  throw new Error(`no seed produces ${want.join(', ')}`);
+};
+
 const rollWithSeed = (seed: number): number => {
   const a = (seed + 0x6d2b79f5) >>> 0;
   let t = a;
   t = Math.imul(t ^ (t >>> 15), t | 1);
   t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
   return Math.floor((((t ^ (t >>> 14)) >>> 0) / 4294967296) * 6) + 1;
+};
+
+/** Patch a conventional counter in place, for tests that need one mid-game. */
+export const patch = (
+  state: GameState,
+  id: string,
+  fields: Partial<ConventionalUnit>,
+): GameState => {
+  const u = state.units[id];
+  if (!u || u.kind !== 'unit') throw new Error(`no conventional unit ${id}`);
+  return withUnit(state, { ...u, ...fields });
+};
+
+/** An Ogre's weapon of a kind, for tests that fire one. */
+export const weaponOf = (state: GameState, id: string, kind: OgreWeaponKind): OgreWeapon => {
+  const u = state.units[id];
+  if (!u || !isOgre(u)) throw new Error(`no Ogre ${id}`);
+  const w = u.weapons.find((x) => x.kind === kind);
+  if (!w) throw new Error(`${id} has no ${kind}`);
+  return w;
 };
 
 /** Flip a conventional unit face-down, the way a D result does. */
