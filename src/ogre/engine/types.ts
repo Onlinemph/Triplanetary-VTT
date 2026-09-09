@@ -166,6 +166,27 @@ export interface ConventionalUnit {
    */
   readonly repackProgress?: number;
   /**
+   * Stowed aboard a Vulcan (15.02.1): its id, and which of the two cargo areas.
+   * The hold "will survive as long as the Ogre does"; the deck is exposed.
+   */
+  readonly stowedIn?: UnitId;
+  readonly stowedOn?: 'internal' | 'top';
+  /**
+   * A Vulcan is driving this counter (15.02.4, 15.02.5): its id, and whether it
+   * has a whole control channel to itself or is one of four ducklings sharing.
+   */
+  readonly drivenBy?: UnitId;
+  readonly control?: 'combat' | 'duckling';
+  /**
+   * No crew aboard. "Those systems, unaided, will allow an armor unit to move
+   * intelligently over short distances, and to attack at half strength"
+   * (15.02.4) — but only with a Vulcan in the loop; on its own such a counter
+   * does nothing. Scenarios set this; nothing in the rules creates it mid-game.
+   */
+  readonly crewless?: boolean;
+  /** On a Vulcan's tow hitch (15.04.8). */
+  readonly towedBy?: UnitId;
+  /**
    * A Superheavy's record sheet (13.07), once it has taken damage under that
    * option. Absent means the full sheet; see `engineering.ts`.
    */
@@ -237,6 +258,8 @@ export interface OgreUnit {
    * Absent means the Ogre arrived assembled.
    */
   readonly activatesOn?: number;
+  /** On a Vulcan's tow hitch (15.04.8): a cybertank with no treads left. */
+  readonly towedBy?: UnitId;
 
   readonly destroyed: boolean;
   readonly destroyedBy?: string;
@@ -621,6 +644,12 @@ export interface GameState {
    * participate" (15.03). Cleared as each turn opens.
    */
   readonly tasksTried?: readonly string[];
+  /**
+   * Spare Ogre missiles in a Vulcan's hold (15.02.1, 15.04.4), by Vulcan id:
+   * "If a Vulcan is carrying spare missiles, that Vulcan or an accompanying
+   * Heavy Drone may reload either internal or external missile launchers."
+   */
+  readonly vulcanMissiles?: Readonly<Record<string, number>>;
 
   readonly victory: VictoryState | null;
   /** Free-form per-scenario bookkeeping (entry edges, objectives, timers). */
@@ -669,8 +698,12 @@ export const unitsAt = (state: GameState, hex: Hex): Unit[] =>
  */
 export const isPallet = (u: Unit): boolean => u.kind === 'unit' && u.droneState === 'pallet';
 
-/** Infantry riding a vehicle are in the vehicle's hex but are not *in* the hex. */
-export const ridingSomething = (u: Unit): boolean => u.kind === 'unit' && u.ridingOn != null;
+/**
+ * Infantry riding a vehicle are in the vehicle's hex but are not *in* the hex —
+ * and neither is cargo in a Vulcan's hold or on its deck (15.02.1).
+ */
+export const ridingSomething = (u: Unit): boolean =>
+  u.kind === 'unit' && (u.ridingOn != null || u.stowedIn != null);
 
 export const passengersOf = (state: GameState, carrier: UnitId): ConventionalUnit[] =>
   Object.values(state.units).filter(

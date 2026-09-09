@@ -12,8 +12,10 @@ import { fail, ok } from './commands.js';
 import { eq } from './hex.js';
 import { TRAIN_MAX_SPEED, unitClass } from './units.js';
 import {
+  type ConventionalUnit,
   type GameState,
   type Phase,
+  type Unit,
   type VictoryState,
   activePlayer,
   isInertOgre,
@@ -29,6 +31,7 @@ import { deployReserveCheck } from './reserves.js';
 import { clearBlasts, launchMissile } from './missiles.js';
 import { clearTasks } from './engineering.js';
 import { pushPallet, unpackDrone } from './drone.js';
+import { controlCheck, crewlessPenalty } from './vulcan.js';
 import {
   apRemaining,
   clearLaserWatch,
@@ -200,6 +203,7 @@ const route = (state: GameState, cmd: Command, map: GameMap): ApplyResult => {
         state,
         engineer(state, map, cmd.by, cmd.unit, cmd.task, cmd.toward, {
           ...(cmd.onRoad !== undefined ? { onRoad: cmd.onRoad } : {}),
+          ...(cmd.area !== undefined ? { area: cmd.area } : {}),
           ...(cmd.target !== undefined ? { target: cmd.target } : {}),
           ...(cmd.weapon !== undefined ? { weapon: cmd.weapon } : {}),
         }),
@@ -246,6 +250,10 @@ const route = (state: GameState, cmd: Command, map: GameMap): ApplyResult => {
       return doSetTrainSpeed(state, cmd.unit, cmd.change);
     case 'unpackDrone':
       return wrap(state, unpackDrone(state, cmd.unit));
+    case 'unhitch':
+      return doUnhitch(state, cmd.unit);
+    case 'droneControl':
+      return doDroneControl(state, cmd.unit, cmd.target, cmd.level);
     case 'pushPallet':
       return wrap(state, pushPallet(state, map, cmd.unit, cmd.to));
   }
@@ -361,6 +369,18 @@ const doMove = (
   }
   if (unit.kind === 'unit' && unit.ridingOn) {
     return { state, result: fail('that infantry is riding; dismount first') };
+  }
+  if (unit.kind === 'unit' && unit.stowedIn) {
+    return { state, result: fail('it is stowed aboard a Vulcan; unload it first (15.02.1)') };
+  }
+  if (unit.towedBy) {
+    return { state, result: fail('it is on a Vulcan’s tow hitch; unhitch it first (15.04.8)') };
+  }
+  // "on its own [an unaided armor unit] will allow an armor unit to move
+  // intelligently over short distances" only with a Vulcan in the loop
+  // (15.02.4): a crewless counter nobody is driving does nothing.
+  if (crewlessPenalty(state, unit) === 'inert') {
+    return { state, result: fail(`${unitName(unit)} has no crew and nothing driving it`) };
   }
   // A pallet does not move: it is carried, one hex, by a squad in its hex
   // (14.01). The order looks the same to the interface.
@@ -552,6 +572,69 @@ const doDismount = (state: GameState, unitId: string): ApplyResult => {
         ? `${unitName(rider)} is set down on its pallet. It can unpack next turn.`
         : `${unitName(rider)} drops off.`,
       [rider.pos],
+    ),
+    result: ok(),
+  };
+};
+
+// ---------------------------------------------------------------------------
+// The Vulcan's hitch and its control channels (15.02.4, 15.02.5, 15.04.8)
+// ---------------------------------------------------------------------------
+
+/** "Unhitching a towed vehicle is automatic and is not considered a task." */
+const doUnhitch = (state: GameState, unitId: string): ApplyResult => {
+  const u = state.units[unitId];
+  if (!u || !onBoard(u)) return { state, result: fail('no such unit') };
+  const tug = u.towedBy ? state.units[u.towedBy] : undefined;
+  if (!tug) return { state, result: fail('it is not on anybody’s hitch') };
+  if (tug.owner !== activePlayer(state)) return { state, result: fail('not your Vulcan') };
+  const next = withUnit(state, { ...u, towedBy: undefined } as Unit);
+  return {
+    state: log(next, 'info', `${unitName(tug)} drops ${unitName(u)} off the hitch.`, [u.pos]),
+    result: ok(),
+  };
+};
+
+/**
+ * "The Vulcan determines which four ducklings are under active control at the
+ * beginning of each turn. It can switch which four it controls each turn."
+ * (15.02.5)
+ */
+const doDroneControl = (
+  state: GameState,
+  vulcanId: string,
+  targetId: string,
+  level: 'combat' | 'duckling' | null,
+): ApplyResult => {
+  const vulcan = state.units[vulcanId];
+  const target = state.units[targetId];
+  if (!vulcan || !target) return { state, result: fail('no such unit') };
+  if (vulcan.owner !== activePlayer(state)) return { state, result: fail('not your Vulcan') };
+  if (level === null) {
+    if (target.kind !== 'unit' || target.drivenBy !== vulcanId) {
+      return { state, result: fail('that Vulcan is not driving it') };
+    }
+    const next = withUnit(state, { ...target, drivenBy: undefined, control: undefined });
+    return {
+      state: log(next, 'info', `${unitName(vulcan)} lets ${unitName(target)} go.`, [target.pos]),
+      result: ok(),
+    };
+  }
+  const why = controlCheck(state, vulcan, target, level);
+  if (why) return { state, result: fail(why) };
+  const next = withUnit(state, {
+    ...(target as ConventionalUnit),
+    drivenBy: vulcanId,
+    control: level,
+  });
+  return {
+    state: log(
+      next,
+      'info',
+      level === 'combat'
+        ? `${unitName(vulcan)} takes ${unitName(target)} onto a control channel.`
+        : `${unitName(target)} falls in behind ${unitName(vulcan)} as a duckling.`,
+      [target.pos],
     ),
     result: ok(),
   };

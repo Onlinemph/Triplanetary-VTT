@@ -257,6 +257,8 @@ export interface EngineerCommand extends CommandBase {
   readonly weapon?: string;
   /** Laying a mine: whether it goes on the road (13.04). Defaults to yes. */
   readonly onRoad?: boolean;
+  /** Loading cargo: which of the Vulcan's two areas (15.02.1). */
+  readonly area?: 'internal' | 'top';
 }
 
 /**
@@ -276,6 +278,29 @@ export interface PushPalletCommand extends CommandBase {
   readonly type: 'pushPallet';
   readonly unit: UnitId;
   readonly to: Hex;
+}
+
+/**
+ * Let a towed vehicle off the hitch (15.04.8): "Unhitching a towed vehicle is
+ * automatic and is not considered a task."
+ */
+export interface UnhitchCommand extends CommandBase {
+  readonly type: 'unhitch';
+  readonly unit: UnitId;
+}
+
+/**
+ * Put a crewless vehicle on one of a Vulcan's four control channels, or take
+ * it off (15.02.4, 15.02.5). "The Vulcan determines which four ducklings are
+ * under active control at the beginning of each turn."
+ */
+export interface DroneControlCommand extends CommandBase {
+  readonly type: 'droneControl';
+  /** The Vulcan doing the driving. */
+  readonly unit: UnitId;
+  readonly target: UnitId;
+  /** `null` drops it, to fend for itself. */
+  readonly level: 'combat' | 'duckling' | null;
 }
 
 export type Command =
@@ -302,7 +327,9 @@ export type Command =
   | LayMinefieldCommand
   | EngineerCommand
   | UnpackDroneCommand
-  | PushPalletCommand;
+  | PushPalletCommand
+  | UnhitchCommand
+  | DroneControlCommand;
 
 export type CommandType = Command['type'];
 

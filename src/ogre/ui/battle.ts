@@ -91,6 +91,15 @@ import {
   riverBridgesNear,
 } from '../engine/engineering.js';
 import { REPACK_TURNS, pushers, unpackCheck } from '../engine/drone.js';
+import {
+  VULCAN_CARGO,
+  cargoUsed,
+  channelsUsed,
+  controlledBy,
+  outOfContact,
+  spareMissiles,
+  towedBy,
+} from '../engine/vulcan.js';
 import { canDismount, canMount } from '../engine/movement.js';
 import { button, el, row, setChildren } from './dom.js';
 import '../ogre.css';
@@ -1336,6 +1345,35 @@ export const createOgreBattle = (opts: OgreBattleOptions): OgreBattle => {
     } else if (u.kind === 'unit' && (u.repackProgress ?? 0) > 0) {
       rows.push(row('Being folded up', `${u.repackProgress} of ${REPACK_TURNS} turns`, 'warn'));
     }
+    // A Vulcan's logistics (15.02.1, 15.02.4, 15.02.5, 15.04.8).
+    if (isOgre(u) && u.typeId === 'VULCAN') {
+      rows.push(
+        row('Hold', `${cargoUsed(state, u.id, 'internal')} of ${VULCAN_CARGO.internal} stowed`),
+      );
+      rows.push(row('Deck', `${cargoUsed(state, u.id, 'top')} of ${VULCAN_CARGO.top} stowed`));
+      const spares = spareMissiles(state, u.id);
+      if (spares > 0) rows.push(row('Spare missiles', String(spares)));
+      const driven = controlledBy(state, u.id);
+      if (driven.length > 0) {
+        rows.push(row('Driving', `${driven.length} on ${channelsUsed(state, u.id)} of 4 channels`));
+      }
+      const load = towedBy(state, u.id);
+      if (load) rows.push(row('On the hitch', unitName(load), 'warn'));
+    }
+    if (u.kind === 'unit' && u.stowedIn) {
+      rows.push(
+        row('Stowed', u.stowedOn === 'internal' ? 'in the hold' : 'on the deck, exposed', 'warn'),
+      );
+    }
+    if (u.kind === 'unit' && u.drivenBy) {
+      rows.push(
+        row(
+          'Driven',
+          u.control === 'combat' ? 'on a Vulcan’s control channel' : 'following as a duckling',
+          outOfContact(state, u) ? 'warn' : '',
+        ),
+      );
+    }
     if (
       u.kind === 'unit' &&
       entrenchedAt(state, u.pos) &&
@@ -1508,6 +1546,11 @@ export const createOgreBattle = (opts: OgreBattleOptions): OgreBattle => {
       u.kind === 'unit' && unpackCheck(state, u) === null
         ? button('Unpack the drone', () => dispatch({ type: 'unpackDrone', by: me(), unit: u.id }))
         : null,
+      u.towedBy
+        ? button('Unhitch', () => dispatch({ type: 'unhitch', by: me(), unit: u.id }), {
+            class: 'chip',
+          })
+        : null,
       u.kind === 'unit' && isPallet(u) && pushers(state, u).length > 0 && !u.movementEnded
         ? el(
             'p',
@@ -1525,6 +1568,7 @@ export const createOgreBattle = (opts: OgreBattleOptions): OgreBattle => {
             ...(t.toward ? { toward: t.toward } : {}),
             ...(t.target !== undefined ? { target: t.target } : {}),
             ...(t.weapon !== undefined ? { weapon: t.weapon } : {}),
+            ...(t.area !== undefined ? { area: t.area } : {}),
           }),
         ),
       ),

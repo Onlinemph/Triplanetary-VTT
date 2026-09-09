@@ -59,25 +59,27 @@ from stacking limits.
 **Also not in:** armed trains (9.03.1), and reinforcements carried aboard
 (9.07).
 
-### What the Vulcan still cannot do (§15)
+### What §15 still leaves to a referee
 
-Section 15 is nearly complete: the dice pools, the fire-phase timing, one
-attempt per task per turn, and fourteen tasks — entrenchments and revetments,
-planting, sweeping and disarming mines, mending roads and rail, grading
-ridges, finishing off a cybertank, and the Vulcan's work on stuck units, roads
-through wreckage, and an Ogre's weapons and treads.
+Section 15 is now complete but for two things the rules hand to a referee
+rather than settle.
 
-What is not:
+**Assembly on the table.** 15.02.2's times are in the engine as
+`vulcan.ASSEMBLY_TURNS` and `assemblyTurns`, shortened by the arms that help,
+and the unfinished-Ogre rule that governs the result is in. What is not is a
+turn-by-turn assembly job: 30 turns to build a Mark III is longer than any
+scenario in the book, and the rules say as much — "Ogres larger than a Mark
+III-B are not normally built under combat conditions". A scenario that wants
+one sets `activatesOn` off the table. (Orbital Drop uses its own compressed
+delay, `assemblyDelay`, which is that campaign's rule and not 15.02.2's.)
 
-- **Reloading missiles** (15.04.4), which needs the Vulcan's cargo hold.
-- **Towing** (15.04.8): hitch on a 2+, one vehicle at a time, with the
-  Vulcan's move dropping by the towed vehicle's size.
-- **Everything about Drones as Drones** (15.02.1, 15.02.4, 15.02.5): the
-  Vulcan's cargo capacity, combat Drones, and the sixteen "ducklings" it can
-  drive at half strength. A Heavy Drone is a counter here, and a useful one,
-  but nothing connects it to a Vulcan's four control channels.
-- **Assembly times** (15.02.2): 12 turns for a Mark II up to 75 for a Ninja.
-  The unfinished-Ogre rule that governs the result is already in.
+**Bulk cargo.** 15.02.2 gives six turns "to unload all palleted cargo from
+either the top or interior, or to load new cargo that is palletized and ready
+to go", and six "to secure a damaged armor unit in the field and winch it onto
+the top cargo area". The engine offers the one-turn single-item job (15.02.2's
+third line) and leaves the two six-turn ones to a referee, since neither has a
+die roll and both are a scenario's bookkeeping rather than a battle action.
+`VULCAN_JOBS` holds the numbers.
 
 Two smaller simplifications inside what is there. A mine sweep searches one
 hex at a time, so it always needs a 2 or better; the rules let a squad sweep

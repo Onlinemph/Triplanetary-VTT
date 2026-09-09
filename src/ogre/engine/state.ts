@@ -624,8 +624,14 @@ export const destroyUnit = (
   if (credit) next = addPoints(next, credit, victoryValue(u));
 
   for (const rider of Object.values(next.units)) {
-    if (rider.kind === 'unit' && !rider.destroyed && rider.ridingOn === id) {
+    if (rider.destroyed) continue;
+    // Cargo goes with its carrier: the Vulcan's hold "will survive as long as
+    // the Ogre does" (15.02.1), and no longer.
+    if (rider.kind === 'unit' && (rider.ridingOn === id || rider.stowedIn === id)) {
       next = destroyUnit(next, rider.id, `lost with the ${unitName(u)}`, credit);
+    } else if (rider.towedBy === id) {
+      // A tow rope is not a coffin: the hitch simply lets go (15.04.8).
+      next = withUnit(next, { ...rider, towedBy: undefined } as Unit);
     }
   }
   return next;

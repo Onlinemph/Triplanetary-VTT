@@ -46,6 +46,7 @@ import { mobilityOf } from './mobility.js';
 import { LASER_DAMAGED_AT, isMarine, unitClass } from './units.js';
 import { laserLineOfSight } from './los.js';
 import { droneCanFire } from './drone.js';
+import { crewlessPenalty, exposedCargo } from './vulcan.js';
 import {
   type AttackResolution,
   type AttackerRef,
@@ -250,7 +251,9 @@ export const previewAttack = (
     const spent = spentReason(state, u, ref, target);
     if (spent) return denyPreview(spent);
 
-    const strength = attackerStrength(u, ref);
+    // "In a combat situation, the ducklings fight at half strength." (15.02.5)
+    const half = crewlessPenalty(state, u) === 'half' ? 0.5 : 1;
+    const strength = attackerStrength(u, ref) * half;
     if (strength <= 0) return denyPreview(`${unitName(u)} has no attack strength`);
 
     const ap = isAntipersonnel(u, ref);
@@ -564,6 +567,14 @@ const spentReason = (
       }
     }
     return null;
+  }
+
+  if (u.stowedIn) return `${unitName(u)} is stowed in a cargo hold`;
+  // "Those systems, unaided, will allow an armor unit to move intelligently
+  // over short distances, and to attack at half strength" — and only with a
+  // Vulcan in the loop (15.02.4).
+  if (crewlessPenalty(state, u) === 'inert') {
+    return `${unitName(u)} has no crew and nothing driving it`;
   }
 
   // "It may be targeted, but may not attack" until the turn after it unpacks,
@@ -1323,6 +1334,14 @@ const spillOntoRiverBridge = (
   return demolishRiverBridge(next, map, where, credit);
 };
 
+/** The counter an attack lands on, whichever way the target names it. */
+const targetHexOwner = (state: GameState, target: TargetRef): UnitId | null => {
+  if (target.kind !== 'unit' && target.kind !== 'ogreWeapon' && target.kind !== 'ogreTreads') {
+    return null;
+  }
+  return target.unit;
+};
+
 /** Whether every gun in this attack is a Laser or Laser Tower (12.08). */
 export const isLaserAttack = (state: GameState, attackers: readonly AttackerRef[]): boolean =>
   attackers.length > 0 &&
@@ -1356,10 +1375,14 @@ const applySpillover = (
 
   // "LADs on a pallet that are being transported suffer spillover attacks at
   // defense strength 0 if the transport vehicle is attacked." (14.01) They are
-  // cargo, not riders, so 5.11.2 does not reach them — spillover does.
+  // cargo, not riders, so 5.11.2 does not reach them — spillover does. So is
+  // everything on a Vulcan's deck: "Combat units will be exposed to spillover
+  // fire from anything that hits the Vulcan." (15.02.1)
+  const hit = targetHexOwner(state, target);
   const inTheHex = [
     ...unitsAt(state, where),
     ...(targetId ? passengersOf(state, targetId).filter(isPallet) : []),
+    ...(hit ? exposedCargo(state, hit) : []),
   ];
 
   let next = state;
@@ -1435,6 +1458,8 @@ export const canStillFire = (state: GameState, u: Unit): boolean => {
   if (!canAct(u)) return false;
   if (isOgre(u)) return u.weapons.some((w) => isFireable(u, w) && !w.fired);
   if (!droneCanFire(u)) return false;
+  if (u.stowedIn) return false;
+  if (crewlessPenalty(state, u) === 'inert') return false;
   const cls = unitClass(u.classId);
   if (cls.attack <= 0) return false;
   if (cls.kind === 'infantry') return u.squadsFired < u.squads;

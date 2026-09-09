@@ -17,9 +17,10 @@ import {
 import type { GameMap } from '../../src/ogre/engine/map.js';
 import { terrainAt } from '../../src/ogre/engine/map.js';
 import { previewAttack } from '../../src/ogre/engine/combat.js';
-import { stepInfo } from '../../src/ogre/engine/movement.js';
+import { planPath, resolvePendingHazards, stepInfo } from '../../src/ogre/engine/movement.js';
 import {
   defenseOf,
+  destroyUnit,
   makeOgre,
   movementAllowance,
   printedAttack,
@@ -43,10 +44,32 @@ import {
   vulcanDice,
 } from '../../src/ogre/engine/engineering.js';
 import { concealAll, detectsMines, mineAt } from '../../src/ogre/engine/concealment.js';
+import {
+  CARGO_PER_MISSILE,
+  CARGO_PER_PALLET,
+  CARGO_PER_SIZE,
+  CARGO_PER_SQUAD,
+  CONTROL_CHANNELS,
+  MAX_DUCKLINGS,
+  VULCAN_CARGO,
+  assemblyTurns,
+  cargoUsed,
+  channelsUsed,
+  spareMissiles,
+  towCheck,
+  towingPenalty,
+  withHelp,
+} from '../../src/ogre/engine/vulcan.js';
 import { palletised } from '../../src/ogre/engine/drone.js';
 import { canOverrun } from '../../src/ogre/engine/overrun.js';
 import { reachable } from '../../src/ogre/engine/movement.js';
-import { type ConventionalUnit, type GameState, onBoard } from '../../src/ogre/engine/types.js';
+import {
+  type ConventionalUnit,
+  type GameState,
+  type OgreUnit,
+  onBoard,
+  unitsAt,
+} from '../../src/ogre/engine/types.js';
 import {
   A,
   B,
@@ -59,6 +82,7 @@ import {
   putOgre,
   seedForRoll,
   seedForRolls,
+  weaponOf,
 } from './helpers.js';
 
 const map = flatMap();
@@ -1129,5 +1153,296 @@ describe('revetments, sweeps and Marines', () => {
       unit: target.id,
     });
     expect(team.ok).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 15.02, 15.04.4, 15.04.8 — the Vulcan's logistics
+// ---------------------------------------------------------------------------
+
+describe('what a Vulcan is for (15.02)', () => {
+  const vulcanAt = (h: ReturnType<typeof at>) => {
+    const v = putOgre(newGame({ seed: 1, stackingLimit: 8 }), A, 'VULCAN', h);
+    return { state: v.state, id: v.id };
+  };
+
+  // "a dozen Ogre missiles, or two Platoons (or six squads) of battlesuited
+  // infantry ... or six LADs on pallets ... The Vulcan's top cargo area can
+  // carry a unit or units totaling Size 4, or four Platoons (or 12 squads), or
+  // 12 LADs on pallets, or two dozen Ogre missiles." (15.02.1)
+  it('counts its two cargo areas in one currency', () => {
+    expect(VULCAN_CARGO).toEqual({ internal: 12, top: 24 });
+    // Six squads or six pallets fill the hold; twelve of either fill the deck.
+    expect(6 * CARGO_PER_SQUAD).toBe(VULCAN_CARGO.internal);
+    expect(6 * CARGO_PER_PALLET).toBe(VULCAN_CARGO.internal);
+    expect(12 * CARGO_PER_SQUAD).toBe(VULCAN_CARGO.top);
+    // "a unit or units totaling Size 4" is the deck exactly.
+    expect(4 * CARGO_PER_SIZE).toBe(VULCAN_CARGO.top);
+    // And a dozen missiles below, two dozen above.
+    expect(12 * CARGO_PER_MISSILE).toBe(VULCAN_CARGO.internal);
+    expect(24 * CARGO_PER_MISSILE).toBe(VULCAN_CARGO.top);
+  });
+
+  it('loads a counter onto the deck and sets it down again, a turn each', () => {
+    const v = vulcanAt(at(4, 6));
+    let s = v.state;
+    const tank = put(s, A, 'HVY', at(4, 6));
+    s = fireFor(tank.state, A);
+
+    const offers = engineerTasks(s, map, s.units[v.id]!);
+    const load = offers.find((t) => t.task === 'loadCargo' && t.target === tank.id);
+    expect(load?.area).toBe('top');
+    // A Heavy Tank is Size 3, which the hold will not take.
+    expect(offers.some((t) => t.task === 'loadCargo' && t.area === 'internal')).toBe(false);
+
+    s = run(s, {
+      type: 'engineer',
+      by: A,
+      unit: v.id,
+      task: 'loadCargo',
+      target: tank.id,
+      area: 'top',
+    });
+    const aboard = s.units[tank.id] as { stowedIn?: string; stowedOn?: string };
+    expect(aboard.stowedIn).toBe(v.id);
+    expect(aboard.stowedOn).toBe('top');
+    expect(cargoUsed(s, v.id, 'top')).toBe(3 * CARGO_PER_SIZE);
+
+    // Stowed, it is out of the hex and out of the fight.
+    expect(unitsAt(s, at(4, 6)).some((u) => u.id === tank.id)).toBe(false);
+    const shot = applyCommand(
+      moveFor(s, A),
+      { type: 'moveUnit', by: A, unit: tank.id, path: [at(5, 6)] },
+      map,
+    );
+    expect(shot.result.ok).toBe(false);
+    expect(shot.result.ok ? '' : shot.result.reason).toMatch(/stowed/);
+
+    // It travels with the Vulcan.
+    const moved = run(moveFor(s, A), { type: 'moveUnit', by: A, unit: v.id, path: [at(5, 6)] });
+    expect(key(moved.units[tank.id]!.pos)).toBe(key(at(5, 6)));
+
+    // And comes off again, on the next turn: "they must start the turn in the
+    // hex and stay in it", and the load was this turn's work (15.03).
+    const off = run(fireFor(nextTurn({ ...s, phase: 'movement' }), A), {
+      type: 'engineer',
+      by: A,
+      unit: v.id,
+      task: 'unloadCargo',
+      target: tank.id,
+    });
+    expect((off.units[tank.id] as { stowedIn?: string }).stowedIn).toBeUndefined();
+  });
+
+  // "This storage space will survive as long as the Ogre does" — and no longer.
+  it('takes its hold down with it, and lets the tow rope go', () => {
+    const v = vulcanAt(at(4, 6));
+    let s = v.state;
+    const squad = put(s, A, 'INF', at(4, 6), 2);
+    s = withUnit(squad.state, {
+      ...(squad.state.units[squad.id] as ConventionalUnit),
+      stowedIn: v.id,
+      stowedOn: 'internal',
+    });
+    const wreck = put(s, A, 'LT', at(4, 6));
+    s = withUnit(wreck.state, {
+      ...(wreck.state.units[wreck.id] as ConventionalUnit),
+      towedBy: v.id,
+    });
+
+    const gone = destroyUnit(s, v.id, 'shot to pieces');
+    expect(gone.units[squad.id]!.destroyed).toBe(true);
+    expect(gone.units[wreck.id]!.destroyed).toBe(false);
+    expect((gone.units[wreck.id] as { towedBy?: string }).towedBy).toBeUndefined();
+  });
+
+  // "To assemble an Ogre from its modular parts: Mark II – 12 turns. Mark III –
+  // 30 turns ... Vulcan – 72 turns Ninja – at least 75 turns" and "Reduce time
+  // by 1/3 ... if there is one more arm helping ... Halve times if two arms".
+  it('prints the assembly table, and shortens it for every arm that helps', () => {
+    expect(assemblyTurns('MK2')).toBe(12);
+    expect(assemblyTurns('MK3')).toBe(30);
+    expect(assemblyTurns('MK3B')).toBe(42);
+    expect(assemblyTurns('MK5')).toBe(60);
+    expect(assemblyTurns('VULCAN')).toBe(72);
+    expect(assemblyTurns('NINJA')).toBe(75);
+    // "a 6-turn job takes 4 turns"
+    expect(withHelp(6, 1)).toBe(4);
+    expect(withHelp(6, 2)).toBe(3);
+    expect(assemblyTurns('MK3', 1)).toBe(20);
+    expect(assemblyTurns('MK3', 2)).toBe(15);
+  });
+
+  // "A Vulcan may control up to four Heavy Drones at once ... it may have up to
+  // four units of any type in each Drone control channel." (15.02, 15.02.5)
+  it('has four channels, and sixteen ducklings across them', () => {
+    expect(CONTROL_CHANNELS).toBe(4);
+    expect(MAX_DUCKLINGS).toBe(16);
+    const v = vulcanAt(at(4, 6));
+    let s = moveFor(v.state, A);
+    const ids: string[] = [];
+    for (let i = 0; i < 5; i++) {
+      const lt = put(s, A, 'LT', i < 3 ? at(4, 6) : at(5, 6));
+      s = lt.state;
+      ids.push(lt.id);
+    }
+    // Four combat Drones fill the channels; a fifth has nowhere to go.
+    for (let i = 0; i < 4; i++) {
+      s = run(s, { type: 'droneControl', by: A, unit: v.id, target: ids[i]!, level: 'combat' });
+    }
+    expect(channelsUsed(s, v.id)).toBe(4);
+    const refused = applyCommand(
+      s,
+      { type: 'droneControl', by: A, unit: v.id, target: ids[4]!, level: 'combat' },
+      map,
+    );
+    expect(refused.result.ok).toBe(false);
+    expect(refused.result.ok ? '' : refused.result.reason).toMatch(/four control channels/);
+  });
+
+  // "In a combat situation, the ducklings fight at half strength ... They must
+  // either stay within a hex of the Vulcan or stop moving completely, in which
+  // case they are considered disabled." (15.02.5)
+  it('drives crewless vehicles: nothing alone, half as a duckling, whole on a channel', () => {
+    const v = vulcanAt(at(4, 6));
+    let s = v.state;
+    const hvy = put(s, A, 'HVY', at(4, 6));
+    s = withUnit(hvy.state, { ...(hvy.state.units[hvy.id] as ConventionalUnit), crewless: true });
+    const mark = put(s, B, 'LT', at(5, 6));
+    s = fireFor(mark.state, A);
+    const target = { kind: 'unit' as const, unit: mark.id };
+
+    // Nobody driving it: it does nothing at all.
+    const alone = previewAttack(s, map, [{ unit: hvy.id }], target);
+    expect(alone.ok).toBe(false);
+    expect(alone.reason).toMatch(/no crew/);
+
+    // A duckling fights at half strength: a Heavy Tank's 4 becomes 2.
+    const duck = withUnit(s, {
+      ...(s.units[hvy.id] as ConventionalUnit),
+      drivenBy: v.id,
+      control: 'duckling',
+    });
+    expect(previewAttack(duck, map, [{ unit: hvy.id }], target).attackStrength).toBe(2);
+
+    // On a channel of its own it "operate[s] normally with no crew at all".
+    const driven = withUnit(s, {
+      ...(s.units[hvy.id] as ConventionalUnit),
+      drivenBy: v.id,
+      control: 'combat',
+    });
+    expect(previewAttack(driven, map, [{ unit: hvy.id }], target).attackStrength).toBe(4);
+
+    // A duckling that loses touch stops dead.
+    const strayed = withUnit(duck, { ...(duck.units[hvy.id] as ConventionalUnit), pos: at(9, 6) });
+    const settled = resolvePendingHazards(moveFor(strayed, A), A);
+    expect((settled.units[hvy.id] as { disabled: string }).disabled).toBe('combat');
+    expect(settled.log.some((e) => /loses the Vulcan/.test(e.text))).toBe(true);
+  });
+
+  // "Reloading an external missile is an automatic success ... Reloading
+  // internal missiles ... requires at least one Heavy Drone ... succeeds on a
+  // roll of 5 or greater." (15.04.4)
+  it('reloads a launcher out of its own hold', () => {
+    const v = vulcanAt(at(4, 6));
+    let s: GameState = { ...v.state, vulcanMissiles: { [v.id]: 2 } };
+    const mk = putOgre(s, A, 'MK3', at(4, 6));
+    s = mk.state;
+    const missile = weaponOf(s, mk.id, 'missile');
+    const tank = s.units[mk.id] as OgreUnit;
+    s = withUnit(s, {
+      ...tank,
+      weapons: tank.weapons.map((w) => (w.id === missile.id ? { ...w, fired: true } : w)),
+    });
+    s = fireFor(s, A);
+
+    const offers = engineerTasks(s, map, s.units[v.id]!);
+    expect(offers.some((t) => t.task === 'reloadMissile' && t.weapon === missile.id)).toBe(true);
+    s = run(s, {
+      type: 'engineer',
+      by: A,
+      unit: v.id,
+      task: 'reloadMissile',
+      target: mk.id,
+      weapon: missile.id,
+    });
+    expect(weaponOf(s, mk.id, 'missile').fired).toBe(false);
+    expect(spareMissiles(s, v.id)).toBe(1);
+
+    // "Attempting a task counts as that squad's 'attack' for that turn" (15.03),
+    // so the Vulcan has finished for the turn — its guns included.
+    const again = applyCommand(
+      { ...s, tasksTried: [] },
+      { type: 'engineer', by: A, unit: v.id, task: 'unloadCargo', target: mk.id },
+      map,
+    );
+    expect(again.result.ok ? '' : again.result.reason).toMatch(/already done its work/);
+
+    // "Reloading internal missiles ... requires at least one Heavy Drone to
+    // attempt." A fresh Vulcan with nothing to help it is refused.
+    const fresh = vulcanAt(at(4, 6));
+    let g: GameState = { ...fresh.state, vulcanMissiles: { [fresh.id]: 2 } };
+    const mk2 = putOgre(g, A, 'MK3', at(4, 6));
+    g = fireFor(mk2.state, A);
+    const noDrone = applyCommand(
+      g,
+      { type: 'engineer', by: A, unit: fresh.id, task: 'reloadMissile', target: mk2.id },
+      map,
+    );
+    expect(noDrone.result.ok).toBe(false);
+    expect(noDrone.result.ok ? '' : noDrone.result.reason).toMatch(/Heavy Drone/);
+  });
+
+  // "A Vulcan can tow disabled or immobile vehicles ... succeeds on a roll of
+  // 2+ ... The Vulcan's movement is decreased based upon the size of the
+  // vehicle it attempts to tow." (15.04.8)
+  it('tows one immobile vehicle at a time, and slows down by its size', () => {
+    expect([1, 5].map(towingPenalty)).toEqual([0, 0]);
+    expect([6, 7].map(towingPenalty)).toEqual([1, 1]);
+    expect(towingPenalty(8)).toBe(2);
+    expect(towingPenalty(9)).toBe(3);
+
+    const v = vulcanAt(at(4, 6));
+    let s = v.state;
+    // A running Heavy Tank does not need towing.
+    const running = put(s, A, 'HVY', at(4, 6));
+    s = running.state;
+    expect(towCheck(s, s.units[v.id], s.units[running.id])).toMatch(/drive itself/);
+    // A stuck one does.
+    s = withUnit(s, { ...(s.units[running.id] as ConventionalUnit), stuck: true });
+    expect(towCheck(s, s.units[v.id], s.units[running.id])).toBeNull();
+
+    s = fireFor(s, A);
+    s = run(s, { type: 'engineer', by: A, unit: v.id, task: 'hitchTow', target: running.id });
+    expect((s.units[running.id] as { towedBy?: string }).towedBy).toBe(v.id);
+
+    // A Heavy Tank is Size 3 — no penalty — so the Vulcan runs at its own 4.
+    s = moveFor(s, A);
+    expect(planPath(s, map, s.units[v.id]!, [at(5, 6), at(6, 6)]).budget).toBe(4);
+    // Something the size of a cybertank costs it.
+    const heavy = withUnit(s, { ...(s.units[running.id] as ConventionalUnit), classId: 'SHVY' });
+    expect(planPath(heavy, map, heavy.units[v.id]!, [at(5, 6)]).budget).toBe(4 - towingPenalty(5));
+
+    // The tow comes along, and unhitching is free.
+    const moved = run(s, { type: 'moveUnit', by: A, unit: v.id, path: [at(5, 6)] });
+    expect(key(moved.units[running.id]!.pos)).toBe(key(at(5, 6)));
+    const off = run(moved, { type: 'unhitch', by: A, unit: running.id });
+    expect((off.units[running.id] as { towedBy?: string }).towedBy).toBeUndefined();
+  });
+
+  // "an unaccompanied Drone is worth two Combat Engineering squads, but only if
+  // at least one Combat Engineering squad is in the same hex or if the Vulcan
+  // is in the same or an adjacent hex" (15.02.3)
+  it('gives a Heavy Drone its two dice only when something is directing it', () => {
+    let s = newGame({ seed: 1, stackingLimit: 8 });
+    const drone = put(s, A, 'HDRN', at(4, 6));
+    s = drone.state;
+    expect(engineeringDice(s, at(4, 6), A)).toBe(0);
+
+    const ce = put(s, A, 'CE', at(4, 6));
+    expect(engineeringDice(ce.state, at(4, 6), A)).toBe(3);
+
+    const v = putOgre(s, A, 'VULCAN', at(5, 6));
+    expect(engineeringDice(v.state, at(4, 6), A)).toBe(2);
   });
 });

@@ -51,6 +51,7 @@ import {
 } from './state.js';
 import { mobilityOf } from './mobility.js';
 import { advanceDrones, pushCheck } from './drone.js';
+import { outOfContact, towingCost } from './vulcan.js';
 
 // ---------------------------------------------------------------------------
 // Stacking
@@ -317,6 +318,20 @@ export interface PathPlan {
  * issue several move commands in a phase, so the "entire phase" part is carried
  * on the unit as `onRouteAllPhase` and narrowed here, never widened.
  */
+/**
+ * Everything that goes where a unit goes: infantry riding it (5.11), cargo
+ * stowed aboard a Vulcan (15.02.1), and whatever is on its tow hitch (15.04.8).
+ */
+const carriedWith = (state: GameState, id: UnitId): Unit[] => {
+  const out: Unit[] = [...passengersOf(state, id)];
+  for (const u of Object.values(state.units)) {
+    if (!onBoard(u) || u.id === id) continue;
+    if (u.kind === 'unit' && u.stowedIn === id) out.push(u);
+    else if (u.towedBy === id) out.push(u);
+  }
+  return out;
+};
+
 export const planPath = (
   state: GameState,
   map: GameMap,
@@ -324,7 +339,12 @@ export const planPath = (
   path: readonly Hex[],
 ): PathPlan => {
   const phase = state.phase;
-  const allowance = movementAllowance(unit, phase, state.options);
+  // "The Vulcan's movement is decreased based upon the size of the vehicle it
+  // attempts to tow." (15.04.8)
+  const allowance = Math.max(
+    0,
+    movementAllowance(unit, phase, state.options) - towingCost(state, unit),
+  );
   const empty: PathPlan = {
     ok: false,
     totalCost: 0,
@@ -499,7 +519,7 @@ export const applyMove = (
       moveUsed: unit.moveUsed + derailAt + 1,
       movementEnded: true,
     }));
-    for (const rider of passengersOf(next, unitId)) {
+    for (const rider of carriedWith(next, unitId)) {
       next = updateAnyUnit(next, rider.id, () => ({ pos: wreckAt }));
     }
     next = log(next, 'bad', `${unitName(unit)} runs onto cut track at ${key(wreckAt)}.`, [wreckAt]);
@@ -513,7 +533,7 @@ export const applyMove = (
       offMap: edge,
       moveUsed: unit.moveUsed + plan.totalCost,
     }));
-    for (const rider of passengersOf(next, unitId)) {
+    for (const rider of carriedWith(next, unitId)) {
       next = updateAnyUnit(next, rider.id, () => ({ offMap: edge }));
     }
     return {
@@ -530,8 +550,9 @@ export const applyMove = (
     pendingHazard: hazard ?? u.pendingHazard,
   }));
 
-  // Riders travel with the vehicle; they have no movement of their own.
-  for (const rider of passengersOf(next, unitId)) {
+  // Riders, cargo and a towed vehicle travel with the carrier; none of them
+  // have movement of their own.
+  for (const rider of carriedWith(next, unitId)) {
     next = updateAnyUnit(next, rider.id, () => ({ pos: dest }));
   }
 
@@ -678,7 +699,7 @@ export const reachable = (state: GameState, map: GameMap, unit: Unit): Reach[] =
       .map((n) => ({ hex: n, cost: 1, path: [n], endsMovement: true, hazard: null }));
   }
 
-  const allowance = movementAllowance(unit, state.phase, state.options);
+  const allowance = movementAllowance(unit, state.phase, state.options) - towingCost(state, unit);
   if (allowance <= 0 || unit.movementEnded) return [];
 
   const best = new Map<string, Reach>();
@@ -798,6 +819,25 @@ export const resolvePendingHazards = (state: GameState, player: PlayerId): GameS
         u.pos,
       ]);
     }
+  }
+  return strandedDucklings(next, player);
+};
+
+/**
+ * "They must either stay within a hex of the Vulcan or stop moving completely,
+ * in which case they are considered disabled." (15.02.5)
+ *
+ * The movement phase is where that bites: whatever a duckling did, if it is
+ * more than a hex from the Vulcan when the dust settles it has lost the thread.
+ */
+const strandedDucklings = (state: GameState, player: PlayerId): GameState => {
+  let next = state;
+  for (const u of Object.values(state.units)) {
+    if (u.owner !== player || u.kind !== 'unit' || !onBoard(u)) continue;
+    if (u.control !== 'duckling' || u.disabled !== 'none') continue;
+    if (!outOfContact(next, u)) continue;
+    next = withUnit(next, { ...(next.units[u.id] as ConventionalUnit), disabled: 'combat' });
+    next = log(next, 'warn', `${unitName(u)} loses the Vulcan and stops dead.`, [u.pos]);
   }
   return next;
 };
