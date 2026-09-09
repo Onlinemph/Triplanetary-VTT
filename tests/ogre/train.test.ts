@@ -32,8 +32,17 @@ import {
 import type { Command } from '../../src/ogre/engine/commands.js';
 
 const map = TRAIN.map;
+/** The front counter: the one the player drives (9.02). */
 const trainOf = (state: GameState): Unit =>
-  Object.values(state.units).find((u) => u.kind === 'unit' && u.classId === 'TRAIN')!;
+  Object.values(state.units).find(
+    (u) => u.kind === 'unit' && u.classId === 'TRAIN' && u.trainHalf === 'front',
+  )!;
+const rearOf = (state: GameState): Unit =>
+  Object.values(state.units).find(
+    (u) => u.kind === 'unit' && u.classId === 'TRAIN' && u.trainHalf === 'rear',
+  )!;
+const bothHalves = (state: GameState): Unit[] =>
+  Object.values(state.units).filter((u) => u.kind === 'unit' && u.classId === 'TRAIN');
 const col = (u: Unit): number => toOffset(u.pos).col;
 
 /** A game opens in the recovery phase; the decisions start with movement. */
@@ -68,19 +77,30 @@ describe('The Train', () => {
     expect(state.playerOrder).toEqual([ESCORT_PLAYER, RAIDER_PLAYER]);
   });
 
-  it('puts the train at the west end of the line, rolling, with six squads aboard', () => {
+  // "A standard train is made up of two counters, so it takes up two hexes"
+  // (9.01), and both carry the same marker (9.03).
+  it('puts two coupled counters at the west end of the line, rolling, with six squads aboard', () => {
     const line = railLine(map);
     expect(line.length).toBe(map.cols);
     const train = trainOf(state);
-    expect(train.pos).toEqual(line[0]);
+    const rear = rearOf(state);
+    expect(rear.pos).toEqual(line[0]);
+    expect(train.pos).toEqual(line[1]);
     expect(hasRoute(map, train.pos, 'rail')).toBe(true);
+    expect(hasRoute(map, rear.pos, 'rail')).toBe(true);
+    expect((train as { coupledTo?: string }).coupledTo).toBe(rear.id);
+    expect((rear as { coupledTo?: string }).coupledTo).toBe(train.id);
     expect((train as { trainSpeed?: number }).trainSpeed).toBe(2);
+    expect((rear as { trainSpeed?: number }).trainSpeed).toBe(2);
 
+    // Six squads between the two halves, each in its own counter's hex.
     const riders = Object.values(state.units).filter(
-      (u) => u.kind === 'unit' && u.ridingOn === train.id,
+      (u) => u.kind === 'unit' && (u.ridingOn === train.id || u.ridingOn === rear.id),
     );
     expect(riders.reduce((n, u) => n + (u.kind === 'unit' ? u.squads : 0), 0)).toBe(6);
-    for (const r of riders) expect(r.pos).toEqual(train.pos);
+    for (const r of riders) {
+      expect(r.pos).toEqual(state.units[(r as { ridingOn?: string }).ridingOn!]!.pos);
+    }
   });
 
   it('forms the escort up in the west and the raiders in the east', () => {
@@ -97,7 +117,8 @@ describe('The Train', () => {
   it('tells the computer who is leaving, by which edge, and which counter has to make it', () => {
     expect(state.scenarioData['exitEdge']).toBe('east');
     expect(state.scenarioData['exitSide']).toBe(ESCORT_PLAYER);
-    expect(state.scenarioData['exitUnits']).toEqual([trainOf(state).id]);
+    // Either counter reaching the edge is the train away (9.03).
+    expect(state.scenarioData['exitUnits']).toEqual([trainOf(state).id, rearOf(state).id]);
   });
 
   it('keeps the train on the rails during deployment', () => {
@@ -117,7 +138,7 @@ describe('The Train', () => {
     expect(refused.result.ok ? '' : refused.result.reason).toMatch(/rails/);
     const moved = applyCommand(
       s,
-      { type: 'placeUnit', by: ESCORT_PLAYER, unit: train.id, at: line[1]! },
+      { type: 'placeUnit', by: ESCORT_PLAYER, unit: train.id, at: line[2]! },
       map,
     );
     expect(moved.result.ok).toBe(true);
@@ -125,15 +146,19 @@ describe('The Train', () => {
     for (const r of Object.values(moved.state.units).filter(
       (u) => u.kind === 'unit' && u.ridingOn === train.id,
     )) {
-      expect(r.pos).toEqual(line[1]);
+      expect(r.pos).toEqual(line[2]);
     }
   });
 
   it('ends when the train leaves east, dies, or runs out of time', () => {
-    const train = trainOf(state);
     const withTrain = (patch: Partial<Unit>): GameState => ({
       ...state,
-      units: { ...state.units, [train.id]: { ...train, ...patch } as Unit },
+      units: Object.fromEntries(
+        Object.entries(state.units).map(([id, u]) => [
+          id,
+          bothHalves(state).some((h) => h.id === id) ? ({ ...u, ...patch } as Unit) : u,
+        ]),
+      ),
     });
     expect(TRAIN.checkVictory(state)).toBeNull();
     expect(TRAIN.checkVictory(withTrain({ offMap: 'east' }))).toMatchObject({
@@ -141,6 +166,14 @@ describe('The Train', () => {
       level: 'complete',
     });
     expect(TRAIN.checkVictory(withTrain({ offMap: 'west' }))).toBeNull();
+    // "If an attack destroys the rear of the train ... the other half of the
+    // train is not affected." (9.03) One counter gone is not the train gone.
+    expect(
+      TRAIN.checkVictory({
+        ...state,
+        units: { ...state.units, [rearOf(state).id]: { ...rearOf(state), destroyed: true } },
+      }),
+    ).toBeNull();
     expect(TRAIN.checkVictory(withTrain({ destroyed: true }))).toMatchObject({
       winners: [RAIDER_PLAYER],
       level: 'complete',

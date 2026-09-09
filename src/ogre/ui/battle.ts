@@ -92,6 +92,13 @@ import {
 } from '../engine/engineering.js';
 import { REPACK_TURNS, pushers, unpackCheck } from '../engine/drone.js';
 import {
+  TRAIN_CARGO_PER_HALF,
+  TRAIN_GUN,
+  gunsLeft,
+  gunsOn,
+  trainCargoUsed,
+} from '../engine/train.js';
+import {
   VULCAN_CARGO,
   cargoUsed,
   channelsUsed,
@@ -1391,7 +1398,12 @@ export const createOgreBattle = (opts: OgreBattleOptions): OgreBattle => {
       }
     } else {
       const cls = unitClass(u.classId);
-      if (cls.attack > 0) {
+      if (gunsOn(u) > 0) {
+        // "one 4/2 gun on each of the train counters" (9.03.1).
+        rows.push(
+          row('Attack / range', `${TRAIN_GUN.attack} / ${TRAIN_GUN.range}, each gun separately`),
+        );
+      } else if (cls.attack > 0) {
         rows.push(
           row(
             'Attack / range',
@@ -1415,6 +1427,21 @@ export const createOgreBattle = (opts: OgreBattleOptions): OgreBattle => {
       }
       if (cls.mobility === 'rail') {
         rows.push(row('Speed', `${u.trainSpeed ?? 0} of ${TRAIN_MAX_SPEED}`));
+        if (u.coupledTo) {
+          rows.push(row('Half', u.trainHalf === 'rear' ? 'the rear counter' : 'the front'));
+        }
+        if (gunsOn(u) > 0) {
+          rows.push(
+            row(
+              'Guns',
+              `${gunsLeft(u)} of ${gunsOn(u)} × ${TRAIN_GUN.attack}/${TRAIN_GUN.range}`,
+              gunsLeft(u) === 0 ? 'warn' : '',
+            ),
+          );
+          rows.push(row('Cargo', `${trainCargoUsed(state, u.id)} of ${TRAIN_CARGO_PER_HALF}`));
+        } else {
+          rows.push(row('Cargo', `${trainCargoUsed(state, u.id)} of ${TRAIN_CARGO_PER_HALF}`));
+        }
       } else {
         rows.push(
           row(

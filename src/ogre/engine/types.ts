@@ -116,6 +116,19 @@ export interface ConventionalUnit {
   /** The train's speed has been set this turn; it changes once per turn. */
   readonly trainSpeedSet?: boolean;
   /**
+   * The other counter of a two-counter train (9.01), and which end this is.
+   * "'Front' and 'back' are always relative to the movement of the train"
+   * (9.02), so the half the player drives becomes the front.
+   */
+  readonly coupledTo?: UnitId;
+  readonly trainHalf?: 'front' | 'rear';
+  /**
+   * 4/2 guns on this counter (9.03.1): "For each armor unit given up, he can
+   * put one 4/2 gun on each of the train counters." They fire like squads —
+   * separately, at separate targets — so `squadsFired` counts them.
+   */
+  readonly trainGuns?: number;
+  /**
    * A Laser emplacement's Structure Points (12.01, 12.07). Absent means the
    * class's full count. "When a Laser or Laser Tower is reduced to 10 SP, it
    * is 'damaged' ... The Laser can no longer fire, but it is not actually

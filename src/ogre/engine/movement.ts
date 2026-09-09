@@ -52,6 +52,17 @@ import {
 import { mobilityOf } from './mobility.js';
 import { advanceDrones, pushCheck } from './drone.js';
 import { outOfContact, towingCost } from './vulcan.js';
+import {
+  TRAIN_GUN,
+  followWithRear,
+  gunsOn,
+  boardTrainCheck,
+  destroyTrainCounter,
+  isTrain,
+  markerOf,
+  runDownUnarmedTrains,
+  trainIsArmed,
+} from './train.js';
 
 // ---------------------------------------------------------------------------
 // Stacking
@@ -115,6 +126,8 @@ export interface StepInfo {
   readonly derails?: boolean;
   /** The train ran into units standing on the track (9.06). */
   readonly collides?: boolean;
+  /** The step runs an unarmed train down where it stands (9.04). */
+  readonly runsDownTrain?: boolean;
   /** The step is along a road or railroad link (2.03.1), so terrain is ignored. */
   readonly onRoute: boolean;
   /** The road bonus is available for this kind of unit on this kind of route (5.07.3). */
@@ -243,6 +256,22 @@ export const stepInfo = (
         collides: true,
       };
     }
+    // "If an unarmed train ... is overrun by, a unit with a regular combat
+    // strength, it is destroyed" (9.04) — so an unarmed train is not something
+    // to go round, and it is not an overrun either. It is run down on entry.
+    if (occupants.every((u) => isTrain(u) && !trainIsArmed(state, u))) {
+      return {
+        ok: true,
+        cost: route !== undefined ? 1 : (terrainEntry.cost ?? 1),
+        onRoute: route !== undefined,
+        bonusEligible: route !== undefined && bonusEligibleFor(unit, route),
+        endsMovement: route !== undefined ? false : terrainEntry.endsMovement,
+        hazard: null,
+        requiresPhaseStart: false,
+        reducesInfantry: false,
+        runsDownTrain: true,
+      };
+    }
     if (canWalkThroughInfantry) {
       // 6.06: not a ram, and it does not count against the ramming limit.
       reducesInfantry = true;
@@ -283,6 +312,9 @@ export const stepInfo = (
 /** A unit's attack strength for the "may I move through it?" test in 5.03. */
 const attackStrengthOf = (u: Unit): number => {
   if (isOgre(u)) return u.weapons.some((w) => !w.destroyed) ? 1 : 0;
+  // "Unless the train is armed (9.03.1), enemy units may enter its hex
+  // freely." (9.02.3) An armed one is a unit like any other in the way.
+  if (u.classId === 'TRAIN') return gunsOn(u) * TRAIN_GUN.attack;
   return unitClass(u.classId).attack;
 };
 
@@ -408,7 +440,7 @@ export const planPath = (
   // than refused here, so the reachability search can walk on past the hex.
   let tooShort = false;
   if (mobilityOf(unit) === 'rail' && !exits) {
-    const marker = unit.kind === 'unit' ? (unit.trainSpeed ?? 0) : 0;
+    const marker = markerOf(state, unit);
     const derailed = steps.some((st) => st.derails === true);
     tooShort = !derailed && marker > 0 && spent < marker;
   }
@@ -469,7 +501,7 @@ export const applyMove = (
   const plan = planPath(state, map, unit, path);
   if (!plan.ok) return { state, plan };
   if (plan.tooShort === true) {
-    const marker = unit.kind === 'unit' ? (unit.trainSpeed ?? 0) : 0;
+    const marker = markerOf(state, unit);
     return {
       state,
       plan: {
@@ -556,6 +588,16 @@ export const applyMove = (
     next = updateAnyUnit(next, rider.id, () => ({ pos: dest }));
   }
 
+  // "A standard train is made up of two counters, so it takes up two hexes"
+  // (9.01): the other half comes up behind (9.02).
+  next = followWithRear(next, unitId, path, unit.pos);
+
+  // 9.04: an unarmed train under the wheels of anything armed.
+  if (plan.steps.some((st) => st.runsDownTrain === true)) {
+    const mover = next.units[unitId];
+    if (mover) next = runDownUnarmedTrains(next, dest, mover).state;
+  }
+
   return { state: next, plan };
 };
 
@@ -615,7 +657,9 @@ const collide = (
         next = trainWreckAttack(next, map, victim.id, 1, train.owner);
       }
     }
-    return destroyUnit(next, unitId, 'wrecked on the guns', standing[0]?.owner);
+    // "The train is destroyed" (9.06a) — the front hit the guns at speed, so
+    // 9.03's rule takes the rest of it too.
+    return destroyTrainCounter(next, unitId, 'wrecked on the guns', standing[0]?.owner);
   }
 
   // Unarmed: the train goes through them, and pays for it.
@@ -900,10 +944,16 @@ export const canMount = (
 ): { ok: boolean; reason?: string } => {
   // Infantry ride (5.11); so does the Light Artillery Drone, palletised, as
   // one squad's worth of room (14.01).
-  if (
-    rider.kind !== 'unit' ||
-    (unitClass(rider.classId).kind !== 'infantry' && rider.classId !== 'LAD')
-  ) {
+  if (rider.kind !== 'unit') return { ok: false, reason: 'a cybertank rides nothing' };
+  // A train is loaded by size points, and takes armour as well as squads
+  // (9.07), so it is judged before 5.11's rules about who rides what.
+  if (isTrain(carrier)) {
+    const why = boardTrainCheck(state, carrier, rider);
+    if (why) return { ok: false, reason: why };
+    if (rider.moveUsed > 0) return { ok: false, reason: 'boarding costs the whole movement phase' };
+    return { ok: true };
+  }
+  if (unitClass(rider.classId).kind !== 'infantry' && rider.classId !== 'LAD') {
     return { ok: false, reason: 'only infantry and the drone ride' };
   }
   // "it can be transported collapsed as a single cargo pallet" — and only

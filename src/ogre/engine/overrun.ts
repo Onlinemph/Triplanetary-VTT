@@ -65,6 +65,7 @@ import {
 import { mobilityOf } from './mobility.js';
 import { applyToRiders, describeTarget, targetHex } from './combat.js';
 import { canRam, resolveRam } from './ram.js';
+import { isTrain, trainIsArmed } from './train.js';
 
 // ---------------------------------------------------------------------------
 // Starting one
@@ -102,8 +103,11 @@ export const canOverrun = (
   // "An overrun does not take place when a opponent enters a hex with a
   // collapsed LAD, as the LAD is not a functioning combat unit at that time.
   // The unit entering the hex may still fire on the LAD pallet during its Fire
-  // Phase." (14.01)
-  const enemies = unitsAt(state, target).filter((u) => u.owner !== mover.owner && !isPallet(u));
+  // Phase." (14.01) An unarmed train is the same: 9.04 simply destroys it, and
+  // `applyMove` does that on the way in.
+  const enemies = unitsAt(state, target).filter(
+    (u) => u.owner !== mover.owner && !isPallet(u) && (!isTrain(u) || trainIsArmed(state, u)),
+  );
   if (enemies.length === 0) return no('nothing there to overrun');
 
   const terrain = terrainAt(map, target, state.terrainOverrides);

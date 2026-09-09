@@ -418,7 +418,7 @@ export const UNIT_CLASSES: Readonly<Record<UnitClassId, UnitClass>> = {
     armorUnits: 0,
     vp: 12,
     carries: 6,
-    note: '"The train’s defense strength is always 3 ... Only an X result affects the train." (9.03) The train moves only along rail hexes at its speed marker, which changes by one marker a turn (9.02, 9.02.1); a ram against it is resolved at the Size Table’s train column (9.05). Three things here are still short of the printed rule: a real train is two counters two hexes long (3.03, 9.01), its speed markers are ranges (M0/1, M2/3, M4/5, M6/7 — so a top speed of 7, not 4), and each half carries 12 "size points" rather than a squad count (9.07). Its size and victory value are set by the scenario.',
+    note: '"The train’s defense strength is always 3 ... Only an X result affects the train." (9.03) It moves only along rail hexes at its speed marker, which changes by one marker a turn (9.02, 9.02.1); a ram against it is resolved at the Size Table’s train column (9.05). A standard train is two counters coupled (9.01), each carrying 12 "size points" of cargo (9.07) and, in an armed-train scenario, up to four 4/2 guns (9.03.1) — see `train.ts`. Its size and victory value are set by the scenario.',
     unconfirmed: ['size', 'vp'],
   },
 
@@ -657,6 +657,26 @@ export const TRAIN_MARKERS: readonly number[] = [0, 2, 4, 6];
 export const TRAIN_MAX_SPEED = 6;
 /** A marker's faster reading: "either 4 or 5 hexes". */
 export const trainTopSpeed = (marker: number): number => marker + 1;
+
+/**
+ * A train gun (9.03.1).
+ *
+ * "The defender may exchange up to 4 armor units for train guns. For each
+ * armor unit given up, he can put one 4/2 gun on each of the train counters
+ * (thus, if he exchanges 4 armor units, the train will have 8 attacks, each
+ * with a strength of 4 and range of 2, per turn). These guns have no separate
+ * defense strength; if the train counter goes, they go."
+ */
+export const TRAIN_GUN = { attack: 4, range: 2 } as const;
+export const MAX_TRAIN_GUNS = 4;
+
+/**
+ * "Only units of Size 3 or below may go on the train. Each half of the train
+ * may carry up to 12 'size points' worth of armor (e.g., 4 Heavy Tanks, or 12
+ * squads of infantry)." (9.07)
+ */
+export const TRAIN_CARGO_PER_HALF = 12;
+export const MAX_TRAIN_CARGO_SIZE = 3;
 
 /** A unit that fires along a line of sight rather than at a printed range. */
 export const isLaserClass = (id: UnitClassId): boolean => UNIT_CLASSES[id].laser !== undefined;

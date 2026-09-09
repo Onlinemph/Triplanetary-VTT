@@ -13,6 +13,7 @@ import {
   isUnknown,
   mineAt,
   minefieldsLeft,
+  detectsMines,
   minesOf,
   redactOgreState,
   tripMinefield,
@@ -220,6 +221,51 @@ describe('minefields (13.04)', () => {
       roadMap,
     );
     expect(mineAt(nowhere.state, at(8, 7))?.onRoad).toBe(false);
+  });
+
+  // "Whenever a qualifying Ogre is about to enter a hex with a mine ... the
+  // opposing player must acknowledge the presence of a mine ... The Ogre may
+  // then choose to stay still, move elsewhere, or continue into the hex."
+  // (13.04.1)
+  it('shows a detecting cybertank the mine and lets it decide', () => {
+    let s = newGame({ seed: 3 });
+    const mk = putOgre(s, A, 'MK5', at(3, 8));
+    s = mk.state;
+    s = withMine(s, B, at(4, 8));
+    s = moveFor(s, A);
+    expect(detectsMines(s.units[mk.id]!)).toBe(true);
+
+    // The first order is refused, and the minefield is on the table.
+    const warned = applyCommand(
+      s,
+      { type: 'moveUnit', by: A, unit: mk.id, path: [at(4, 8), at(5, 8)] },
+      map,
+    );
+    expect(warned.result.ok).toBe(false);
+    expect(warned.result.ok ? '' : warned.result.reason).toMatch(/minefield at/);
+    expect(key(warned.state.units[mk.id]!.pos)).toBe(key(at(3, 8)));
+    expect(mineAt(warned.state, at(4, 8))?.revealed).toBe(true);
+
+    // The same order again is the choice to go in, and it goes in.
+    const went = run(warned.state, {
+      type: 'moveUnit',
+      by: A,
+      unit: mk.id,
+      path: [at(4, 8), at(5, 8)],
+    });
+    expect(key(went.units[mk.id]!.pos)).toBe(key(at(4, 8)));
+
+    // Something without the equipment gets no warning at all.
+    let plain = newGame({ seed: 3 });
+    const mk3 = putOgre(plain, A, 'MK3', at(3, 8));
+    plain = moveFor(withMine(mk3.state, B, at(4, 8)), A);
+    expect(detectsMines(plain.units[mk3.id]!)).toBe(false);
+    const blind = applyCommand(
+      plain,
+      { type: 'moveUnit', by: A, unit: mk3.id, path: [at(4, 8), at(5, 8)] },
+      map,
+    );
+    expect(blind.result.ok).toBe(true);
   });
 
   // The difference the choice makes on the ground.

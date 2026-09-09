@@ -9,7 +9,7 @@
 import type { GameMap } from './map.js';
 import type { Command, CommandResult } from './commands.js';
 import { fail, ok } from './commands.js';
-import { eq } from './hex.js';
+import { eq, key } from './hex.js';
 import { TRAIN_MAX_SPEED, unitClass } from './units.js';
 import {
   type ConventionalUnit,
@@ -32,6 +32,7 @@ import { clearBlasts, launchMissile } from './missiles.js';
 import { clearTasks } from './engineering.js';
 import { pushPallet, unpackDrone } from './drone.js';
 import { controlCheck, crewlessPenalty } from './vulcan.js';
+import { trainCounters, trainMoveCheck } from './train.js';
 import {
   apRemaining,
   clearLaserWatch,
@@ -65,7 +66,9 @@ import {
   isDummy,
   layMinefield,
   mineStopOn,
+  mineWarningOn,
   revealAt,
+  revealMinefield,
   revealUnit,
   revealOnMove,
   tripMinefield,
@@ -318,7 +321,12 @@ const doSetTrainSpeed = (state: GameState, unitId: string, change: 1 | -1): Appl
       result: fail(change > 0 ? 'the train is at full speed' : 'the train is stopped'),
     };
   }
-  const next = withUnit(state, { ...unit, trainSpeed: speed, trainSpeedSet: true });
+  // "Each train gets one marker, placed on or beside the train as convenient"
+  // (9.03): both counters of a two-counter train carry the same number.
+  let next = state;
+  for (const counter of trainCounters(state, unit)) {
+    next = withUnit(next, { ...counter, trainSpeed: speed, trainSpeedSet: true });
+  }
   return {
     state: log(
       next,
@@ -389,11 +397,32 @@ const doMove = (
     if (!to) return { state, result: fail('nowhere to carry it') };
     return wrap(state, pushPallet(state, map, unitId, to));
   }
+  const reversing = trainMoveCheck(state, unit);
+  if (reversing) return { state, result: fail(reversing) };
   if (state.phase === 'gevMovement') {
     const cls = unit.kind === 'unit' ? unitClass(unit.classId) : null;
     if (!cls || cls.secondMove == null) {
       return { state, result: fail('only GEV-type units move again after combat') };
     }
+  }
+
+  // "Whenever a qualifying Ogre is about to enter a hex with a mine ... the
+  // opposing player must acknowledge the presence of a mine ... The Ogre may
+  // then choose to stay still, move elsewhere, or continue into the hex."
+  // (13.04.1) The order is refused, the mine shown, and the next order is the
+  // cybertank's answer.
+  const warned = mineWarningOn(state, unit, path);
+  if (warned) {
+    const shown = revealMinefield(state, warned);
+    return {
+      state: log(
+        shown,
+        'warn',
+        `${unitName(unit)} reads a minefield at ${key(warned)} and holds (13.04.1).`,
+        [warned],
+      ),
+      result: fail(`there is a minefield at ${key(warned)} — order it in again to go through`),
+    };
   }
 
   // A minefield the mover does not know about stops it where it is (13.04):

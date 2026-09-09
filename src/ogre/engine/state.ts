@@ -26,6 +26,7 @@ import {
   MAX_SQUADS_PER_GROUP,
   UNIT_CLASSES,
   isMarine,
+  TRAIN_GUN,
   trainTopSpeed,
   superheavyMove,
   unitClass,
@@ -517,6 +518,13 @@ export const attackerStrength = (
     return OGRE_WEAPONS[w.kind].attack;
   }
   const cls = unitClass(u.classId);
+  // "one 4/2 gun on each of the train counters ... the train will have 8
+  // attacks, each with a strength of 4 and range of 2, per turn" (9.03.1). The
+  // guns fire separately, like squads, so `ref.squads` picks how many.
+  if (cls.mobility === 'rail' && (u.trainGuns ?? 0) > 0) {
+    const guns = Math.max(1, Math.min(u.trainGuns!, ref.squads ?? u.trainGuns!));
+    return TRAIN_GUN.attack * guns;
+  }
   if (ref.heavyWeapon) return HEAVY_WEAPON.attack;
   // "The Superheavy also has two antipersonnel weapons. These function exactly
   // like Ogre AP weapons" (3.01) — one attack of strength equal to the number
@@ -539,7 +547,9 @@ export const attackerRange = (u: Unit, ref: { weapon?: string; heavyWeapon?: boo
     return w ? OGRE_WEAPONS[w.kind].range : 0;
   }
   if (ref.heavyWeapon) return HEAVY_WEAPON.range;
-  return unitClass(u.classId).range;
+  const cls = unitClass(u.classId);
+  if (cls.mobility === 'rail' && (u.trainGuns ?? 0) > 0) return TRAIN_GUN.range;
+  return cls.range;
 };
 
 // ---------------------------------------------------------------------------

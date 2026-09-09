@@ -47,6 +47,7 @@ import {
 } from './state.js';
 import { mobilityOf } from './mobility.js';
 import { checkOgreDeath } from './combat.js';
+import { destroyTrainCounter } from './train.js';
 
 export interface RamCheck {
   readonly ok: boolean;
@@ -318,7 +319,8 @@ const ramTrain = (
 
   if (kind === 'ogreVsTrain') {
     next = spendTreads(next, rammerId, 1, victim.owner);
-    next = destroyUnit(next, victimId, 'rammed off the rails', rammer.owner);
+    // 9.03 decides how much of the train goes with the counter.
+    next = destroyTrainCounter(next, victimId, 'rammed off the rails', rammer.owner);
     next = log(next, 'good', `${unitName(rammer)} rams the train off the rails.`, [target]);
     return isOgre(rammer) ? afterOgreRam(next, rammerId, target, victimId) : next;
   }
@@ -336,7 +338,7 @@ const ramTrain = (
       (result === 'X' ? 'derailed.' : 'the train shrugs it off.'),
     [target],
   );
-  if (result === 'X') next = destroyUnit(next, victimId, 'derailed', rammer.owner);
+  if (result === 'X') next = destroyTrainCounter(next, victimId, 'derailed', rammer.owner);
   return destroyUnit(next, rammerId, 'destroyed ramming the train', victim.owner);
 };
 

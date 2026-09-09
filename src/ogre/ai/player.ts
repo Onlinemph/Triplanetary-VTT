@@ -228,8 +228,8 @@ const escapeEdge = (state: GameState): Edge | null => {
 /**
  * The scenario's exit goal, when it has one: `exitEdge` with `exitSide`
  * (the first mover when unsaid) and, optionally, `exitUnits`. A breakthrough
- * sets the edge for a whole side; the train scenario names the one counter
- * that has to reach it.
+ * sets the edge for a whole side; the train scenario names the counters that
+ * have to reach it — either half of the train will do (9.03).
  */
 const exitGoalOf = (state: GameState): ExitGoal | null => {
   const raw = state.scenarioData['exitEdge'];
@@ -659,6 +659,9 @@ type Goal = { kind: 'hex'; hex: Hex } | { kind: 'edge'; edge: Edge } | { kind: '
 const moveFor = (ctx: Ctx, u: Unit): Command | null => {
   const { state, map, player } = ctx;
   if (movementAllowance(u, state.phase, state.options) <= 0 || u.movementEnded) return null;
+  // The rear counter is dragged, not driven (9.02); ordering it is a reverse,
+  // which is not something the computer wants to do with a line to clear.
+  if (u.kind === 'unit' && u.trainHalf === 'rear') return null;
 
   let options = reachable(state, map, u);
 
@@ -1194,6 +1197,8 @@ const planFire = (ctx: Ctx): Command[] => {
   for (const t of ctx.own) {
     if (t.kind !== 'unit' || t.classId !== 'TRAIN' || !canAct(t)) continue;
     if (t.trainSpeedSet) continue;
+    // Both counters carry the marker (9.03); one order sets the pair.
+    if (t.trainHalf === 'rear') continue;
     const marker = t.trainSpeed ?? 0;
     const room = clearRailAhead(ctx, t);
     if (marker > room) {

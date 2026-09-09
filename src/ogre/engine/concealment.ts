@@ -197,6 +197,12 @@ export const plantMinefield = (
   };
 };
 
+/** Turn a minefield face up: something has found it (13.04, 13.04.1). */
+export const revealMinefield = (state: GameState, at: Hex): GameState => ({
+  ...state,
+  mines: minesOf(state).map((m) => (eq(m.pos, at) ? { ...m, revealed: true } : m)),
+});
+
 /** Take a minefield off the map: cleared by engineers (15), or for a test. */
 export const removeMinefield = (state: GameState, id: string): GameState => ({
   ...state,
@@ -220,6 +226,30 @@ export const mineStopOn = (state: GameState, mover: Unit, path: readonly Hex[]):
     if (m && m.owner !== mover.owner) return i;
   }
   return -1;
+};
+
+/**
+ * The first hex on a path a detecting cybertank can see a mine in, and would
+ * rather be asked about (13.04.1).
+ *
+ * "Whenever a qualifying Ogre is about to enter a hex with a mine or a hidden
+ * unit, the opposing player must acknowledge the presence of a mine (or hidden
+ * unit) within the hex. The Ogre may then choose to stay still, move
+ * elsewhere, or continue into the hex."
+ *
+ * The engine asks the question by refusing the order and naming the hex: the
+ * mine is then on the table, and the next order is the Ogre's choice. Entering
+ * a mine it has already been shown is the "voluntarily enters" case of 13.04.1,
+ * and goes off only on a 6.
+ */
+export const mineWarningOn = (state: GameState, mover: Unit, path: readonly Hex[]): Hex | null => {
+  if (!detectsMines(mover)) return null;
+  for (const h of path) {
+    const m = mineAt(state, h);
+    // Already shown to it: it is going in with its eyes open.
+    if (m && m.owner !== mover.owner && !m.revealed) return h;
+  }
+  return null;
 };
 
 /**

@@ -47,6 +47,7 @@ import { LASER_DAMAGED_AT, isMarine, unitClass } from './units.js';
 import { laserLineOfSight } from './los.js';
 import { droneCanFire } from './drone.js';
 import { crewlessPenalty, exposedCargo } from './vulcan.js';
+import { destroyTrainCounter, gunsLeft, gunsOn, isTrain } from './train.js';
 import {
   type AttackResolution,
   type AttackerRef,
@@ -597,6 +598,13 @@ const spentReason = (
     return u.firedThisPhase ? 'that unit has already fired this turn' : null;
   }
 
+  // "the train will have 8 attacks, each with a strength of 4 and range of 2,
+  // per turn" (9.03.1): four guns a counter, each its own shot.
+  if (isTrain(u)) {
+    if (gunsOn(u) <= 0) return `${unitName(u)} has no guns`;
+    return gunsLeft(u) > 0 ? null : 'every gun on that counter has fired';
+  }
+
   if (ref.heavyWeapon) {
     // Only a Heavy Weapons Team carries one (3.02.2, 3.02.3).
     if (u.classId !== 'HWT' && u.classId !== 'HWTM') {
@@ -874,9 +882,12 @@ export const applyToRiders = (
   credit: string,
 ): GameState => {
   if (target.kind !== 'unit') return state;
-  // A palletised drone is cargo rather than a rider: 14.01 gives it spillover
-  // at D0 instead, which `applySpillover` handles.
-  const riders = passengersOf(state, target.unit).filter((r) => !isPallet(r));
+  // "the vehicle + infantry combination" — so squads, and only squads. A
+  // palletised drone is cargo, and 14.01 gives it spillover at D0 instead;
+  // freight on a train (9.07) has no rule of this kind at all.
+  const riders = passengersOf(state, target.unit).filter(
+    (r) => !isPallet(r) && unitClass(r.classId).kind === 'infantry',
+  );
   if (riders.length === 0) return state;
 
   // "calculates the odds ... for ... all the infantry": one calculation for
@@ -978,7 +989,14 @@ export const markAttackersSpent = (
       continue;
     }
     const cls = unitClass(u.classId);
-    if (cls.kind === 'infantry') {
+    if (isTrain(u) && gunsOn(u) > 0) {
+      // Train guns are spent one at a time, like squads (9.03.1).
+      const want = Math.max(1, Math.min(gunsLeft(u), ref.squads ?? 1));
+      next = updateAnyUnit(next, u.id, (x) => ({
+        squadsFired: (x as ConventionalUnit).squadsFired + want,
+        firedThisPhase: (x as ConventionalUnit).squadsFired + want >= gunsOn(u),
+      }));
+    } else if (cls.kind === 'infantry') {
       const want = Math.max(1, Math.min(u.squads, ref.squads ?? u.squads));
       next = updateAnyUnit(next, u.id, (x) => ({
         squadsFired: (x as ConventionalUnit).squadsFired + want,
@@ -1101,6 +1119,15 @@ const applyToUnit = (
   if (sheetOf(state, u) !== null) return applySheetDamage(state, id, result, credit);
 
   if (result === 'X') {
+    // 9.03 is not "the counter goes": which counter, and whether the rest of
+    // the train goes with it, depends on which end it was and whether it was
+    // running.
+    if (isTrain(u)) {
+      const next = destroyTrainCounter(state, id, 'destroyed by fire', credit);
+      return next.units[id]?.destroyed === true
+        ? next
+        : log(next, 'good', `${unitName(u)} is destroyed.`, [u.pos]);
+    }
     const next = destroyUnit(state, id, 'destroyed by fire', credit);
     return log(next, 'good', `${unitName(u)} is destroyed.`, [u.pos]);
   }
@@ -1460,6 +1487,7 @@ export const canStillFire = (state: GameState, u: Unit): boolean => {
   if (!droneCanFire(u)) return false;
   if (u.stowedIn) return false;
   if (crewlessPenalty(state, u) === 'inert') return false;
+  if (isTrain(u)) return gunsLeft(u) > 0;
   const cls = unitClass(u.classId);
   if (cls.attack <= 0) return false;
   if (cls.kind === 'infantry') return u.squadsFired < u.squads;
