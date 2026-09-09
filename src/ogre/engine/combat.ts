@@ -34,7 +34,7 @@ import {
 import { OGRE_WEAPONS } from './ogres.js';
 import { baseTerrain, degradeTerrain, treadHitRollIn } from './terrain.js';
 import { mobilityOf } from './mobility.js';
-import { unitClass } from './units.js';
+import { isMarine, unitClass } from './units.js';
 import { laserLineOfSight } from './los.js';
 import {
   type AttackResolution,
@@ -389,7 +389,7 @@ const waterSilences = (state: GameState, map: GameMap, u: Unit): string | null =
   if (baseTerrain(terrainAt(map, u.pos, state.terrainOverrides)) !== 'water') return null;
   const mobility = mobilityOf(u);
   if (mobility === 'ogre') return `${unitName(u)} is submerged and cannot fire`;
-  if (mobility === 'infantry' && !(u.kind === 'unit' && u.classId === 'MAR')) {
+  if (mobility === 'infantry' && !(u.kind === 'unit' && isMarine(u.classId))) {
     return `${unitName(u)} cannot fight while swimming`;
   }
   return null;
@@ -424,7 +424,12 @@ const submergedTargetPenalty = (
     const weapon =
       shooter.kind === 'ogre' ? shooter.weapons.find((w) => w.id === ref.weapon) : null;
     const isOgreMissile = weapon?.kind === 'missile' || weapon?.kind === 'missileRack';
-    if (!isHowitzer && !isOgreMissile) {
+    // "The heavy weapon attack is uniquely designed to be effective in both air
+    // and water. Marine Heavy Weapons Teams may use their heavy weapon attack
+    // on either surface or submerged units without penalty." (3.02.3)
+    const marineHeavy =
+      ref.heavyWeapon === true && shooter.kind === 'unit' && shooter.classId === 'HWTM';
+    if (!isHowitzer && !isOgreMissile && !marineHeavy) {
       return {
         ok: false,
         reason: 'only howitzers and Ogre missiles reach something submerged (7.14.4)',
@@ -482,6 +487,10 @@ const spentReason = (
   }
 
   if (ref.heavyWeapon) {
+    // Only a Heavy Weapons Team carries one (3.02.2, 3.02.3).
+    if (u.classId !== 'HWT' && u.classId !== 'HWTM') {
+      return `${unitName(u)} carries no heavy weapon`;
+    }
     return u.heavyWeaponFired ? 'that heavy weapon is spent' : null;
   }
   const cls = unitClass(u.classId);

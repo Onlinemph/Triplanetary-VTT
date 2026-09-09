@@ -58,12 +58,17 @@ const ESCORT: readonly UnitClassId[] = [
 ];
 /** Squads riding the train (its capacity, 3.03 by analogy). */
 const ABOARD = 6;
-/** The raiders: an armour allowance in the usual mix, plus infantry dug in ahead. */
-const RAIDER_ARMOR = 12;
+/**
+ * The raiders: an armour allowance in the usual mix, plus infantry dug in
+ * ahead. Eight is what makes the scenario an even fight — a train that must
+ * run one of the two distances on its marker (9.02) cannot creep past a
+ * roadblock, so guns on the line are worth more here than anywhere else.
+ */
+const RAIDER_ARMOR = 8;
 const RAIDER_SQUADS = 12;
-/** Two turns of slack over a clean run at full speed. */
-const TURN_LIMIT = 12;
-/** The train is already rolling when the game opens. */
+/** Enough for a train that has to brake and pick its way past a roadblock. */
+const TURN_LIMIT = 14;
+/** The M2/3 marker: the train is already rolling when the game opens. */
 const OPENING_SPEED = 2;
 
 /** The rail hexes, west to east. */
@@ -250,12 +255,14 @@ export const TRAIN: ScenarioDef = {
     `The raiders have ${RAIDER_ARMOR} armour units and ${RAIDER_SQUADS} squads set up anywhere ` +
     'in the eastern half. The train wins by leaving the map at the east end of the line ' +
     `inside ${TURN_LIMIT} turns.\n\n` +
-    'The train moves only along the rails, at its speed marker, and the marker changes by one ' +
-    'step a turn before it moves — so a driver who sees trouble ahead has as many turns to ' +
-    'brake as the marker has steps. It cannot enter a hex the enemy holds: a counter parked on ' +
-    'the line stops it dead until the escort clears the way. A "D" result does nothing to it; ' +
-    'only an "X" derails it. Ramming it is resolved on the Size Table’s train column, which ' +
-    'is kind to cybertanks and unkind to everything else.\n\n' +
+    'The train moves only along the rails, at its speed marker — M0/1, M2/3, M4/5 or M6/7 — ' +
+    'and must run one of the two distances the marker shows. The marker changes by one step at ' +
+    'the end of each turn, so a driver who sees trouble ahead has as many turns to brake as ' +
+    'the marker has steps, and a train going too fast to stop short of a roadblock cannot move ' +
+    'at all. Run onto cut track and it is destroyed; run into armed enemies standing on the ' +
+    'line and they wreck it, though at speed 5 or better the wreck takes some of them with it. ' +
+    'A "D" result does nothing to it and only an "X" derails it, and its defence doubles in a ' +
+    'town. It does not count against stacking.\n\n' +
     'This scenario uses overrun combat rather than ramming, and the green map’s stacking.',
   victoryConditions: [
     'The train leaves by the east edge: escort victory — complete if half the escort’s value survives.',

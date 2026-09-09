@@ -562,6 +562,13 @@ export interface GameState {
   /** Minefields each side has left to lay (13.04, 15.03.1), by player. */
   readonly minesLeft?: Readonly<Record<string, number>>;
   /**
+   * Revetments dug by a Vulcan (15.04.7), by hex key, holding the size they
+   * shelter: 3 for a small one, 5 for a large. "Revetments add +1D to the
+   * defense strength of a combat unit. This bonus is added after any terrain
+   * bonus multiplier."
+   */
+  readonly revetments?: Readonly<Record<string, number>>;
+  /**
    * Engineering tasks attempted this player-turn, as `task:hex`: "the specific
    * task may be attempted only once per turn regardless of how many Sappers
    * participate" (15.03). Cleared as each turn opens.

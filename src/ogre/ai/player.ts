@@ -55,7 +55,7 @@ import {
   printedDefense,
   victoryValue,
 } from '../engine/state.js';
-import { reachable } from '../engine/movement.js';
+import { reachable, stepInfo } from '../engine/movement.js';
 import {
   canStillFire,
   orbitalStrikesLeft,
@@ -598,21 +598,6 @@ const planMovement = (ctx0: Ctx): Command[] => {
     }
   }
 
-  // A train opens up a step a turn until it is at full speed (9.02): the
-  // speed is set before it moves, and the move below is planned at the new
-  // speed.
-  for (const t of ctx.own) {
-    if (t.kind !== 'unit' || t.classId !== 'TRAIN' || !canAct(t)) continue;
-    if (t.trainSpeedSet || t.moveUsed > 0) continue;
-    const speed = t.trainSpeed ?? 0;
-    if (speed >= TRAIN_MAX_SPEED) continue;
-    out.push({ type: 'setTrainSpeed', by: player, unit: t.id, change: 1 });
-    ctx = withState(ctx, {
-      ...ctx.state,
-      units: { ...ctx.state.units, [t.id]: { ...t, trainSpeed: speed + 1, trainSpeedSet: true } },
-    });
-  }
-
   const movers = ctx.own
     .filter(
       (u) => canAct(u) && !isInertOgre(u, ctx.state.turn) && !(u.kind === 'unit' && u.ridingOn),
@@ -659,7 +644,19 @@ const moveFor = (ctx: Ctx, u: Unit): Command | null => {
   const { state, map, player } = ctx;
   if (movementAllowance(u, state.phase, state.options) <= 0 || u.movementEnded) return null;
 
-  const options = reachable(state, map, u);
+  let options = reachable(state, map, u);
+
+  // A train that drives into armed enemies on the line is wrecked by them
+  // (9.06); running down something unarmed is another matter.
+  if (u.kind === 'unit' && unitClass(u.classId).mobility === 'rail') {
+    options = options.filter(
+      (r) =>
+        r.collides !== true ||
+        !unitsAt(state, r.hex).some(
+          (e) => e.owner !== u.owner && (isOgre(e) || unitClass(e.classId).attack > 0),
+        ),
+    );
+  }
 
   // --- A cybertank looks for something to ram first --------------------
   if (isOgre(u) || (u.kind === 'unit' && u.classId === 'SHVY')) {
@@ -1130,9 +1127,65 @@ const expectedValue = (
   return (chance.x / 6) * t.value + (chance.d / 6) * t.value * disableWorth(ctx, target) - cost;
 };
 
+/**
+ * How far the train could actually run before something stops it.
+ *
+ * The rail hexes ahead, in the direction it is going, until an enemy is
+ * standing on the line, the rails are cut, or the track runs out. The driver
+ * sets the marker by this, since a marker it cannot run is a marker that
+ * leaves it standing still.
+ */
+const clearRailAhead = (ctx: Ctx, train: Unit): number => {
+  const { state, map } = ctx;
+  const edge = ctx.exit?.edge ?? ctx.edge;
+  const goal = edge ?? 'east';
+  const better = (a: Hex, b: Hex): boolean =>
+    edgeDistance(map, a, goal) < edgeDistance(map, b, goal);
+  let here = train.pos;
+  const seen = new Set<string>([key(here)]);
+  let room = 0;
+  for (let step = 0; step < 12; step++) {
+    const next = neighbors(here)
+      .filter((n) => inBounds(map, n) && !seen.has(key(n)))
+      .filter((n) => stepInfo(state, map, train, here, n).ok)
+      .filter((n) => better(n, here))
+      .sort((a, b) => edgeDistance(map, a, goal) - edgeDistance(map, b, goal))[0];
+    if (!next) break;
+    // Cut track and armed enemies both stop it dead (9.02.4, 9.06).
+    if ((state.routesCut ?? []).includes(key(next))) break;
+    const blocked = unitsAt(state, next).some(
+      (e) => e.owner !== train.owner && (isOgre(e) || unitClass(e.classId).attack > 0),
+    );
+    if (blocked) break;
+    seen.add(key(next));
+    here = next;
+    room += 1;
+  }
+  return room;
+};
+
 const planFire = (ctx: Ctx): Command[] => {
   const out: Command[] = [];
   const { state: s, map, player, w } = ctx;
+
+  // "At the end of each turn, the player owning the train may change its speed
+  // by one marker faster or slower." (9.02.1)
+  //
+  // A train must run one of the two distances on its marker, so a fast train
+  // with something close ahead cannot move at all. The driver reads the line
+  // and brakes in time, which is what the marker rule is for: "a driver who
+  // sees cut track ahead has as many turns to brake as the marker has steps."
+  for (const t of ctx.own) {
+    if (t.kind !== 'unit' || t.classId !== 'TRAIN' || !canAct(t)) continue;
+    if (t.trainSpeedSet) continue;
+    const marker = t.trainSpeed ?? 0;
+    const room = clearRailAhead(ctx, t);
+    if (marker > room) {
+      out.push({ type: 'setTrainSpeed', by: player, unit: t.id, change: -1 });
+    } else if (marker < TRAIN_MAX_SPEED && room >= marker + 3) {
+      out.push({ type: 'setTrainSpeed', by: player, unit: t.id, change: 1 });
+    }
+  }
 
   // The fleet overhead speaks first (Orbital Drop §6.01).
   if (s.scenarioData['orbitalStrikeSide'] === player) {

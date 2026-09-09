@@ -60,6 +60,7 @@ import {
 import { destroyUnit, log, unitName, updateOgre, withUnit } from './state.js';
 import { zoneOf } from './setup.js';
 import { unitClass } from './units.js';
+import { ogreType } from './ogres.js';
 import { applyDamageToUnit, checkOgreDeath } from './combat.js';
 
 /**
@@ -98,6 +99,19 @@ export const hasHiddenInformation = (options: GameOptions): boolean =>
 // ---------------------------------------------------------------------------
 
 export const minesOf = (state: GameState): readonly Minefield[] => state.mines ?? [];
+
+/**
+ * A cybertank that knows what it is driving over (13.04.1).
+ *
+ * "All Ninjas, Vulcans, and cybertanks of size 8 or greater have
+ * state-of-the-art detection equipment, giving them advanced awareness of
+ * mines and other hidden units."
+ */
+export const detectsMines = (u: Unit): boolean => {
+  if (!isOgre(u)) return false;
+  const t = ogreType(u.typeId);
+  return t.id === 'NINJA' || t.id === 'VULCAN' || t.size >= 8;
+};
 
 export const mineAt = (state: GameState, h: Hex): Minefield | undefined =>
   minesOf(state).find((m) => eq(m.pos, h));
@@ -238,7 +252,16 @@ export const tripMinefield = (
     const die = rollDie(next.rng);
     next = { ...next, rng: die.state };
     rolled = die.value;
-    fires = die.value >= (isOgre(unit) ? MINEFIELD.ogreTrigger : MINEFIELD.trigger);
+    const trigger = !isOgre(unit)
+      ? MINEFIELD.trigger
+      : // "All Ninjas, Vulcans, and cybertanks of size 8 or greater have
+        // state-of-the-art detection equipment ... If an Ogre voluntarily
+        // enters a mined hex, the mine goes off only on a roll of a 6, instead
+        // of the usual 5 or 6." (13.04.1)
+        detectsMines(unit)
+        ? MINEFIELD.ogreVoluntaryTrigger
+        : MINEFIELD.ogreTrigger;
+    fires = die.value >= trigger;
   }
 
   if (!fires) {

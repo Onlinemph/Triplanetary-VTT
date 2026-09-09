@@ -24,6 +24,8 @@ import {
   HEAVY_WEAPON,
   MAX_SQUADS_PER_GROUP,
   UNIT_CLASSES,
+  isMarine,
+  trainTopSpeed,
   superheavyMove,
   unitClass,
 } from './units.js';
@@ -361,7 +363,13 @@ export const defenseOf = (
 
   // Marines "have double defense in water hexes" (3.02.1). Everyone else's
   // defence is unaffected by water (7.14.4).
-  if (u.classId === 'MAR' && baseTerrain(terrain) === 'water') base *= 2;
+  if (isMarine(u.classId) && baseTerrain(terrain) === 'water') base *= 2;
+
+  // "If a train counter is in a town hex, its defense strength is doubled.
+  // Other terrain does not affect the train's defense." (9.03.2)
+  if (cls.mobility === 'rail') {
+    return baseTerrain(terrain) === 'town' ? base * 2 : base;
+  }
 
   // "Infantry riding in or on a vehicle receive the terrain defensive bonus
   // that applies to the vehicle, if any, and not the usual bonus for infantry."
@@ -379,8 +387,38 @@ export const defenseOf = (
     if (ground === 'clear') multiplier = 2;
     else if (ground === 'forest' || ground === 'rubble') multiplier = 3;
   }
-  return base * multiplier;
+  // "Revetments add +1D to the defense strength of a combat unit. This bonus
+  // is added after any terrain bonus multiplier." (15.04.7)
+  return base * multiplier + (shelteredByRevetment(state, u, where) ? 1 : 0);
 };
+
+/**
+ * Whether this counter is down in the hex's revetment (15.04.7).
+ *
+ * "A small revetment can offer protection to a unit size 3 or smaller, whereas
+ * a large revetment protects a unit or units up to size 5 ... More than one
+ * unit may occupy the revetment as long as the total size is less than the
+ * size of the revetment." The counters fill it in id order, as they do an
+ * entrenchment, so both players read the same answer.
+ */
+const shelteredByRevetment = (state: GameState, u: ConventionalUnit, where: Hex): boolean => {
+  const room = (state.revetments ?? {})[key(where)] ?? 0;
+  if (room <= 0) return false;
+  let used = 0;
+  for (const other of Object.values(state.units).sort((a, b) => (a.id < b.id ? -1 : 1))) {
+    if (other.kind !== 'unit' || other.destroyed || other.offMap) continue;
+    if (other.ridingOn != null) continue;
+    if (!(other.pos.q === where.q && other.pos.r === where.r)) continue;
+    const size = unitClass(other.classId).size;
+    if (other.id === u.id) return used + size <= room;
+    used += size;
+  }
+  return false;
+};
+
+/** The revetment in a hex, and how much it shelters: 0 when there is none. */
+export const revetmentAt = (state: GameState, h: Hex): number =>
+  (state.revetments ?? {})[key(h)] ?? 0;
 
 /** The defence of one Ogre component (7.13.1). */
 export const ogreWeaponDefense = (
@@ -482,7 +520,12 @@ export const movementAllowance = (
     return move > 0 ? move + gravityBonus : 0;
   }
   // The train runs at its speed marker, not a printed allowance (9.02).
-  if (cls.mobility === 'rail') return phase === 'gevMovement' ? 0 : (u.trainSpeed ?? 0);
+  // "M4/5, for instance, means that the train will move forward either 4 or 5
+  // hexes (as the owning player chooses)." (9.02) The allowance is the faster
+  // reading; `planPath` holds it to the slower one as a minimum.
+  if (cls.mobility === 'rail') {
+    return phase === 'gevMovement' ? 0 : trainTopSpeed(u.trainSpeed ?? 0);
+  }
   if (phase === 'gevMovement') return cls.secondMove ?? 0;
   return cls.move > 0 ? cls.move + gravityBonus : 0;
 };

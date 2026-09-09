@@ -19,10 +19,13 @@ import { previewAttack } from '../../src/ogre/engine/combat.js';
 import { stepInfo } from '../../src/ogre/engine/movement.js';
 import {
   defenseOf,
+  makeOgre,
   movementAllowance,
   printedAttack,
+  revetmentAt,
   withUnit,
 } from '../../src/ogre/engine/state.js';
+import { isMarine, unitClass } from '../../src/ogre/engine/units.js';
 import { rollDie } from '../../src/ogre/engine/rng.js';
 import {
   SUPERHEAVY_SHEET,
@@ -34,7 +37,7 @@ import {
   superheavyMove,
   vulcanDice,
 } from '../../src/ogre/engine/engineering.js';
-import { mineAt } from '../../src/ogre/engine/concealment.js';
+import { detectsMines, mineAt } from '../../src/ogre/engine/concealment.js';
 import { type GameState, onBoard } from '../../src/ogre/engine/types.js';
 import { A, B, at, flatMap, inPhase, newGame, put, putOgre, seedForRoll } from './helpers.js';
 
@@ -692,5 +695,167 @@ describe('the Vulcan’s own work (15.04)', () => {
       map,
     );
     expect(out.result.ok).toBe(false);
+  });
+});
+
+describe('revetments, sweeps and Marines', () => {
+  const seedForBest = (want: number): number => {
+    for (let seed = 1; seed < 400; seed++) {
+      const probe = { ...newGame({ seed }), rng: { seed } };
+      if (rollDie(probe.rng).value === want) return seed;
+    }
+    throw new Error('no seed');
+  };
+
+  // "Revetments add +1D to the defense strength of a combat unit. This bonus
+  // is added after any terrain bonus multiplier." (15.04.7)
+  it('add a point of defence after the terrain multiplier, up to their size', () => {
+    let s = newGame({ seed: 1, stackingLimit: 5 });
+    const vulcan = putOgre(s, A, 'VULCAN', at(5, 6));
+    s = vulcan.state;
+    const tank = put(s, A, 'HVY', at(5, 6));
+    s = { ...fireFor(tank.state, A), rng: { seed: seedForBest(6) } };
+    expect(defenseOf(s, map, s.units[tank.id]!)).toBe(3);
+
+    const tasks = engineerTasks(s, map, s.units[vulcan.id]!).map((t) => t.task);
+    expect(tasks).toContain('revetSmall');
+    expect(tasks).toContain('revetLarge');
+
+    const dug = run(s, { type: 'engineer', by: A, unit: vulcan.id, task: 'revetSmall' });
+    expect(revetmentAt(dug, at(5, 6))).toBe(3);
+    // A Heavy Tank is size 3: it just fits a small revetment.
+    expect(defenseOf(dug, map, dug.units[tank.id]!)).toBe(4);
+
+    // In a town the bonus lands after the doubling, not before.
+    const town = flatMap(12, 12, { [key(at(5, 6))]: 'town' });
+    expect(defenseOf(dug, town, dug.units[tank.id]!)).toBe(7);
+  });
+
+  it('will not shelter a unit too big for them', () => {
+    let s = newGame({ seed: 1, stackingLimit: 5 });
+    const vulcan = putOgre(s, A, 'VULCAN', at(5, 6));
+    s = vulcan.state;
+    // A Superheavy is size 5: too big for a small revetment.
+    const shvy = put(s, A, 'SHVY', at(5, 6));
+    s = { ...fireFor(shvy.state, A), rng: { seed: seedForBest(6) } };
+    const small = run(s, { type: 'engineer', by: A, unit: vulcan.id, task: 'revetSmall' });
+    expect(defenseOf(small, map, small.units[shvy.id]!)).toBe(5);
+    const big = run(s, { type: 'engineer', by: A, unit: vulcan.id, task: 'revetLarge' });
+    expect(revetmentAt(big, at(5, 6))).toBe(5);
+    expect(defenseOf(big, map, big.units[shvy.id]!)).toBe(6);
+  });
+
+  // "Entrenchments may not be built within a revetment." (15.04.7)
+  it('do not share a hex with an entrenchment', () => {
+    let s = newGame({ seed: 1, stackingLimit: 5 });
+    const vulcan = putOgre(s, A, 'VULCAN', at(5, 6));
+    s = vulcan.state;
+    const ce = put(s, A, 'CE', at(5, 6));
+    s = { ...fireFor(ce.state, A), rng: { seed: seedForBest(6) } };
+    const dug = run(s, { type: 'engineer', by: A, unit: vulcan.id, task: 'revetSmall' });
+    const out = applyCommand(dug, { type: 'engineer', by: A, unit: ce.id, task: 'entrench' }, map);
+    expect(out.result.ok).toBe(false);
+    expect(out.result.ok ? '' : out.result.reason).toMatch(/revetment/);
+  });
+
+  // "To detect any mines in the searched hexes, they need to roll on one die a
+  // number greater than the number of hexes they are searching." (15.03.3)
+  it('sweep a neighbouring hex and turn a hidden minefield up', () => {
+    let s = newGame({ seed: 1 });
+    const ce = put(s, A, 'CE', at(5, 6));
+    s = {
+      ...fireFor(ce.state, A),
+      mines: [{ id: 'm1', owner: B, pos: at(6, 6), revealed: false }],
+      rng: { seed: seedForBest(6) },
+    };
+    const offers = engineerTasks(s, map, s.units[ce.id]!).filter((t) => t.task === 'detectMines');
+    expect(offers.length).toBeGreaterThan(0);
+    const found = run(s, {
+      type: 'engineer',
+      by: A,
+      unit: ce.id,
+      task: 'detectMines',
+      toward: at(6, 6),
+    });
+    expect(mineAt(found, at(6, 6))?.revealed).toBe(true);
+
+    // A 1 is not "greater than one hex".
+    const missed = run(
+      { ...s, rng: { seed: seedForBest(1) } },
+      { type: 'engineer', by: A, unit: ce.id, task: 'detectMines', toward: at(6, 6) },
+    );
+    expect(mineAt(missed, at(6, 6))?.revealed).toBe(false);
+  });
+
+  // "All Ninjas, Vulcans, and cybertanks of size 8 or greater ... If an Ogre
+  // voluntarily enters a mined hex, the mine goes off only on a roll of a 6,
+  // instead of the usual 5 or 6." (13.04.1)
+  it('give the big cybertanks warning, so a mine needs a six under them', () => {
+    expect(detectsMines(makeOgre('x', A, 'NINJA', at(1, 1)))).toBe(true);
+    expect(detectsMines(makeOgre('x', A, 'VULCAN', at(1, 1)))).toBe(true);
+    expect(detectsMines(makeOgre('x', A, 'MK5', at(1, 1)))).toBe(true); // size 8
+    expect(detectsMines(makeOgre('x', A, 'MK3', at(1, 1)))).toBe(false); // size 7
+
+    // A Mark V walks over a mine on a five: nothing happens to it.
+    const ride = (typeId: 'MK3' | 'MK5', seed: number) => {
+      let s = newGame({ seed });
+      const mk = putOgre(s, A, typeId, at(3, 8));
+      s = {
+        ...inPhase(mk.state, 'movement'),
+        activePlayerIndex: mk.state.playerOrder.indexOf(A),
+        mines: [{ id: 'm1', owner: B, pos: at(4, 8), revealed: false }],
+        rng: { seed },
+      };
+      const before = (s.units[mk.id] as { treads: number }).treads;
+      const out = applyCommand(s, { type: 'moveUnit', by: A, unit: mk.id, path: [at(4, 8)] }, map);
+      return before - (out.state.units[mk.id] as { treads: number }).treads;
+    };
+    const five = seedForBest(5);
+    expect(ride('MK5', five)).toBe(0); // warned: it takes a six
+    expect(ride('MK3', five)).toBeGreaterThan(0); // not warned: a five is enough
+  });
+
+  // 15.01.1 and 3.02.3: the Marine specialists.
+  it('give the Marine specialists their water rules and their six points', () => {
+    expect(unitClass('ME').vp).toBe(6);
+    expect(unitClass('HWTM').vp).toBe(6);
+    expect(isMarine('ME')).toBe(true);
+    expect(isMarine('HWTM')).toBe(true);
+    expect(isMarine('CE')).toBe(false);
+
+    // "double defense in water hexes"
+    const wet = flatMap(12, 12, { [key(at(5, 6))]: 'water' });
+    let s = newGame({ seed: 1 });
+    const me = put(s, A, 'ME', at(5, 6), 2);
+    s = me.state;
+    const ce = put(s, A, 'CE', at(6, 6), 2);
+    s = ce.state;
+    expect(defenseOf(s, wet, s.units[me.id]!)).toBe(4);
+    expect(defenseOf(s, map, s.units[ce.id]!)).toBe(2);
+
+    // Marine Engineers are engineers: they get the task list.
+    const dry = { ...fireFor(s, A) };
+    expect(engineerTasks(dry, map, dry.units[me.id]!).map((t) => t.task)).toContain('entrench');
+  });
+
+  // Only a Heavy Weapons Team carries a heavy weapon (3.02.2, 3.02.3).
+  it('refuses a heavy weapon to infantry that has none', () => {
+    let s = newGame({ seed: 1 });
+    const inf = put(s, A, 'INF', at(3, 6), 3);
+    s = inf.state;
+    const hwt = put(s, A, 'HWTM', at(4, 6));
+    s = hwt.state;
+    const target = put(s, B, 'HVY', at(6, 6));
+    s = fireFor(target.state, A);
+    const plain = previewAttack(s, map, [{ unit: inf.id, heavyWeapon: true }], {
+      kind: 'unit',
+      unit: target.id,
+    });
+    expect(plain.ok).toBe(false);
+    const team = previewAttack(s, map, [{ unit: hwt.id, heavyWeapon: true }], {
+      kind: 'unit',
+      unit: target.id,
+    });
+    expect(team.ok).toBe(true);
   });
 });

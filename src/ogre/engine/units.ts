@@ -47,6 +47,8 @@ export type UnitClassId =
   | 'TK'
   | 'HT'
   | 'TRAIN'
+  | 'ME'
+  | 'HWTM'
   | 'HDRN'
   | 'LSR'
   | 'LTWR'
@@ -497,6 +499,38 @@ export const UNIT_CLASSES: Readonly<Record<UnitClassId, UnitClass>> = {
     note: 'Fully stated: a one-shot "heavy weapon attack at Attack Strength 3 and Range 4", plus "an inherent Attack 1 at Range 1"; 4 VP per squad (3.02.2).',
   },
 
+  ME: {
+    id: 'ME',
+    name: 'Marine Engineers',
+    abbr: 'ME',
+    kind: 'infantry',
+    mobility: 'infantry',
+    attack: 1,
+    range: 1,
+    defense: 1,
+    move: 2,
+    size: 1,
+    armorUnits: 1 / 3,
+    vp: 6,
+    note: '"Marine Engineers are treated for all purposes like regular Combat Engineers, except that they move and attack equally well on land and water, and have double defense in water hexes ... Marine Engineers cost 6 VP per squad, (or 3× the cost of regular infantry.)" (15.01.1)',
+  },
+
+  HWTM: {
+    id: 'HWTM',
+    name: 'Marine Heavy Weapons Team',
+    abbr: 'HWTM',
+    kind: 'infantry',
+    mobility: 'infantry',
+    attack: 1,
+    range: 1,
+    defense: 1,
+    move: 2,
+    size: 1,
+    armorUnits: 1 / 3,
+    vp: 6,
+    note: '"treated for all purposes like regular Heavy Weapons Teams, except that they move and attack equally well on land and water, and have double defense in water hexes ... Marine Heavy Weapons Teams cost 6 VP per squad" (3.02.3). Their heavy weapon works on surface and submerged targets alike.',
+  },
+
   HDRN: {
     id: 'HDRN',
     name: 'Heavy Drone',
@@ -583,6 +617,15 @@ export const HEAVY_WEAPON = { attack: 3, range: 4 } as const;
  * so the bands here are even sixths: full move down to 13 treads, then a hex
  * less for every six lost.
  */
+/**
+ * The battlesuit troops who work in water as well as on land: Marines
+ * (3.02.1), Marine Heavy Weapons Teams (3.02.3) and Marine Engineers
+ * (15.01.1). All three "move and attack equally well on land and water, and
+ * have double defense in water hexes".
+ */
+export const isMarine = (classId: UnitClassId): boolean =>
+  classId === 'MAR' || classId === 'HWTM' || classId === 'ME';
+
 export const superheavyMove = (treads: number): number => {
   if (treads >= 13) return 3;
   if (treads >= 7) return 2;
@@ -590,7 +633,18 @@ export const superheavyMove = (treads: number): number => {
   return 0;
 };
 
-export const TRAIN_MAX_SPEED = 4;
+/**
+ * The train's speed markers (9.02), by the lower number of each pair.
+ *
+ * "There are four markers available per train: M0/1, M2/3, M4/5, and M6/7.
+ * M4/5, for instance, means that the train will move forward either 4 or 5
+ * hexes (as the owning player chooses)." So a marker is stored as its lower
+ * number — 0, 2, 4 or 6 — and the train runs that far or one hex further.
+ */
+export const TRAIN_MARKERS: readonly number[] = [0, 2, 4, 6];
+export const TRAIN_MAX_SPEED = 6;
+/** A marker's faster reading: "either 4 or 5 hexes". */
+export const trainTopSpeed = (marker: number): number => marker + 1;
 
 /** A unit that fires along a line of sight rather than at a printed range. */
 export const isLaserClass = (id: UnitClassId): boolean => UNIT_CLASSES[id].laser !== undefined;
@@ -627,6 +681,9 @@ export const SELECTABLE_CLASSES: readonly UnitClassId[] = [
   'MCRL',
   'TK',
   'HT',
+  'CE',
+  'ME',
+  'HWTM',
   // The Vulcan's Heavy Drones: no weapons, but they are what makes a Vulcan
   // worth bringing (15.02.3).
   'HDRN',

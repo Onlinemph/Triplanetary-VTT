@@ -145,7 +145,7 @@ describe('The Train', () => {
       winners: [RAIDER_PLAYER],
       level: 'complete',
     });
-    expect(TRAIN.checkVictory({ ...state, turn: 13 })).toMatchObject({
+    expect(TRAIN.checkVictory({ ...state, turn: 15 })).toMatchObject({
       winners: [RAIDER_PLAYER],
       level: 'standard',
     });
@@ -181,17 +181,33 @@ describe('The Train', () => {
 });
 
 describe('the computer in a scenario about leaving', () => {
-  it('opens the train up and runs it east', () => {
-    const state = toMovement(TRAIN.build({ seed: 5 }));
+  it('runs the train east, then opens it up at the end of the turn', () => {
+    let state = toMovement(TRAIN.build({ seed: 5 }));
     const before = trainOf(state);
+    // The movement phase: it runs, at the marker it began the turn with.
+    state = run(state, aiPlan(state, map, ESCORT_PLAYER));
+    const moved = trainOf(state);
+    expect(col(moved)).toBeGreaterThan(col(before));
+    expect(hasRoute(map, moved.pos, 'rail')).toBe(true);
+    expect((moved as { trainSpeed?: number }).trainSpeed).toBe(2);
+
+    // "At the end of each turn, the player owning the train may change its
+    // speed by one marker faster or slower." (9.02.1)
+    for (let guard = 0; guard < 4 && state.phase !== 'fire'; guard++) {
+      state = applyCommand(
+        state,
+        { type: 'endPhase', by: state.playerOrder[state.activePlayerIndex]! },
+        map,
+        TRAIN.checkVictory,
+      ).state;
+    }
     const plan = aiPlan(state, map, ESCORT_PLAYER);
     expect(
       plan.some((c) => c.type === 'setTrainSpeed' && c.unit === before.id && c.change === 1),
     ).toBe(true);
     const after = trainOf(run(state, plan));
-    expect((after as { trainSpeed?: number }).trainSpeed).toBe(3);
-    expect(col(after)).toBeGreaterThan(col(before));
-    expect(hasRoute(map, after.pos, 'rail')).toBe(true);
+    // M2/3 to M4/5.
+    expect((after as { trainSpeed?: number }).trainSpeed).toBe(4);
   });
 
   it('sends the raiders after the train, not after the nearest escort', () => {

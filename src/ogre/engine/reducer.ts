@@ -280,15 +280,22 @@ const doDeployReserve = (
  * the marker has steps.
  */
 const doSetTrainSpeed = (state: GameState, unitId: string, change: 1 | -1): ApplyResult => {
-  if (state.phase !== 'movement') return { state, result: fail('set the speed before moving') };
+  // "At the end of each turn, the player owning the train may change its speed
+  // by one marker faster or slower." (9.02.1) So it is set after the train has
+  // run, and the new marker is what it moves at next turn — which is the whole
+  // point: a driver who sees cut track ahead has as many turns to brake as the
+  // marker has steps.
+  if (state.phase !== 'fire' && state.phase !== 'gevMovement') {
+    return { state, result: fail('the speed changes at the end of the turn (9.02.1)') };
+  }
   const unit = state.units[unitId];
   if (!unit || unit.kind !== 'unit' || unit.classId !== 'TRAIN' || !onBoard(unit)) {
     return { state, result: fail('that is not a train') };
   }
   if (unit.owner !== activePlayer(state)) return { state, result: fail('not your train') };
-  if (unit.moveUsed > 0) return { state, result: fail('the speed is set before the train moves') };
   if (unit.trainSpeedSet) return { state, result: fail('the speed changes once a turn (9.02)') };
-  const speed = Math.max(0, Math.min(TRAIN_MAX_SPEED, (unit.trainSpeed ?? 0) + change));
+  // One marker at a time: M0/1 to M2/3 to M4/5 to M6/7 and back.
+  const speed = Math.max(0, Math.min(TRAIN_MAX_SPEED, (unit.trainSpeed ?? 0) + change * 2));
   if (speed === (unit.trainSpeed ?? 0)) {
     return {
       state,
@@ -297,9 +304,12 @@ const doSetTrainSpeed = (state: GameState, unitId: string, change: 1 | -1): Appl
   }
   const next = withUnit(state, { ...unit, trainSpeed: speed, trainSpeedSet: true });
   return {
-    state: log(next, 'info', `The train ${change > 0 ? 'opens up' : 'brakes'} to speed ${speed}.`, [
-      unit.pos,
-    ]),
+    state: log(
+      next,
+      'info',
+      `The train ${change > 0 ? 'opens up' : 'brakes'} to M${String(speed)}/${String(speed + 1)}.`,
+      [unit.pos],
+    ),
     result: ok(),
   };
 };

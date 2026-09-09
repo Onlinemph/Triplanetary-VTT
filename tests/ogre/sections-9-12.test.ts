@@ -272,7 +272,10 @@ describe('the train (Section 9)', () => {
   layRoute(b, line, 'rail');
   const map = { ...rails, routes: b.routes };
 
-  it('runs on rails at its speed marker and nowhere else', () => {
+  // "M4/5, for instance, means that the train will move forward either 4 or 5
+  // hexes (as the owning player chooses). On its movement phase, the train
+  // must move one of the two distances shown by the counter on it." (9.02)
+  it('runs one of the two distances on its marker, and nowhere off the rails', () => {
     let s = newGame({ seed: 2 });
     const train = put(s, A, 'TRAIN', at(1, 3));
     s = {
@@ -285,30 +288,138 @@ describe('the train (Section 9)', () => {
     const other = put(s, B, 'INF', at(12, 6));
     s = moveFor(other.state, A);
 
+    // The M2/3 marker: two hexes or three, and never one or four.
     const reach = reachable(s, map, s.units[train.id]!);
     const keys = reach.map((r) => key(r.hex));
     expect(keys).toContain(key(at(3, 3)));
-    expect(keys).not.toContain(key(at(4, 3)));
+    expect(keys).toContain(key(at(4, 3)));
+    expect(keys).not.toContain(key(at(2, 3)));
+    expect(keys).not.toContain(key(at(5, 3)));
     expect(keys).not.toContain(key(at(2, 2)));
-    expect(movementAllowance(s.units[train.id]!, 'movement')).toBe(2);
+    expect(movementAllowance(s.units[train.id]!, 'movement')).toBe(3);
+    // Creeping one hex is refused in so many words.
+    const creep = applyCommand(
+      s,
+      { type: 'moveUnit', by: A, unit: train.id, path: [at(2, 3)] },
+      map,
+    );
+    expect(creep.result.ok).toBe(false);
+    expect(creep.result.ok ? '' : creep.result.reason).toMatch(/runs 2 or 3 hexes/);
   });
 
-  it('changes speed by one step, once a turn, before it moves', () => {
+  // "If the train moves into a hex where the rails are cut, it is destroyed."
+  // (9.02.4)
+  it('is destroyed when it runs onto cut track', () => {
     let s = newGame({ seed: 2 });
     const train = put(s, A, 'TRAIN', at(1, 3));
     s = {
       ...train.state,
       units: {
         ...train.state.units,
-        [train.id]: { ...train.state.units[train.id]!, trainSpeed: 1 } as never,
+        [train.id]: { ...train.state.units[train.id]!, trainSpeed: 2 } as never,
       },
+      routesCut: [key(at(3, 3))],
     };
     const other = put(s, B, 'INF', at(12, 6));
     s = moveFor(other.state, A);
+    const out = applyCommand(
+      s,
+      { type: 'moveUnit', by: A, unit: train.id, path: [at(2, 3), at(3, 3)] },
+      map,
+    );
+    expect(out.result.ok).toBe(true);
+    expect(out.state.units[train.id]!.destroyed).toBe(true);
+    expect(out.state.log.some((e) => /cut track/.test(e.text))).toBe(true);
+  });
+
+  // 9.06: "If the train moves onto a unit on the track ... (a) If the enemy
+  // units are armed ... The train is destroyed. ... (b) If the enemy units are
+  // unarmed, the train collides with them ... The enemy units are destroyed."
+  it('is wrecked by armed units standing on the line, and runs down unarmed ones', () => {
+    const board = (guard: 'HVY' | 'TK', speed: number) => {
+      let s = newGame({ seed: 2, stackingLimit: 5 });
+      const train = put(s, A, 'TRAIN', at(1, 3));
+      s = {
+        ...train.state,
+        units: {
+          ...train.state.units,
+          [train.id]: { ...train.state.units[train.id]!, trainSpeed: speed } as never,
+        },
+      };
+      const block = put(s, B, guard, at(3, 3));
+      s = moveFor(block.state, A);
+      return { s, train: train.id, block: block.id };
+    };
+
+    // Armed: the guns cut the track in front of it.
+    const armed = board('HVY', 2);
+    const hit = applyCommand(
+      armed.s,
+      { type: 'moveUnit', by: A, unit: armed.train, path: [at(2, 3), at(3, 3)] },
+      map,
+    );
+    expect(hit.result.ok).toBe(true);
+    expect(hit.state.units[armed.train]!.destroyed).toBe(true);
+    expect(hit.state.log.some((e) => /runs into the guns/.test(e.text))).toBe(true);
+
+    // Unarmed: the train goes through it, and takes a collision for its size.
+    const soft = board('TK', 2);
+    const through = applyCommand(
+      soft.s,
+      { type: 'moveUnit', by: A, unit: soft.train, path: [at(2, 3), at(3, 3)] },
+      map,
+    );
+    expect(through.result.ok).toBe(true);
+    expect(through.state.units[soft.block]!.destroyed).toBe(true);
+    expect(through.state.log.some((e) => /ploughs through/.test(e.text))).toBe(true);
+  });
+
+  // "If a train counter is in a town hex, its defense strength is doubled.
+  // Other terrain does not affect the train's defense." (9.03.2)
+  it('doubles its defence in a town and nowhere else', () => {
+    let s = newGame({ seed: 2 });
+    const train = put(s, A, 'TRAIN', at(4, 3));
+    s = train.state;
+    expect(defenseOf(s, map, s.units[train.id]!)).toBe(3);
+    const town = { ...map, terrain: { ...map.terrain, [key(at(4, 3))]: 'town' as const } };
+    expect(defenseOf(s, town, s.units[train.id]!)).toBe(6);
+    const wood = { ...map, terrain: { ...map.terrain, [key(at(4, 3))]: 'forest' as const } };
+    expect(defenseOf(s, wood, s.units[train.id]!)).toBe(3);
+  });
+
+  // "At the end of each turn, the player owning the train may change its speed
+  // by one marker faster or slower. That is, if its speed was M2/3, he may
+  // change it to M0/1 or to M4/5." (9.02.1)
+  it('changes by one marker, once a turn, at the end of the turn', () => {
+    let s = newGame({ seed: 2 });
+    const train = put(s, A, 'TRAIN', at(1, 3));
+    s = {
+      ...train.state,
+      units: {
+        ...train.state.units,
+        [train.id]: { ...train.state.units[train.id]!, trainSpeed: 2 } as never,
+      },
+    };
+    const other = put(s, B, 'INF', at(12, 6));
+    // Not while it is still running.
+    expect(
+      applyCommand(
+        moveFor(other.state, A),
+        {
+          type: 'setTrainSpeed',
+          by: A,
+          unit: train.id,
+          change: 1,
+        },
+        map,
+      ).result.ok,
+    ).toBe(false);
+    s = fireFor(other.state, A);
 
     const up = applyCommand(s, { type: 'setTrainSpeed', by: A, unit: train.id, change: 1 }, map);
     expect(up.result.ok).toBe(true);
-    expect((up.state.units[train.id] as { trainSpeed?: number }).trainSpeed).toBe(2);
+    // M2/3 to M4/5, not to M3.
+    expect((up.state.units[train.id] as { trainSpeed?: number }).trainSpeed).toBe(4);
     const twice = applyCommand(
       up.state,
       { type: 'setTrainSpeed', by: A, unit: train.id, change: 1 },
