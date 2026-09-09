@@ -11,13 +11,24 @@ import { hexLine, key } from '../../src/ogre/engine/hex.js';
 import { layRoute } from '../../src/ogre/engine/map.js';
 import { terrainAt } from '../../src/ogre/engine/map.js';
 import { previewAttack, previewOrbitalStrike } from '../../src/ogre/engine/combat.js';
-import { launchCheck } from '../../src/ogre/engine/missiles.js';
+import {
+  blastEffect,
+  blastsThisTurn,
+  interceptionTarget,
+  launchCheck,
+  trackingBonus,
+} from '../../src/ogre/engine/missiles.js';
 import { laserLineOfSight } from '../../src/ogre/engine/los.js';
 import { movementAllowance, defenseOf } from '../../src/ogre/engine/state.js';
 import { reachable } from '../../src/ogre/engine/movement.js';
 import { canRam } from '../../src/ogre/engine/ram.js';
 import { type Building, type GameState, isOgre } from '../../src/ogre/engine/types.js';
 import { A, B, at, flatMap, inPhase, newGame, put, putOgre } from './helpers.js';
+import { makeUnit } from '../../src/ogre/engine/state.js';
+import type { UnitClassId } from '../../src/ogre/engine/units.js';
+
+/** A bare counter of a class, for the tables that only read its class. */
+const fake = (classId: UnitClassId) => makeUnit(`x-${classId}`, A, classId, at(1, 1));
 
 const withBuilding = (state: GameState, b: Building): GameState => ({
   ...state,
@@ -59,10 +70,10 @@ describe('cruise missiles (Section 10)', () => {
     const after = out.state;
     const spent = after.units[crawler.id]!;
     expect(spent.kind === 'unit' ? spent.classId : 'ogre').toBe('CRL');
-    // Six hexes away: it arrives this leg, and ground zero is total.
+    // "Remove all units, buildings, etc., in the hex it strikes. Place a
+    // crater marker in that hex" (10.04).
     expect(after.units[victim.id]!.destroyed).toBe(true);
     expect(terrainAt(map, at(8, 6), after.terrainOverrides)).toBe('crater');
-    expect(Object.keys(after.missiles ?? {})).toHaveLength(0);
     // The crawler has fired.
     const again = applyCommand(
       after,
@@ -72,12 +83,15 @@ describe('cruise missiles (Section 10)', () => {
     expect(again.result.ok).toBe(false);
   });
 
-  it('flies twelve hexes a turn and finishes the trip next fire phase', () => {
+  // "In that time, a Cruise Missile can reach any point on the map (however
+  // big the map is) ... Once a Cruise Missile is fired, it is tracked to its
+  // destination and its fate resolved before any more actions occur." (10.02)
+  it('reaches the far side of the map inside the order that fired it', () => {
     let s = newGame({ seed: 5 });
     const crawler = put(s, A, 'MCRL', at(1, 6));
     s = crawler.state;
-    // Something far away, and something of B's so the game has two sides.
-    const far = put(s, B, 'HWZ', at(16, 6));
+    // A Truck: no attack strength, so nothing along the way can shoot at it.
+    const far = put(s, B, 'TK', at(16, 6));
     s = far.state;
 
     const out = applyCommand(
@@ -86,48 +100,62 @@ describe('cruise missiles (Section 10)', () => {
       map,
     );
     expect(out.result.ok).toBe(true);
-    const inFlight = Object.values(out.state.missiles ?? {});
-    expect(inFlight).toHaveLength(1);
-    expect(out.state.units[far.id]!.destroyed).toBe(false);
-
-    // Wind round to A's next fire phase; the missile lands on the way in.
-    let s2 = out.state;
-    for (let i = 0; i < 12 && s2.units[far.id] && !s2.units[far.id]!.destroyed; i++) {
-      s2 = applyCommand(
-        s2,
-        { type: 'endPhase', by: s2.playerOrder[s2.activePlayerIndex]! },
-        map,
-      ).state;
-    }
-    expect(s2.units[far.id]!.destroyed).toBe(true);
-    expect(Object.keys(s2.missiles ?? {})).toHaveLength(0);
+    // Fifteen hexes, and it is already down: nothing waits for a later turn.
+    expect(out.state.units[far.id]!.destroyed).toBe(true);
+    expect(terrainAt(map, at(16, 6), out.state.terrainOverrides)).toBe('crater');
   });
 
-  it('is shot down by a laser with a line of sight, and blocked by forest', () => {
-    // A laser beside the flight path, with a seed that makes its 1-1 shot an X.
+  // "When attacking a Cruise Missile, a unit rolls two dice. The number on the
+  // table below, or higher, kills the missile." (10.03.2)
+  it('is shot at on two dice by every gun it passes, hardest by a laser', () => {
+    expect(interceptionTarget(fake('LSR'))).toBe(9);
+    // "Any armor unit with attack strength 3 or more" — a Heavy Tank is 4.
+    expect(interceptionTarget(fake('HVY'))).toBe(11);
+    // "Any armor unit with attack strength 1 or 2" — a Light Tank is 2.
+    expect(interceptionTarget(fake('LT'))).toBe(12);
+    expect(interceptionTarget(fake('LGEV'))).toBe(12);
+    // "Each individual squad (1/1 unit) of infantry".
+    expect(interceptionTarget(fake('INF'))).toBe(11);
+    // No attack strength, no shot; and an AP gun is not on the table.
+    expect(interceptionTarget(fake('TK'))).toBeNull();
+    expect(interceptionTarget(fake('HVY'), 'ap')).toBeNull();
+    expect(interceptionTarget(fake('HVY'), 'main')).toBe(10);
+    expect(interceptionTarget(fake('HVY'), 'missile')).toBe(9);
+
+    // "the attacking unit receives a bonus if the missile is more than 10
+    // hexes from its hex of origin."
+    expect(trackingBonus(10)).toBe(0);
+    expect(trackingBonus(11)).toBe(1);
+    expect(trackingBonus(16)).toBe(2);
+    expect(trackingBonus(21)).toBe(3);
+  });
+
+  it('is brought down by a laser beside its path, and sometimes goes off where it was hit', () => {
     let s = newGame({ seed: 0 });
     const crawler = put(s, A, 'MCRL', at(2, 6));
     s = crawler.state;
     const laser = put(s, B, 'LSR', at(6, 4));
     s = laser.state;
-    const target = put(s, B, 'HVY', at(10, 6));
+    const target = put(s, B, 'HVY', at(12, 6));
     s = target.state;
 
-    // Search the seed space for an interception that connects.
-    let shotDown = false;
-    for (let seed = 0; seed < 40 && !shotDown; seed++) {
-      const trial = { ...fireFor(s, A), rng: { seed } };
+    let sawShotDown = false;
+    let sawEarly = false;
+    for (let seed = 0; seed < 60 && !(sawShotDown && sawEarly); seed++) {
       const out = applyCommand(
-        trial,
-        { type: 'launchCruiseMissile', by: A, unit: crawler.id, target: at(10, 6) },
+        { ...fireFor(s, A), rng: { seed } },
+        { type: 'launchCruiseMissile', by: A, unit: crawler.id, target: at(12, 6) },
         map,
       );
       expect(out.result.ok).toBe(true);
-      const intercepted = out.state.log.some((e) => /tracks the cruise missile/.test(e.text));
-      expect(intercepted).toBe(true);
-      if (!out.state.units[target.id]!.destroyed) shotDown = true;
+      expect(out.state.log.some((e) => /tracks the missile/.test(e.text))).toBe(true);
+      if (out.state.log.some((e) => /shot down/.test(e.text))) sawShotDown = true;
+      // "On a roll of 6, the missile explodes in the hex where it was
+      // intercepted" (10.03.3) — short of the target it was aimed at.
+      if (out.state.log.some((e) => /goes off where it was hit/.test(e.text))) sawEarly = true;
     }
-    expect(shotDown).toBe(true);
+    expect(sawShotDown).toBe(true);
+    expect(sawEarly).toBe(true);
 
     // Forest between the laser and the path blocks a standard laser.
     const wooded = flatMap(16, 12, { [key(at(6, 5))]: 'forest' });
@@ -135,6 +163,71 @@ describe('cruise missiles (Section 10)', () => {
     // A tower fires over it, but not into it.
     expect(laserLineOfSight(s, wooded, at(6, 4), at(6, 6), 'tower')).toBeNull();
     expect(laserLineOfSight(s, wooded, at(6, 4), at(6, 5), 'tower')).toMatch(/cannot fire into/);
+  });
+
+  // The table of 10.04, read straight off the page.
+  it('reads the printed blast table by unit type and distance', () => {
+    const col = (o: ReturnType<typeof blastEffect>): string =>
+      o.kind === 'column' ? o.column : o.kind;
+    // Any D0 unit or any GEV: X at 1-2, then 4-1, 2-1, 1-1, nothing at 6.
+    expect(col(blastEffect('d0', 2))).toBe('auto');
+    expect(col(blastEffect('d0', 3))).toBe('4-1');
+    expect(col(blastEffect('d0', 5))).toBe('1-1');
+    expect(col(blastEffect('d0', 6))).toBe('none');
+    // D3+ armour, the train, a hardened CP: never an automatic kill.
+    expect(col(blastEffect('d3', 1))).toBe('4-1');
+    expect(col(blastEffect('d3', 3))).toBe('1-1');
+    expect(col(blastEffect('d3', 4))).toBe('none');
+    // Infantry, a squad at a time.
+    expect(col(blastEffect('infantry', 1))).toBe('auto');
+    expect(col(blastEffect('infantry', 2))).toBe('2-1');
+    // A town or forest hex burns out to three hexes.
+    expect(col(blastEffect('townForest', 3))).toBe('auto');
+    expect(col(blastEffect('townForest', 7))).toBe('none');
+    // An Ogre component, a road and a small building share a row.
+    for (const row of ['ogreComponent', 'route', 'buildingSmall'] as const) {
+      expect(col(blastEffect(row, 1))).toBe('2-1');
+      expect(col(blastEffect(row, 2))).toBe('1-2');
+      expect(col(blastEffect(row, 3))).toBe('none');
+    }
+    expect(col(blastEffect('buildingLarge', 1))).toBe('1-2');
+    expect(col(blastEffect('buildingLarge', 2))).toBe('none');
+  });
+
+  // "no Cruise Missile fired later on that turn, whatever target it is aimed
+  // at, may pass within six hexes of the explosion site." (10.02.1)
+  it('refuses a second launch that would fly through this turn’s crater', () => {
+    let s = newGame({ seed: 3 });
+    const first = put(s, A, 'MCRL', at(2, 6));
+    s = first.state;
+    const second = put(s, A, 'MCRL', at(2, 8));
+    s = second.state;
+    const bait = put(s, B, 'HVY', at(9, 6));
+    s = bait.state;
+
+    const out = applyCommand(
+      fireFor(s, A),
+      { type: 'launchCruiseMissile', by: A, unit: first.id, target: at(9, 6) },
+      map,
+    );
+    expect(out.result.ok).toBe(true);
+    const refused = applyCommand(
+      out.state,
+      { type: 'launchCruiseMissile', by: A, unit: second.id, target: at(10, 7) },
+      map,
+    );
+    expect(refused.result.ok).toBe(false);
+    expect(refused.result.ok ? '' : refused.result.reason).toMatch(/six hexes/);
+    // And the sky is clear again next turn.
+    let later = out.state;
+    for (let i = 0; i < 8 && later.activePlayerIndex === 0; i++) {
+      later = applyCommand(
+        later,
+        { type: 'endPhase', by: later.playerOrder[later.activePlayerIndex]! },
+        map,
+      ).state;
+    }
+    expect(blastsThisTurn(later)).toEqual([]);
   });
 });
 

@@ -112,8 +112,6 @@ export const TUNED: Partial<Weights> = {
   'cm.ownLoss': 1.21,
   'cm.building': 67.6,
   'cm.ownBuilding': 1.71,
-  'cm.ring1': 0.644,
-  'cm.ring2': 0.115,
   'cm.min': 74.3,
   'reserve.goal': 1.19,
   'reserve.threat': 0.379,

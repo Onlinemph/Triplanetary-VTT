@@ -25,7 +25,7 @@ import {
 } from './types.js';
 import { SETUP_COMMANDS, finishSetup, placeUnit } from './setup.js';
 import { deployReserveCheck } from './reserves.js';
-import { flyMissiles, launchMissile } from './missiles.js';
+import { clearBlasts, launchMissile } from './missiles.js';
 import {
   apRemaining,
   log,
@@ -657,9 +657,7 @@ export const advancePhase = (state: GameState, map: GameMap): GameState => {
     case 'movement': {
       // Step 3 of the sequence happens here, before anybody shoots.
       const settled = resolvePendingHazards(state, player);
-      // Cruise missiles still in the air take their next leg as the fire
-      // phase opens (10.03), before any new launch.
-      return flyMissiles({ ...settled, phase: 'fire' }, map, player);
+      return { ...settled, phase: 'fire' };
     }
 
     case 'fire':
@@ -675,12 +673,12 @@ export const advancePhase = (state: GameState, map: GameMap): GameState => {
 const startNextPlayerTurn = (state: GameState, _map: GameMap): GameState => {
   const nextIndex = (state.activePlayerIndex + 1) % state.playerOrder.length;
   const wrapped = nextIndex === 0;
-  let next: GameState = {
+  let next: GameState = clearBlasts({
     ...state,
     activePlayerIndex: nextIndex,
     turn: wrapped ? state.turn + 1 : state.turn,
     phase: 'recovery',
-  };
+  });
 
   const player = activePlayer(next);
   next = resetFireFlags(next, player);

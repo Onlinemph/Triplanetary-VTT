@@ -206,8 +206,6 @@ export const WEIGHT_SPEC = {
   'cm.ownLoss': spec(1.5, 0, 4, 'Our own units under the blast, per point of worth'),
   'cm.building': spec(40, 0, 200, 'An enemy building under the blast'),
   'cm.ownBuilding': spec(2, 0, 6, 'Our own building under the blast, as a multiple'),
-  'cm.ring1': spec(0.55, 0, 1, 'Worth at one hex from the aim point'),
-  'cm.ring2': spec(0.25, 0, 1, 'Worth at two hexes from the aim point'),
   'cm.min': spec(30, 0, 150, 'Blast worth below which the missile stays on the crawler'),
 
   // --- Reserves ------------------------------------------------------------

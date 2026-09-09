@@ -438,14 +438,6 @@ export interface SetupState {
  * sight take their interception shots as it passes, and it either arrives or
  * is knocked down.
  */
-export interface CruiseMissile {
-  readonly id: string;
-  readonly owner: PlayerId;
-  readonly pos: Hex;
-  readonly target: Hex;
-  readonly launchedTurn: number;
-}
-
 // ---------------------------------------------------------------------------
 // Options and victory
 // ---------------------------------------------------------------------------
@@ -543,7 +535,12 @@ export interface GameState {
   /** Set while the sides are still placing their counters; nothing else moves. */
   readonly setup?: SetupState | null;
   /** Cruise missiles in flight, by id. */
-  readonly missiles?: Readonly<Record<string, CruiseMissile>>;
+  /**
+   * Hexes a cruise missile has gone off in during this player-turn, for
+   * fratricide (10.02.1). Cleared as each turn opens. A missile itself is
+   * never in this state: it is fired and resolved inside one order (10.02).
+   */
+  readonly missileBlasts?: readonly string[];
   /** Minefields on the map (13.04), laid and hidden; see `concealment.ts`. */
   readonly mines?: readonly Minefield[];
   /** Bridges dropped (13.02, 15), by canonical hexside key; see `engineering.ts`. */

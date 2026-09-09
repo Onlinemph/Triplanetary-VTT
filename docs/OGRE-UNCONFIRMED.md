@@ -42,36 +42,6 @@ values (2 a squad, 3 a half-value armour unit, 6 a standard one or a Crawler,
 
 ## 2. Rules the engine simplifies
 
-### Cruise missiles fly, and should not (§10)
-
-**Printed:** "In that time, a Cruise Missile can reach any point on the map
-(however big the map is) – unless it is intercepted." The missile is fired in
-the fire phase and tracked hex by hex to its target immediately, before
-anything else happens. Interception is a **two-dice roll** on a table by the
-firing unit's type (12 for an armour unit of attack 1-2, 11+ for attack 3 or
-more and for each infantry squad, 10+ for an Ogre battery, 9+ for an Ogre
-missile or a Laser), with +1 past 10 hexes, +2 past 15, +3 past 20 or from off
-the board. A successful hit shoots it down, except on a 6 on one die, when it
-detonates where it was intercepted. Fratricide reaches **six** hexes.
-
-The blast is a table by unit type and distance, not two rings: a D0 unit or
-GEV is destroyed at 1-2 hexes and attacked at 4-1, 2-1, 1-1 out to 5; a D3+
-unit, the train or a hardened CP is only attacked, at 4-1 from one hex; towns
-and forests go at 1-3; roads, bridges and Ogre components take a 2-1 at one
-hex. Forest and swamp count as one hex further away, town and underwater two.
-Structure points and Ogre treads are attacked in groups of five.
-
-**Here:** the missile is a counter that flies twelve hexes a fire phase over
-several turns, and a laser intercepts it by shooting at a defence strength.
-The blast is two rings of fixed attack strength, and fratricide reaches two
-hexes.
-
-**To close it:** replace the flight loop with an immediate hex-by-hex trace,
-the interception check with the 2d6 table, and the two rings with the printed
-table. The launch, the crater and the road cut are already right. It is the
-largest single piece of work on this page and it makes the missile _simpler_,
-not harder — nothing needs to persist between turns.
-
 ### Lasers are buildings (§12)
 
 **Printed:** "Defensively, they are buildings with Structure Points."

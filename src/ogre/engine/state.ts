@@ -90,7 +90,6 @@ export const createGame = (opts: NewGameOptions): GameState => {
     nextUnitSerial: 1,
     overrun: null,
     setup: null,
-    missiles: {},
     victory: null,
     scenarioData: opts.scenarioData ?? {},
   };
