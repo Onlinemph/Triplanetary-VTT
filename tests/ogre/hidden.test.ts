@@ -88,20 +88,57 @@ describe('minefields (13.04)', () => {
     expect(mineAt(next, at(4, 6))?.revealed).toBe(false);
   });
 
-  it('take tread units off a cybertank on a good roll, and no more than that', () => {
-    let s = newGame({ seed: 5 });
-    const mk = putOgre(s, A, 'MK3', at(3, 8));
-    s = mk.state;
-    s = withMine(s, B, at(4, 8));
-    s = moveFor(s, A);
-    const before = (s.units[mk.id] as { treads: number }).treads;
-    const next = run(s, { type: 'moveUnit', by: A, unit: mk.id, path: [at(4, 8), at(5, 8)] });
-    const after = (next.units[mk.id] as { treads: number }).treads;
-    expect(key(next.units[mk.id]!.pos)).toBe(key(at(4, 8)));
-    expect(before - after === 0 || before - after === 2).toBe(true);
+  // "If a mine is not on a road, it explodes only on a die roll of 6 (5 or 6
+  // for an Ogre) ... an Ogre rolls 1 die and loses that many tread units."
+  it('goes off under a cybertank on a 5 or 6, and takes a die of tread units', () => {
+    let sawNothing = false;
+    let sawTreads = false;
+    for (let seed = 1; seed <= 40 && !(sawNothing && sawTreads); seed++) {
+      let s = newGame({ seed });
+      const mk = putOgre(s, A, 'MK3', at(3, 8));
+      s = mk.state;
+      s = withMine(s, B, at(4, 8));
+      s = moveFor(s, A);
+      const before = (s.units[mk.id] as { treads: number }).treads;
+      const next = run(s, { type: 'moveUnit', by: A, unit: mk.id, path: [at(4, 8), at(5, 8)] });
+      const lost = before - (next.units[mk.id] as { treads: number }).treads;
+      expect(key(next.units[mk.id]!.pos)).toBe(key(at(4, 8)));
+      if (lost === 0) {
+        // It did not go off, and the field is on the map now.
+        expect(mineAt(next, at(4, 8))?.revealed).toBe(true);
+        sawNothing = true;
+      } else {
+        // A die of treads, and the mine itself is gone.
+        expect(lost).toBeGreaterThanOrEqual(1);
+        expect(lost).toBeLessThanOrEqual(6);
+        expect(mineAt(next, at(4, 8))).toBeUndefined();
+        sawTreads = true;
+      }
+    }
+    expect(sawNothing).toBe(true);
+    expect(sawTreads).toBe(true);
   });
 
-  it('are laid in the setup, in the layer’s own area, one to a hex, and are hidden from the enemy', () => {
+  // "A mine explosion affects only the unit setting it off. Armor units are
+  // destroyed" — no odds, no roll against a defence strength.
+  it('destroys an armour unit outright when it goes off', () => {
+    let destroyed = false;
+    for (let seed = 1; seed <= 40 && !destroyed; seed++) {
+      let s = newGame({ seed });
+      const tank = put(s, A, 'HVY', at(3, 6));
+      s = moveFor(withMine(tank.state, B, at(4, 6)), A);
+      const next = run(s, { type: 'moveUnit', by: A, unit: tank.id, path: [at(4, 6)] });
+      const u = next.units[tank.id]!;
+      if (!onBoard(u)) {
+        destroyed = true;
+        expect(next.log.some((e) => /sets off a mine and is destroyed/.test(e.text))).toBe(true);
+        expect(mineAt(next, at(4, 6))).toBeUndefined();
+      }
+    }
+    expect(destroyed).toBe(true);
+  });
+
+  it('are laid in the setup, in the layer’s own area, and are hidden from the enemy', () => {
     let s = newGame({ seed: 2 });
     s = {
       ...s,
@@ -124,10 +161,9 @@ describe('minefields (13.04)', () => {
       false,
     );
     s = run(s, { type: 'layMinefield', by: B, at: at(8, 6) });
-    expect(applyCommand(s, { type: 'layMinefield', by: B, at: at(8, 6) }, map).result.ok).toBe(
-      false,
-    );
-    s = run(s, { type: 'layMinefield', by: B, at: at(9, 6) });
+    // "Any number of mines may be placed in a hex, and only one goes off at a
+    // time." (13.04) — so the same hex again is legal.
+    s = run(s, { type: 'layMinefield', by: B, at: at(8, 6) });
     expect(minefieldsLeft(s, B)).toBe(0);
     expect(applyCommand(s, { type: 'layMinefield', by: B, at: at(8, 7) }, map).result.ok).toBe(
       false,
@@ -176,13 +212,24 @@ describe('camouflage (13.05)', () => {
     expect(redactOgreState(plain, A)).toBe(plain);
   });
 
-  it('is not revealed by moving, only by where the move ends', () => {
+  // "As soon as any camouflaged unit moves or fires ... the ? marker is
+  // replaced by the real unit." (13.05)
+  it('is given away the moment it moves', () => {
     const { state, msl } = board();
     const s = moveFor(state, B);
-    let next = run(s, { type: 'moveUnit', by: B, unit: msl, path: [at(6, 6)] });
-    expect(next.units[msl]!.concealed).toBe(true);
-    next = run(next, { type: 'endPhase', by: B });
-    expect(next.units[msl]!.concealed).toBe(true); // three hexes from the enemy still
+    const next = run(s, { type: 'moveUnit', by: B, unit: msl, path: [at(6, 6)] });
+    expect(next.units[msl]!.concealed).toBe(false);
+    expect(next.log.some((e) => /It moved/.test(e.text))).toBe(true);
+  });
+
+  it('stays hidden while it stands still, however close the enemy comes', () => {
+    const { state, hvy, msl } = board();
+    let s = moveFor(state, A);
+    // Right up beside it, and past the end of the phase.
+    s = run(s, { type: 'moveUnit', by: A, unit: hvy, path: [at(4, 6), at(5, 6), at(6, 6)] });
+    expect(s.units[msl]!.concealed).toBe(true);
+    s = run(s, { type: 'endPhase', by: A });
+    expect(s.units[msl]!.concealed).toBe(true);
   });
 
   it('is revealed by firing, and by being fired on', () => {
@@ -210,13 +257,21 @@ describe('camouflage (13.05)', () => {
     expect(!onBoard(u) || u.concealed === false).toBe(true);
   });
 
-  it('is revealed when an enemy ends a movement phase next to it', () => {
+  // "... or as soon as an enemy unit moves through or fires on its hex" (13.05)
+  it('is found when an enemy walks through its hex', () => {
     const { state, hvy, msl } = board();
     let s = moveFor(state, A);
-    s = run(s, { type: 'moveUnit', by: A, unit: hvy, path: [at(4, 6), at(5, 6), at(6, 6)] });
-    expect(s.units[msl]!.concealed).toBe(true); // not yet: the phase is still open
-    s = run(s, { type: 'endPhase', by: A });
+    // The Missile Tank stands at 7,6 with no attack strength to stop anyone
+    // walking over it, so the Heavy Tank's path goes right through.
+    s = withUnit(s, {
+      ...s.units[msl]!,
+      classId: 'CP',
+    } as GameState['units'][string]);
+    // Start it one hex nearer so the walk-through is inside a Heavy Tank's 3.
+    s = { ...s, units: { ...s.units, [hvy]: { ...s.units[hvy]!, pos: at(5, 6) } } };
+    s = run(s, { type: 'moveUnit', by: A, unit: hvy, path: [at(6, 6), at(7, 6), at(8, 6)] });
     expect(s.units[msl]!.concealed).toBe(false);
+    expect(s.log.some((e) => /came through its hex/.test(e.text))).toBe(true);
   });
 });
 

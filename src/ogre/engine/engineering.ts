@@ -48,7 +48,8 @@ import {
   activePlayer,
   onBoard,
 } from './types.js';
-import { destroyUnit, log, movementAllowance, unitName, updateAnyUnit } from './state.js';
+import { destroyUnit, log, unitName, updateAnyUnit } from './state.js';
+import { baseTerrain } from './terrain.js';
 import { unitClass } from './units.js';
 import { mineAt, removeMinefield } from './concealment.js';
 
@@ -56,17 +57,28 @@ import { mineAt, removeMinefield } from './concealment.js';
 // 13.07 The Superheavy's record sheet
 // ---------------------------------------------------------------------------
 
-/** What a Superheavy carries on its sheet, as it leaves the factory. Provisional. */
+/**
+ * What a Superheavy carries on its record sheet, printed with 13.07:
+ *
+ *     2 CANNONS         ATK 3   RNG 3
+ *     2 ANTIPERSONNEL   ATK 1   RNG 1
+ *     18 TREAD UNITS
+ *     MOVE STARTS AT 3, then 2, 1, 0
+ */
 export interface SuperheavySheet {
   readonly guns: number;
   readonly ap: number;
   readonly treads: number;
+  /** Disabled by a hit on the sheet, and recovering (13.07 disables on most X results). */
+  readonly disabled?: boolean;
 }
 
-export const SUPERHEAVY_SHEET: SuperheavySheet = { guns: 2, ap: 2, treads: 3 };
+export const SUPERHEAVY_SHEET: SuperheavySheet = { guns: 2, ap: 2, treads: 18 };
 
-/** Attack strength of one Superheavy gun: half the printed 6*. */
+/** "2 CANNONS ATK 3 RNG 3" — the printed 6* is two guns of 3. */
 export const SUPERHEAVY_GUN = 3;
+
+export { superheavyMove } from './units.js';
 
 /** The sheet a Superheavy fights on, or null when the option is off or it is not one. */
 export const sheetOf = (state: GameState, u: Unit): SuperheavySheet | null => {
@@ -75,13 +87,23 @@ export const sheetOf = (state: GameState, u: Unit): SuperheavySheet | null => {
   return u.sheet ?? SUPERHEAVY_SHEET;
 };
 
-/** Destroyed the way an Ogre is: nothing to shoot with and nothing to move on. */
+/** Nothing to shoot with and nothing to move on. */
 export const sheetSpent = (sheet: SuperheavySheet): boolean => sheet.guns <= 0 && sheet.treads <= 0;
 
 /**
- * A CRT result against a Superheavy on its sheet. An X takes a component —
- * 1-2 a gun, 3-4 a tread unit, 5-6 an antipersonnel weapon, the next kind
- * along when that one is spent — and a D takes a tread unit. Provisional.
+ * A CRT result against a Superheavy fighting on its record sheet (13.07).
+ *
+ * "D results have their normal effect, but a second D has no further result;
+ * D results don't combine into an X."
+ *
+ * On any X, roll one die:
+ *
+ *     1, 2  One main gun and one AP gun are lost. Unit is disabled. If both
+ *           main guns were already gone, unit is destroyed.
+ *     3     Tread damage. Roll 1 die and mark off that many treads. Disabled.
+ *     4     Major tread damage. Roll 2 dice and mark off that many. Disabled.
+ *     5     Mobility kill; mark off all treads. Unit is disabled.
+ *     6     Unit is destroyed, as with a normal X result.
  */
 export const applySheetDamage = (
   state: GameState,
@@ -94,32 +116,62 @@ export const applySheetDamage = (
   const sheet = sheetOf(state, u);
   if (!sheet || result === 'NE') return state;
 
-  let next = state;
-  let taken: keyof SuperheavySheet;
+  // A D disables it, and a second D while it is still down does nothing more.
   if (result === 'D') {
-    taken = 'treads';
+    if (sheet.disabled) {
+      return log(state, 'info', `${unitName(u)} is already down; the second D does nothing.`, [
+        u.pos,
+      ]);
+    }
+    const next = updateAnyUnit(state, id, () => ({
+      sheet: { ...sheet, disabled: true },
+      disabled: 'combat' as const,
+      disabledAt: state.turn,
+    }));
+    return log(next, 'good', `${unitName(u)} is disabled.`, [u.pos]);
+  }
+
+  const die = rollDie(state.rng);
+  let next: GameState = { ...state, rng: die.state };
+  const wreck = (why: string): GameState => {
+    const gone = destroyUnit(next, id, why, credit);
+    return log(gone, 'good', `${unitName(u)} ${why}.`, [u.pos]);
+  };
+
+  if (die.value === 6) return wreck('is destroyed outright');
+
+  let after: SuperheavySheet;
+  let what: string;
+  if (die.value <= 2) {
+    if (sheet.guns <= 0) return wreck('has nothing left to lose but itself');
+    after = { ...sheet, guns: sheet.guns - 1, ap: Math.max(0, sheet.ap - 1) };
+    what = 'loses a cannon and an antipersonnel gun';
+  } else if (die.value === 5) {
+    after = { ...sheet, treads: 0 };
+    what = 'takes a mobility kill: every tread unit gone';
   } else {
-    const die = rollDie(next.rng);
-    next = { ...next, rng: die.state };
-    const order: (keyof SuperheavySheet)[] =
-      die.value <= 2
-        ? ['guns', 'treads', 'ap']
-        : die.value <= 4
-          ? ['treads', 'guns', 'ap']
-          : ['ap', 'guns', 'treads'];
-    taken = order.find((k) => sheet[k] > 0) ?? 'treads';
+    const first = rollDie(next.rng);
+    next = { ...next, rng: first.state };
+    let lost = first.value;
+    if (die.value === 4) {
+      const second = rollDie(next.rng);
+      next = { ...next, rng: second.state };
+      lost += second.value;
+    }
+    after = { ...sheet, treads: Math.max(0, sheet.treads - lost) };
+    what = `loses ${String(lost)} tread unit${lost === 1 ? '' : 's'}`;
   }
-  if (sheet[taken] <= 0) {
-    return log(next, 'info', `${unitName(u)} shrugs it off: nothing left on that line.`, [u.pos]);
-  }
-  const after: SuperheavySheet = { ...sheet, [taken]: sheet[taken] - 1 };
-  next = updateAnyUnit(next, id, () => ({ sheet: after }));
-  const what =
-    taken === 'guns' ? 'a gun' : taken === 'ap' ? 'an antipersonnel weapon' : 'a tread unit';
-  next = log(next, 'good', `${unitName(u)} loses ${what}.`, [u.pos]);
+
+  after = { ...after, disabled: true };
+  next = updateAnyUnit(next, id, () => ({
+    sheet: after,
+    disabled: 'combat' as const,
+    disabledAt: next.turn,
+  }));
+  next = log(next, 'good', `${unitName(u)} ${what}, and is disabled.`, [u.pos]);
   if (sheetSpent(after)) {
     next = destroyUnit(next, id, 'shot to pieces', credit);
-    next = log(next, 'good', `${unitName(u)} is a wreck: no guns and no treads.`, [u.pos]);
+    next = log(next, 'good', `${unitName(u)} is a wreck: no cannon and no treads.`, [u.pos]);
   }
   return next;
 };
@@ -129,7 +181,12 @@ export const applySheetDamage = (
 // ---------------------------------------------------------------------------
 
 /** A bridge's defence as a target. Provisional. */
-export const BRIDGE = { defense: 4 } as const;
+export const BRIDGE = {
+  /** "there is a stream bridge with a defense strength of D6" (13.02). */
+  defense: 6,
+  /** "A bridge which crosses a full hex ... has a defense strength of 8" (13.02.1). */
+  riverDefense: 8,
+} as const;
 
 /** The canonical hexside key of the crossing between two adjacent hexes. */
 export const bridgeKey = (hex: Hex, toward: Hex): string | null => {
@@ -208,10 +265,14 @@ export const engineerTasks = (
   u: Unit,
 ): { task: EngineerTask; toward?: Hex; label: string }[] => {
   if (!isEngineer(u) || !onBoard(u) || u.kind !== 'unit') return [];
-  if (u.moveUsed > 0 || u.movementEnded || u.disabled !== 'none' || u.ridingOn) return [];
+  if (u.firedThisPhase || u.disabled !== 'none' || u.ridingOn) return [];
   const out: { task: EngineerTask; toward?: Hex; label: string }[] = [];
-  const terrain = terrainAt(map, u.pos, state.terrainOverrides);
-  if (!entrenchedAt(state, u.pos) && terrain !== 'water' && terrain !== 'crater') {
+  const ground = baseTerrain(terrainAt(map, u.pos, state.terrainOverrides));
+  // "Sappers may protect infantry in clear, forest, or rubble terrain through
+  // entrenching ... Entrenchments in any terrain other than clear, forest, or
+  // rubble offer no benefit." (15.03.5)
+  const diggable = ground === 'clear' || ground === 'forest' || ground === 'rubble';
+  if (!entrenchedAt(state, u.pos) && diggable) {
     out.push({ task: 'entrench', label: 'Entrench this hex' });
   }
   const mine = mineAt(state, u.pos);
@@ -227,9 +288,18 @@ export const engineerTasks = (
 };
 
 /**
- * Spend the engineers' whole movement phase on a task. The counter has to be
- * standing where the work is, with its move unspent; afterwards its move is
- * over for the turn.
+ * An engineering task, in place of the squad's shot.
+ *
+ * "To attempt to perform an engineering task, one or more Combat Engineer
+ * squads and/or Vulcans must start their turn in the hex they wish to perform
+ * the task, and stay in that hex for the duration of that turn ... Attempting
+ * a task counts as that squad's 'attack' for that turn, and is made during the
+ * Fire Phase." (15.03) So the engineers stand where the work is and spend
+ * their fire on it.
+ *
+ * Only the tasks a single squad can finish in a turn are here. The rulebook's
+ * dice pools — extra squads and Drones each add a die, a Vulcan four — are not
+ * modelled: one squad, one attempt.
  */
 export const engineer = (
   state: GameState,
@@ -239,8 +309,8 @@ export const engineer = (
   task: EngineerTask,
   toward?: Hex,
 ): { state: GameState; ok: boolean; reason?: string } => {
-  if (state.phase !== 'movement')
-    return { state, ok: false, reason: 'engineering is movement-phase work' };
+  if (state.phase !== 'fire')
+    return { state, ok: false, reason: 'engineering is done in the fire phase (15.03)' };
   if (activePlayer(state) !== by) return { state, ok: false, reason: 'it is not your turn' };
   const u = state.units[unitId];
   if (!u || !onBoard(u) || u.kind !== 'unit') return { state, ok: false, reason: 'no such unit' };
@@ -248,16 +318,23 @@ export const engineer = (
   if (!isEngineer(u)) return { state, ok: false, reason: 'only combat engineers do that' };
   if (u.disabled !== 'none') return { state, ok: false, reason: 'disabled engineers do no work' };
   if (u.ridingOn) return { state, ok: false, reason: 'the engineers must dismount first' };
-  if (u.moveUsed > 0 || u.movementEnded) {
-    return { state, ok: false, reason: 'the work takes the whole movement phase: they have moved' };
+  if (u.firedThisPhase) {
+    return { state, ok: false, reason: 'the work is their attack for the turn: they have fired' };
+  }
+  if (u.moveUsed > 0) {
+    return { state, ok: false, reason: 'they must start the turn in the hex and stay in it' };
   }
 
   let next = state;
   switch (task) {
     case 'entrench': {
-      const terrain = terrainAt(map, u.pos, state.terrainOverrides);
-      if (terrain === 'water' || terrain === 'crater') {
-        return { state, ok: false, reason: 'there is nothing to dig in there' };
+      const ground = baseTerrain(terrainAt(map, u.pos, state.terrainOverrides));
+      if (ground !== 'clear' && ground !== 'forest' && ground !== 'rubble') {
+        return {
+          state,
+          ok: false,
+          reason: 'entrenchments only help in clear, forest or rubble (15.03.5)',
+        };
       }
       if (entrenchedAt(state, u.pos))
         return { state, ok: false, reason: 'that hex is entrenched already' };
@@ -288,9 +365,8 @@ export const engineer = (
     }
   }
 
-  // The whole phase, spent.
-  const allowance = movementAllowance(u, state.phase, state.options);
-  next = updateAnyUnit(next, unitId, () => ({ moveUsed: allowance, movementEnded: true }));
+  // The task was their attack for the turn (15.03).
+  next = updateAnyUnit(next, unitId, () => ({ firedThisPhase: true, squadsFired: u.squads }));
   return { state: next, ok: true };
 };
 

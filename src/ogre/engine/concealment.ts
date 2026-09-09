@@ -42,8 +42,7 @@
  */
 
 import { type Hex, distance, eq, key } from './hex.js';
-import { type GameMap, inBounds, terrainAt } from './map.js';
-import { describeOdds, oddsFor, resolve } from './crt.js';
+import { type GameMap, inBounds, isRouteHex, terrainAt } from './map.js';
 import { rollDie } from './rng.js';
 import {
   type ConventionalUnit,
@@ -58,20 +57,36 @@ import {
   setupActor,
   unitsAt,
 } from './types.js';
-import { defenseOf, destroyUnit, log, unitName, updateOgre, withUnit } from './state.js';
+import { destroyUnit, log, unitName, updateOgre, withUnit } from './state.js';
 import { zoneOf } from './setup.js';
 import { unitClass } from './units.js';
 import { applyDamageToUnit, checkOgreDeath } from './combat.js';
 
 /**
- * Provisional numbers for 13.04, chosen to play sensibly against the rest
- * of the CRT: a minefield attacks a conventional unit at strength 4, and
- * takes 2 tread units off a cybertank on a roll of 4 or better.
+ * 13.04, as printed. A mine is not a gun: it does not attack on the Combat
+ * Results Table at all.
+ *
+ * "If a mine is on a road, it explodes when any unit enters that hex on the
+ * road, but is unaffected if a unit enters the hex without using the road. If
+ * a mine is not on a road, it explodes only on a die roll of 6 (5 or 6 for an
+ * Ogre). Mines that fail to go off are unaffected, but by entering the hex,
+ * the opposing player learns that it is mined.
+ *
+ * A mine explosion affects only the unit setting it off. Armor units are
+ * destroyed; infantry is reduced by 1 squad; an Ogre rolls 1 die and loses
+ * that many tread units. The mine itself is destroyed."
  */
 export const MINEFIELD = {
-  attack: 4,
-  ogreTreads: 2,
-  ogreTreadRoll: 4,
+  /** Off a road, a mine goes off on this roll or better. */
+  trigger: 6,
+  /** An Ogre is heavy enough to set one off on a 5 as well. */
+  ogreTrigger: 5,
+  /**
+   * "If an Ogre voluntarily enters a mined hex, the mine goes off only on a
+   * roll of a 6, instead of the usual 5 or 6." (13.04.1) — for a cybertank
+   * whose detection equipment warned it first.
+   */
+  ogreVoluntaryTrigger: 6,
 } as const;
 
 /** Any of the three rules is on: the table has secrets, and needs a referee. */
@@ -114,10 +129,14 @@ export const layMinefield = (
   if (terrain === 'crater' || terrain === 'water') {
     return { state, ok: false, reason: 'a minefield needs ground' };
   }
-  if (mineAt(state, at)) return { state, ok: false, reason: 'that hex is mined already' };
+  // "Any number of mines may be placed in a hex, and only one goes off at a
+  // time." (13.04) — so no one-to-a-hex rule.
 
   const id = `mine-${by}-${minesOf(state).length + 1}`;
-  const mine: Minefield = { id, owner: by, pos: at, revealed: false };
+  // "recording the hex numbers and whether they are on the road" (13.04): a
+  // mine laid on a road hex is a road mine, and goes off under anything that
+  // uses the road.
+  const mine: Minefield = { id, owner: by, pos: at, revealed: false, onRoad: isRouteHex(map, at) };
   const next: GameState = {
     ...state,
     mines: [...minesOf(state), mine],
@@ -133,10 +152,15 @@ export const removeMinefield = (state: GameState, id: string): GameState => ({
 });
 
 /**
- * The first hex on a path where an enemy minefield would stop the mover,
- * or -1. The mover's own side's mines do not count: it knows where they
- * are. Hidden mines count too — that is the point — so this is asked of the
- * true state by the reducer, never of a view.
+ * The first hex on a path holding an enemy mine, or -1.
+ *
+ * The mover's own side's mines do not count: it knows where they are. Hidden
+ * mines do — that is the point — so this is asked of the true state by the
+ * reducer, never of a view. Whether the mine actually goes off is
+ * {@link tripMinefield}'s question; the mover stops here either way, which the
+ * rules do not say in so many words but which costs nothing: an armour unit
+ * that sets one off is destroyed, and one that does not has still found the
+ * field the hard way.
  */
 export const mineStopOn = (state: GameState, mover: Unit, path: readonly Hex[]): number => {
   for (let i = 0; i < path.length; i++) {
@@ -147,64 +171,98 @@ export const mineStopOn = (state: GameState, mover: Unit, path: readonly Hex[]):
 };
 
 /**
- * A unit has entered a mined hex: the minefield is revealed and attacks.
+ * A unit has entered a mined hex (13.04).
  *
- * Conventional units take a CRT attack at `MINEFIELD.attack` against their
- * defence in the hex; a cybertank loses tread units on a die roll, the
- * shape of every other tread hit in the game.
+ * "If a mine is on a road, it explodes when any unit enters that hex on the
+ * road, but is unaffected if a unit enters the hex without using the road. If
+ * a mine is not on a road, it explodes only on a die roll of 6 (5 or 6 for an
+ * Ogre). Mines that fail to go off are unaffected, but by entering the hex,
+ * the opposing player learns that it is mined.
+ *
+ * A mine explosion affects only the unit setting it off. Armor units are
+ * destroyed; infantry is reduced by 1 squad; an Ogre rolls 1 die and loses
+ * that many tread units. The mine itself is destroyed. A mine explosion on a
+ * bridge hex destroys it; a mine explosion on a road or railroad creates a
+ * road cut."
+ *
+ * `onRoad` says whether the mover came in along the road, which decides
+ * whether a road mine is under it at all.
  */
-export const tripMinefield = (state: GameState, map: GameMap, unitId: UnitId): GameState => {
+export const tripMinefield = (
+  state: GameState,
+  map: GameMap,
+  unitId: UnitId,
+  usedRoad = true,
+): GameState => {
   const unit = state.units[unitId];
   if (!unit || !onBoard(unit)) return state;
   const mine = mineAt(state, unit.pos);
   if (!mine || mine.owner === unit.owner) return state;
-
-  let next: GameState = {
-    ...state,
-    mines: minesOf(state).map((m) => (m.id === mine.id ? { ...m, revealed: true } : m)),
-  };
-  next = revealUnit(next, unitId);
   const label = unitName(unit);
 
-  if (isOgre(unit)) {
+  // A road mine under a unit that came across country is simply not under it.
+  if (mine.onRoad === true && !usedRoad) return state;
+
+  let next = revealUnit(state, unitId);
+
+  // Does it go off?
+  let fires: boolean;
+  let rolled = 0;
+  if (mine.onRoad === true) {
+    fires = true;
+  } else {
     const die = rollDie(next.rng);
     next = { ...next, rng: die.state };
-    if (die.value >= MINEFIELD.ogreTreadRoll) {
-      const lost = Math.min(unit.treads, MINEFIELD.ogreTreads);
-      next = updateOgre(next, unitId, (o) => ({ treads: o.treads - lost }));
-      next = log(
-        next,
-        'bad',
-        `${label} runs onto a minefield — rolled ${die.value}: ${lost} tread unit${lost === 1 ? '' : 's'} destroyed.`,
-        [unit.pos],
-      );
-      next = checkOgreDeath(next, { kind: 'ogreTreads', unit: unitId }, mine.owner);
-    } else {
-      next = log(next, 'warn', `${label} runs onto a minefield — rolled ${die.value}: no effect.`, [
-        unit.pos,
-      ]);
-    }
-    return next;
+    rolled = die.value;
+    fires = die.value >= (isOgre(unit) ? MINEFIELD.ogreTrigger : MINEFIELD.trigger);
   }
 
-  const defense = defenseOf(next, map, unit);
-  const odds = oddsFor(MINEFIELD.attack, defense);
-  if (odds.kind === 'none') {
-    return log(next, 'warn', `${label} runs onto a minefield, which cannot hurt it.`, [unit.pos]);
+  if (!fires) {
+    // "Mines that fail to go off are unaffected, but by entering the hex, the
+    // opposing player learns that it is mined."
+    next = {
+      ...next,
+      mines: minesOf(next).map((m) => (m.id === mine.id ? { ...m, revealed: true } : m)),
+    };
+    return log(
+      next,
+      'warn',
+      `${label} finds a minefield — rolled ${String(rolled)}: nothing goes off, but the field is on the map now.`,
+      [unit.pos],
+    );
   }
-  const die = rollDie(next.rng);
-  next = { ...next, rng: die.state };
-  const result = odds.kind === 'auto' ? 'X' : resolve(odds, die.value, 'normal');
-  next = log(
-    next,
-    result === 'X' ? 'bad' : result === 'D' ? 'warn' : 'info',
-    `${label} runs onto a minefield: ${describeOdds(odds)}` +
-      (odds.kind === 'auto' ? ' — automatic' : ` — rolled ${die.value}`) +
-      `: ${result === 'X' ? 'destroyed' : result === 'D' ? 'disabled' : 'no effect'}.`,
-    [unit.pos],
-  );
-  if (result !== 'NE') next = applyDamageToUnit(next, unitId, result, mine.owner);
-  return next;
+
+  // "The mine itself is destroyed."
+  next = removeMinefield(next, mine.id);
+  // "A mine explosion on a road or railroad creates a road cut."
+  if (isRouteHex(map, unit.pos) && !(next.routesCut ?? []).includes(key(unit.pos))) {
+    next = { ...next, routesCut: [...(next.routesCut ?? []), key(unit.pos)] };
+  }
+
+  if (isOgre(unit)) {
+    // "an Ogre rolls 1 die and loses that many tread units"
+    const die = rollDie(next.rng);
+    next = { ...next, rng: die.state };
+    const lost = Math.min(unit.treads, die.value);
+    next = updateOgre(next, unitId, (o) => ({ treads: o.treads - lost }));
+    next = log(
+      next,
+      'bad',
+      `${label} sets off a mine: ${String(lost)} tread unit${lost === 1 ? '' : 's'} gone.`,
+      [unit.pos],
+    );
+    return checkOgreDeath(next, { kind: 'ogreTreads', unit: unitId }, mine.owner);
+  }
+
+  if (unit.kind === 'unit' && unitClass(unit.classId).kind === 'infantry') {
+    // "infantry is reduced by 1 squad"
+    next = log(next, 'bad', `${label} sets off a mine: a squad is gone.`, [unit.pos]);
+    return applyDamageToUnit(next, unitId, 'D', mine.owner);
+  }
+
+  // "Armor units are destroyed."
+  next = log(next, 'bad', `${label} sets off a mine and is destroyed.`, [unit.pos]);
+  return destroyUnit(next, unitId, 'mined', mine.owner);
 };
 
 // ---------------------------------------------------------------------------
@@ -257,17 +315,32 @@ export const revealWithin = (state: GameState, h: Hex, radius: number): GameStat
 };
 
 /**
- * 13.05: a counter that ends a movement phase next to an enemy has been
- * seen — whichever of them moved. Asked as each movement phase closes. A
- * dummy sees nothing: there is nobody in it to look.
+ * A move, and what it gives away.
+ *
+ * "As soon as any camouflaged unit moves or fires, or as soon as an enemy unit
+ * moves through or fires on its hex, the ? marker is replaced by the real
+ * unit." (13.05) So a counter that moves has shown itself, and a counter whose
+ * hex somebody walked through has been found. A dummy "is removed when an
+ * enemy unit moves through or fires on its hex" (13.06), which `revealUnit`
+ * does for it.
+ *
+ * Standing still is what camouflage is for: nothing else uncovers a counter.
  */
-export const spotAdjacent = (state: GameState, _mover: PlayerId): GameState => {
-  let next = state;
-  const all = Object.values(state.units).filter(onBoard);
-  for (const u of all) {
-    if (!u.concealed) continue;
-    const seen = all.some((s) => s.owner !== u.owner && !isDummy(s) && distance(s.pos, u.pos) <= 1);
-    if (seen) next = revealUnit(next, u.id, ' An enemy is next to it.');
+export const revealOnMove = (
+  state: GameState,
+  moverId: UnitId,
+  path: readonly Hex[],
+): GameState => {
+  const mover = state.units[moverId];
+  let next = mover?.concealed ? revealUnit(state, moverId, ' It moved.') : state;
+  if (!mover) return next;
+  for (const h of path) {
+    for (const u of Object.values(next.units)) {
+      if (!onBoard(u) || !u.concealed || u.owner === mover.owner) continue;
+      if (u.pos.q === h.q && u.pos.r === h.r) {
+        next = revealUnit(next, u.id, ' The enemy came through its hex.');
+      }
+    }
   }
   return next;
 };

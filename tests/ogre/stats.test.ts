@@ -274,11 +274,16 @@ describe('provenance', () => {
     expect(UNIT_CLASSES.INF.unconfirmed).toBeUndefined();
   });
 
-  it('still flags the units no table covers', () => {
-    // No published summary lists the Truck, the Hovertruck or the Missile
-    // Crawler, and none of the three appears in a worked example.
+  it('still flags what the rules text does not print', () => {
+    // The Armor Units summary gives the Missile Crawler as D2/M1, so it is
+    // settled; the Truck is a transport and its movement allowance appears on
+    // the counter only.
+    expect(UNIT_CLASSES.MCRL.unconfirmed).toBeUndefined();
     expect(UNIT_CLASSES.TK.unconfirmed).toContain('move');
-    expect(UNIT_CLASSES.MCRL.unconfirmed).toContain('defense');
+    // A Laser is a building with Structure Points in print (12.01), so the
+    // defence strength standing in for that is still ours, not theirs.
+    expect(UNIT_CLASSES.LSR.unconfirmed).toContain('defense');
+    expect(UNIT_CLASSES.LSR.unconfirmed).not.toContain('attack');
   });
 
   it('every class carries a provenance note', () => {

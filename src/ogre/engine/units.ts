@@ -211,12 +211,12 @@ export const UNIT_CLASSES: Readonly<Record<UnitClassId, UnitClass>> = {
     mobility: 'heavyTracked',
     attack: 6,
     range: 6,
-    defense: 1,
+    defense: 2,
     move: 1,
     size: 4,
     armorUnits: 2,
     vp: 12,
-    note: 'Move 1 is quoted in 5.09 ("a Mobile Howitzer (movement of 1)"); attack 6, range 6 and D1 from the unit summary (12" at 2" to the hex); heavy tracked per 5.08.3; Size 4 and 2-tread ram damage from 6.02 and the Size Table; two armour units per 1.07.',
+    note: 'Move 1 is quoted in 5.09 ("a Mobile Howitzer (movement of 1)"); 6/6 and D2 from the Armor Units summary (12" at 2" to the hex); heavy tracked per 5.08.3; Size 4 and 2-tread ram damage from 6.02 and the Size Table; two armour units per 1.07.',
   },
 
   LAD: {
@@ -232,8 +232,7 @@ export const UNIT_CLASSES: Readonly<Record<UnitClassId, UnitClass>> = {
     size: 1,
     armorUnits: 1,
     vp: 6,
-    note: 'Fully stated: "It has Attack 2, Range 8, Defense 1, and Movement 0. It is considered a Size 1 unit when set up." (14.01)',
-    unconfirmed: ['vp'],
+    note: 'Fully stated: "It has Attack 2, Range 8, Defense 1, and Movement 0. It is considered a Size 1 unit when set up." (14.01) 6 VP as a "standard" armor unit (1.08). Its printed three-turn deployment from a cargo pallet (14.01) is not modelled: here it mounts and dismounts as a squad would.',
   },
 
   GEV: {
@@ -298,13 +297,12 @@ export const UNIT_CLASSES: Readonly<Record<UnitClassId, UnitClass>> = {
     attack: 0,
     range: 0,
     defense: 2,
-    move: 2,
+    move: 1,
     size: 4,
     armorUnits: 3,
     // 6 for the crawler plus 12 for the missile it still carries (1.08).
     vp: 18,
-    note: 'No attack strength of its own — "it attacks by firing the missile" (3.01). Three armour units, "two for the Missile and one for the Crawler" (1.07). Size 4 (Size Table).',
-    unconfirmed: ['defense', 'move'],
+    note: 'No attack strength of its own — "it attacks by firing the missile" (3.01). D2 and M1 from the Armor Units summary. Three armour units, "two for the Missile and one for the Crawler" (1.07). Size 4 (Size Table).',
   },
 
   CRL: {
@@ -316,12 +314,11 @@ export const UNIT_CLASSES: Readonly<Record<UnitClassId, UnitClass>> = {
     attack: 0,
     range: 0,
     defense: 2,
-    move: 2,
+    move: 1,
     size: 4,
     armorUnits: 0,
     vp: 6,
-    note: 'A Missile Crawler that has fired: "can do no further damage, but is worth victory points to the enemy if destroyed" (3.01). Cannot be chosen at setup.',
-    unconfirmed: ['defense', 'move'],
+    note: 'A Missile Crawler that has fired: "can do no further damage, but is worth victory points to the enemy if destroyed" (3.01). Cannot be chosen at setup. The same chassis as the MCRL, so D2 and M1; 6 VP as a "standard" armor unit or Crawler (1.08).',
   },
 
   CP: {
@@ -369,10 +366,13 @@ export const UNIT_CLASSES: Readonly<Record<UnitClassId, UnitClass>> = {
     move: 4,
     size: 1,
     armorUnits: 0,
-    vp: 6,
+    // "1 VP cost per Truck or 2 VP per Hovertruck" (15.03.6), and a Hovertruck
+    // costs "2 VP each for unit selection and victory calculation" (3.02.2) —
+    // so the purchase cost and the victory value are the same number.
+    vp: 1,
     carries: 2,
-    note: 'Stated: "It has no attack strength, and a defense strength of 0 – if attacked, it is automatically destroyed. In a town hex, and/or undergoing a spillover attack, it has a defense strength of 1. It can carry two squads of infantry." (3.03). Wheeled terrain costs are in 5.08.5.',
-    unconfirmed: ['move', 'vp'],
+    note: 'Stated: "It has no attack strength, and a defense strength of 0 – if attacked, it is automatically destroyed. In a town hex, and/or undergoing a spillover attack, it has a defense strength of 1. It can carry two squads of infantry." (3.03). Wheeled terrain costs are in 5.08.5. 1 VP per 15.03.6. Its movement allowance is not printed in the rules text and is still a placeholder.',
+    unconfirmed: ['move'],
   },
 
   HT: {
@@ -408,8 +408,8 @@ export const UNIT_CLASSES: Readonly<Record<UnitClassId, UnitClass>> = {
     armorUnits: 0,
     vp: 12,
     carries: 6,
-    note: 'Provisional. Section 9 is implemented from its shape rather than its text: the train moves only along rail links at its speed marker, which changes by one a turn (9.02); "A D result does not affect the train" (7.11); a ram against it is resolved at the Size Table’s train column (9.05). Its defence, size, capacity and victory value are placeholders to correct against the counter.',
-    unconfirmed: ['defense', 'size', 'vp'],
+    note: '"The train’s defense strength is always 3 ... Only an X result affects the train." (9.03) The train moves only along rail hexes at its speed marker, which changes by one marker a turn (9.02, 9.02.1); a ram against it is resolved at the Size Table’s train column (9.05). Three things here are still short of the printed rule: a real train is two counters two hexes long (3.03, 9.01), its speed markers are ranges (M0/1, M2/3, M4/5, M6/7 — so a top speed of 7, not 4), and each half carries 12 "size points" rather than a squad count (9.07). Its size and victory value are set by the scenario.',
+    unconfirmed: ['size', 'vp'],
   },
 
   LSR: {
@@ -418,16 +418,16 @@ export const UNIT_CLASSES: Readonly<Record<UnitClassId, UnitClass>> = {
     abbr: 'LSR',
     kind: 'structure',
     mobility: 'immobile',
-    attack: 3,
-    range: 99,
+    attack: 2,
+    range: 30,
     defense: 2,
     move: 0,
     size: 2,
     armorUnits: 2,
     vp: 12,
     laser: 'standard',
-    note: 'Section 12: "the only rule in the game with line of sight". Fires at any range along a clear line; forest, swamp, town and rubble in between block it (12.02). The attack and defence values are placeholders to correct against the counter.',
-    unconfirmed: ['attack', 'defense', 'vp'],
+    note: '"A standard Laser turret has a range of 30 hexes. Its line of fire is blocked by ridge hexsides or any raised terrain – i.e., forest, swamp ..., towns, or rubble." (12.02) It has "an attack strength of 2" and may fire at a unit only if it did not fire at all during the preceding enemy turn (12.06); overrun, it fires at double strength (12.09). In the printed rules a Laser is a building with Structure Points (12.01, 12.07: damaged at 10 SP, destroyed at 0); the defence strength here stands in for that until buildings carry the Laser.',
+    unconfirmed: ['defense', 'vp'],
   },
 
   LTWR: {
@@ -436,16 +436,16 @@ export const UNIT_CLASSES: Readonly<Record<UnitClassId, UnitClass>> = {
     abbr: 'LTWR',
     kind: 'structure',
     mobility: 'immobile',
-    attack: 3,
-    range: 99,
+    attack: 2,
+    range: 60,
     defense: 4,
     move: 0,
     size: 4,
     armorUnits: 3,
     vp: 18,
     laser: 'tower',
-    note: 'Section 12.03: fires over intervening terrain but cannot fire into forest, swamp, town or rubble, which also hide a unit from it. Values are placeholders to correct against the counter.',
-    unconfirmed: ['attack', 'defense', 'vp'],
+    note: '"A Laser Tower mounts the same type of Laser that a standard emplacement does. Its height makes it more vulnerable, but also gives it a much greater range: 60 hexes. A Laser Tower can fire over any type of terrain, but cannot attack a unit that is actually in a town, swamp, forest, or rubble hex." (12.03) Attack 2 per 12.06, as the standard Laser. Like the Laser it is a building with Structure Points in print (12.01); the defence strength stands in for that.',
+    unconfirmed: ['defense', 'vp'],
   },
 
   INF: {
@@ -537,12 +537,11 @@ export const UNIT_CLASSES: Readonly<Record<UnitClassId, UnitClass>> = {
     attack: 0,
     range: 0,
     defense: 0,
-    move: 3,
+    move: 0,
     size: 1,
     armorUnits: 0,
     vp: 0,
-    note: 'Provisional. 13.06 is implemented from its shape: a face-down counter that moves like a light vehicle and is removed the moment it is revealed. Its movement is a placeholder to correct against the printed rule.',
-    unconfirmed: ['move'],
+    note: '"A dummy cannot move or fire, and is removed when an enemy unit moves through or fires on its hex." (13.06) So Movement 0: a dummy sits where it was set up and bluffs.',
   },
 };
 
@@ -558,6 +557,21 @@ export const UNIT_CLASSES: Readonly<Record<UnitClassId, UnitClass>> = {
 export const HEAVY_WEAPON = { attack: 3, range: 4 } as const;
 
 /** The train's speed marker runs from a standstill to this (9.02). Provisional. */
+/**
+ * A Superheavy's movement against the tread units left on its record sheet.
+ *
+ * The sheet printed with 13.07 runs a move track of 3, 2, 1, 0 against its 18
+ * tread units. The thresholds are on the sheet rather than in the rules text,
+ * so the bands here are even sixths: full move down to 13 treads, then a hex
+ * less for every six lost.
+ */
+export const superheavyMove = (treads: number): number => {
+  if (treads >= 13) return 3;
+  if (treads >= 7) return 2;
+  if (treads >= 1) return 1;
+  return 0;
+};
+
 export const TRAIN_MAX_SPEED = 4;
 
 /** A unit that fires along a line of sight rather than at a printed range. */

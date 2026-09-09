@@ -19,12 +19,13 @@
  */
 
 import { BRIDGE, applySheetDamage, bridgeStands, demolishBridge, sheetOf } from './engineering.js';
-import { distance, eq, key } from './hex.js';
+import { type Hex, distance, eq, key } from './hex.js';
 import { type GameMap, terrainAt } from './map.js';
 import { rollDie } from './rng.js';
 import {
   type DamageResult,
   type Odds,
+  AUTO_KILL,
   applyToTarget,
   describeOdds,
   oddsFor,
@@ -143,6 +144,23 @@ const denyPreview = (reason: string): AttackPreview => ({
   treadHitOn: 5,
   summary: reason,
 });
+
+/**
+ * A gun standing in one of the bridge's own two hexes.
+ *
+ * "If a stream bridge is attacked by a unit in one of its own two hexes, it is
+ * automatically destroyed." (13.02) — charges walked out onto the span rather
+ * than gunnery, so there is nothing to roll.
+ */
+const pointBlankOnBridge = (
+  state: GameState,
+  ref: AttackerRef,
+  target: { readonly hex: Hex; readonly toward: Hex },
+): boolean => {
+  const u = state.units[ref.unit];
+  if (!u || !onBoard(u)) return false;
+  return eq(u.pos, target.hex) || eq(u.pos, target.toward);
+};
 
 /**
  * Everything the interface needs to show an attack before it is committed, and
@@ -280,6 +298,20 @@ export const previewAttack = (
     if (!state.options.terrainDamage) return denyPreview('terrain damage is not in play');
     if (!bridgeStands(state, map, target.hex, target.toward)) {
       return denyPreview('there is no bridge standing there');
+    }
+    // "If a stream bridge is attacked by a unit in one of its own two hexes,
+    // it is automatically destroyed." (13.02) Charges under the span, not
+    // gunnery, so no odds are rolled at all.
+    if (attackers.some((a) => pointBlankOnBridge(state, a, target))) {
+      return {
+        ok: true,
+        attackStrength: total,
+        defenseStrength: BRIDGE.defense,
+        odds: AUTO_KILL,
+        treadAttack: false,
+        treadHitOn: 5,
+        summary: 'charges under the span — the bridge comes down',
+      };
     }
     const odds = oddsFor(total, BRIDGE.defense);
     return {
