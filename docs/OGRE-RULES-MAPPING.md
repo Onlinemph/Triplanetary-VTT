@@ -383,6 +383,12 @@ engine's shape.
 
 ---
 
+## The numbers still to confirm
+
+`docs/OGRE-UNCONFIRMED.md` is the checklist: every value set from a rule's
+shape rather than its text, what the code assumes now, and where the printed
+answer lives. It is written to be filled in against the physical game.
+
 ## Reporting a rules bug
 
 Bug reports about rules accuracy are the most valuable kind. Cite the section
