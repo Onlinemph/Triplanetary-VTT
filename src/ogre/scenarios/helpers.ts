@@ -179,7 +179,8 @@ export const withSetup = (
   }
   return {
     ...next,
-    setup: { order, index: 0, zones, ...(minefields > 0 ? { mines } : {}) },
+    setup: { order, index: 0, zones },
+    ...(minefields > 0 ? { minesLeft: mines } : {}),
   };
 };
 

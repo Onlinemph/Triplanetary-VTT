@@ -65,7 +65,13 @@ import {
 import { canRam } from '../engine/ram.js';
 import { canOverrun, overrunActor, overrunUnits, previewOverrunAttack } from '../engine/overrun.js';
 import { reactionTurn, reserveEntryHexes, reservesOf } from '../engine/reserves.js';
-import { launchCheck, loadedCrawlers } from '../engine/missiles.js';
+import {
+  type BlastRow,
+  CRUISE_MISSILE,
+  blastEffect,
+  launchCheck,
+  loadedCrawlers,
+} from '../engine/missiles.js';
 import { legalSetupHexes, zoneOf } from '../engine/setup.js';
 import { isUnknown, mineAt, minefieldsLeft } from '../engine/concealment.js';
 import { DEFAULT_WEIGHTS, type Role, type Weights, roleOf } from './weights.js';
@@ -1174,9 +1180,17 @@ const planFire = (ctx: Ctx): Command[] => {
   return out;
 };
 
-/** Where a cruise missile does the most harm to them and the least to us. */
+/**
+ * Where a cruise missile does the most harm to them and the least to us.
+ *
+ * Scored on the printed blast table (10.04): what each counter under it
+ * actually stands to suffer at its own distance, not a flat ring. Ground zero
+ * is certain — "Remove all units, buildings, etc., in the hex it strikes" —
+ * and everything outside is the chance of an X plus half the chance of a D.
+ */
 const bestMissileAim = (ctx: Ctx, crawler: Unit): Hex | null => {
   const { state, map, player, w } = ctx;
+  const reach = CRUISE_MISSILE.blastReach;
   let best: { hex: Hex; value: number } | null = null;
   for (const h of allHexes(map)) {
     if (launchCheck(state, map, crawler, h)) continue;
@@ -1184,18 +1198,41 @@ const bestMissileAim = (ctx: Ctx, crawler: Unit): Hex | null => {
     for (const u of Object.values(state.units)) {
       if (!onBoard(u)) continue;
       const d = distance(u.pos, h);
-      if (d > 2) continue;
+      if (d > reach) continue;
       const worthOf = isOgre(u) ? ogreType(u.typeId).vp * w['cm.ogreVp'] : worth(ctx, u);
-      const factor = d === 0 ? 1 : d === 1 ? w['cm.ring1'] : w['cm.ring2'];
-      value += (u.owner === player ? -w['cm.ownLoss'] : 1) * worthOf * factor;
+      // At ground zero nothing survives; outside it, read the table.
+      let share = 1;
+      if (d > 0) {
+        const row = isOgre(u) ? 'ogreComponent' : blastRowFor(u);
+        const odds = blastEffect(row, d);
+        if (odds.kind === 'none') continue;
+        const chance = oddsChance(odds);
+        share = (chance.x + chance.d / 2) / 6;
+      }
+      value += (u.owner === player ? -w['cm.ownLoss'] : 1) * worthOf * share;
     }
     for (const b of Object.values(state.buildings)) {
-      if (b.destroyed || distance(b.pos, h) > 1) continue;
-      value += (b.owner === player ? -w['cm.ownBuilding'] : 1) * w['cm.building'];
+      if (b.destroyed) continue;
+      const d = distance(b.pos, h);
+      if (d > 2) continue;
+      const share = d === 0 ? 1 : 0.5;
+      value += (b.owner === player ? -w['cm.ownBuilding'] : 1) * w['cm.building'] * share;
     }
     if (!best || value > best.value) best = { hex: h, value };
   }
   return best && best.value >= w['cm.min'] ? best.hex : null;
+};
+
+/** Which row of 10.04's table a counter reads, for the aim above. */
+const blastRowFor = (u: Unit): BlastRow => {
+  if (u.kind !== 'unit') return 'ogreComponent';
+  const cls = unitClass(u.classId);
+  if (cls.kind === 'infantry') return 'infantry';
+  if (cls.mobility === 'gev' || cls.defense === 0) return 'd0';
+  const d = printedDefense(u);
+  if (d <= 1) return 'd1';
+  if (d === 2) return 'd2';
+  return 'd3';
 };
 
 // ---------------------------------------------------------------------------

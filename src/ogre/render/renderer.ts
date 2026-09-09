@@ -184,7 +184,6 @@ export class MapRenderer {
     this.drawBuildings(state, view, size);
     this.drawMines(state, view, size);
     this.drawUnits(state, view, size);
-    this.drawMissiles(state, size);
     if (view.aim) this.drawAim(view.aim, size);
     if (view.showHexNumbers && size >= LOD.hexLabelMin) this.drawHexNumbers(hexes, size);
   }
@@ -308,42 +307,6 @@ export class MapRenderer {
         ctx.font = `600 ${Math.round(size * 0.13)}px ${THEME.monoFont}`;
         ctx.fillText(`${b.structurePoints} SP`, c.x, y + barH / 2);
       }
-    }
-  }
-
-  /** Cruise missiles in flight: a bright dart on a dashed line to the target. */
-  private drawMissiles(state: GameState, size: number): void {
-    const ctx = this.ctx;
-    for (const m of Object.values(state.missiles ?? {})) {
-      const from = toPixel(m.pos, size);
-      const to = toPixel(m.target, size);
-      ctx.save();
-      ctx.setLineDash([size * 0.18, size * 0.18]);
-      ctx.strokeStyle = rgba(THEME.threat, 0.6);
-      ctx.lineWidth = Math.max(1, size * 0.05);
-      ctx.beginPath();
-      ctx.moveTo(from.x, from.y);
-      ctx.lineTo(to.x, to.y);
-      ctx.stroke();
-      ctx.setLineDash([]);
-      ctx.restore();
-
-      const angle = Math.atan2(to.y - from.y, to.x - from.x);
-      ctx.save();
-      ctx.translate(from.x, from.y);
-      ctx.rotate(angle);
-      ctx.fillStyle = state.players[m.owner]?.color ?? THEME.threat;
-      ctx.strokeStyle = THEME.counterEdge;
-      ctx.lineWidth = Math.max(1, size * 0.04);
-      ctx.beginPath();
-      ctx.moveTo(size * 0.5, 0);
-      ctx.lineTo(-size * 0.3, size * 0.22);
-      ctx.lineTo(-size * 0.15, 0);
-      ctx.lineTo(-size * 0.3, -size * 0.22);
-      ctx.closePath();
-      ctx.fill();
-      ctx.stroke();
-      ctx.restore();
     }
   }
 
@@ -758,7 +721,7 @@ export class MapRenderer {
   private drawMines(state: GameState, view: RenderView, size: number): void {
     const ctx = this.ctx;
     // Entrenchments (15): a ring of trench around the hex.
-    for (const k of state.entrenched ?? []) {
+    for (const k of Object.keys(state.entrenched ?? {})) {
       const comma = k.indexOf(',');
       const h = { q: Number(k.slice(0, comma)), r: Number(k.slice(comma + 1)) };
       this.path(ctx, h, size, size * 0.2);

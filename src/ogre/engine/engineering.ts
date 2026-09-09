@@ -36,7 +36,15 @@ import {
   neighbors,
   sideKey,
 } from './hex.js';
-import { type GameMap, allHexes, isBridge, terrainAt } from './map.js';
+import {
+  type GameMap,
+  allHexes,
+  hasRoute,
+  isBridge,
+  isRouteHex,
+  sideFeatureBetween,
+  terrainAt,
+} from './map.js';
 import type { DamageResult } from './crt.js';
 import { rollDie } from './rng.js';
 import {
@@ -46,12 +54,16 @@ import {
   type Unit,
   type UnitId,
   activePlayer,
+  canAct,
+  isOgre,
   onBoard,
+  unitsAt,
 } from './types.js';
-import { destroyUnit, log, unitName, updateAnyUnit } from './state.js';
+import { destroyUnit, log, setSideOverride, unitName, updateAnyUnit, withUnit } from './state.js';
 import { baseTerrain } from './terrain.js';
 import { unitClass } from './units.js';
-import { mineAt, removeMinefield } from './concealment.js';
+import { mineAt, minefieldsLeft, plantMinefield, removeMinefield } from './concealment.js';
+import { OGRE_WEAPONS, ogreType } from './ogres.js';
 
 // ---------------------------------------------------------------------------
 // 13.07 The Superheavy's record sheet
@@ -246,60 +258,269 @@ export const isDrone = (u: Unit): boolean => u.kind === 'unit' && u.classId === 
 // 15 Combat engineering
 // ---------------------------------------------------------------------------
 
-export type EngineerTask = 'entrench' | 'clearMines' | 'demolish';
+/**
+ * The tasks of Section 15, in two families.
+ *
+ * "In the world of Ogre, there are two types of tasks that may be performed on
+ * the nuclear battlefield: engineering tasks and Vulcan tasks. During a game,
+ * either Combat Engineers or Vulcans may perform engineering tasks, whereas
+ * only Vulcans and/or their Heavy Drones may perform Vulcan tasks." (15.00)
+ */
+export type EngineerTask =
+  // 15.03 — any Sapper
+  | 'entrench'
+  | 'layMine'
+  | 'clearMines'
+  | 'repairRoute'
+  | 'gradeRidge'
+  | 'finishOgre'
+  | 'demolish'
+  // 15.04 — Vulcans and their Heavy Drones
+  | 'freeStuck'
+  | 'repairRail'
+  | 'clearDamagedRoad'
+  | 'repairWeapon'
+  | 'repairTreads';
+
+/** The printed roll for each task, from the table beside 15.04.1. */
+export const TASK_ROLL: Readonly<Record<EngineerTask, number>> = {
+  // "Placing a mine 5+ ... Disarming an enemy mine 5+ ... Digging
+  // entrenchments variable ... Repair road/bridge stream/build ramp 6 ...
+  // Grading ridges 5+ ... Finishing off an Ogre 4+ or 6"
+  entrench: 1,
+  layMine: 5,
+  clearMines: 5,
+  repairRoute: 6,
+  gradeRidge: 5,
+  finishOgre: 4,
+  demolish: 1,
+  // 15.04
+  freeStuck: 6,
+  repairRail: 5,
+  clearDamagedRoad: 4,
+  repairWeapon: 6,
+  repairTreads: 6,
+};
+
+const VULCAN_TASKS: readonly EngineerTask[] = [
+  'freeStuck',
+  'repairRail',
+  'clearDamagedRoad',
+  'repairWeapon',
+  'repairTreads',
+];
+
+export const isVulcanTask = (task: EngineerTask): boolean => VULCAN_TASKS.includes(task);
 
 export const isEngineer = (u: Unit): boolean => u.kind === 'unit' && u.classId === 'CE';
+export const isHeavyDrone = (u: Unit): boolean => u.kind === 'unit' && u.classId === 'HDRN';
+export const isVulcan = (u: Unit): boolean => isOgre(u) && u.typeId === 'VULCAN';
+/** "the term 'Sapper' encompasses human Combat Engineers as well as Vulcans and/or their Heavy Drones." */
+export const isSapper = (u: Unit): boolean => isEngineer(u) || isHeavyDrone(u) || isVulcan(u);
 
-export const entrenchedOf = (state: GameState): readonly string[] => state.entrenched ?? [];
+// --- Entrenchments ---------------------------------------------------------
 
-export const entrenchedAt = (state: GameState, h: Hex): boolean =>
-  entrenchedOf(state).includes(key(h));
+export const entrenchedOf = (state: GameState): Readonly<Record<string, number>> =>
+  state.entrenched ?? {};
+
+/** Squads an entrenchment here can shelter; 0 when the hex is not dug in. */
+export const entrenchmentAt = (state: GameState, h: Hex): number =>
+  entrenchedOf(state)[key(h)] ?? 0;
+
+export const entrenchedAt = (state: GameState, h: Hex): boolean => entrenchmentAt(state, h) > 0;
+
+// --- Dice pools ------------------------------------------------------------
 
 /**
- * What an engineer counter could do from where it stands right now, for the
- * interface and the tests. Empty once it has moved.
+ * The dice a hex musters for an engineering task (15.03).
+ *
+ * "Each squad of engineers allows one extra die to be rolled. A Heavy Drone
+ * gives two dice; a Vulcan with two arms gives four." A single squad is one
+ * die, so the count is simply the sum.
  */
-export const engineerTasks = (
-  state: GameState,
-  map: GameMap,
-  u: Unit,
-): { task: EngineerTask; toward?: Hex; label: string }[] => {
-  if (!isEngineer(u) || !onBoard(u) || u.kind !== 'unit') return [];
-  if (u.firedThisPhase || u.disabled !== 'none' || u.ridingOn) return [];
-  const out: { task: EngineerTask; toward?: Hex; label: string }[] = [];
-  const ground = baseTerrain(terrainAt(map, u.pos, state.terrainOverrides));
-  // "Sappers may protect infantry in clear, forest, or rubble terrain through
-  // entrenching ... Entrenchments in any terrain other than clear, forest, or
-  // rubble offer no benefit." (15.03.5)
+export const engineeringDice = (state: GameState, at: Hex, owner: PlayerId): number => {
+  let dice = 0;
+  for (const u of unitsAt(state, at)) {
+    if (u.owner !== owner || !canAct(u)) continue;
+    if (isEngineer(u) && u.kind === 'unit') dice += u.squads;
+    else if (isHeavyDrone(u)) dice += 2;
+    else if (isVulcan(u)) dice += 4;
+  }
+  return dice;
+};
+
+/**
+ * The dice for a Vulcan task (15.04): "A Vulcan rolls two dice for success;
+ * each Heavy Drone that assists contributes one die."
+ */
+export const vulcanDice = (state: GameState, at: Hex, owner: PlayerId): number => {
+  let dice = 0;
+  for (const u of unitsAt(state, at)) {
+    if (u.owner !== owner || !canAct(u)) continue;
+    if (isVulcan(u)) dice += 2;
+    else if (isHeavyDrone(u)) dice += 1;
+  }
+  return dice;
+};
+
+const heavyDronesAt = (state: GameState, at: Hex, owner: PlayerId): number =>
+  unitsAt(state, at).filter((u) => u.owner === owner && isHeavyDrone(u) && canAct(u)).length;
+
+const vulcanAt = (state: GameState, at: Hex, owner: PlayerId): boolean =>
+  unitsAt(state, at).some((u) => u.owner === owner && isVulcan(u) && canAct(u));
+
+/** Roll the pool; the best die decides, since any one of them may carry it. */
+const rollPool = (state: GameState, dice: number): { state: GameState; best: number } => {
+  let next = state;
+  let best = 0;
+  for (let i = 0; i < Math.max(1, dice); i++) {
+    const d = rollDie(next.rng);
+    next = { ...next, rng: d.state };
+    if (d.value > best) best = d.value;
+  }
+  return { state: next, best };
+};
+
+// --- Once a turn -----------------------------------------------------------
+
+const triedKey = (task: EngineerTask, at: Hex): string => `${task}:${key(at)}`;
+
+export const taskTried = (state: GameState, task: EngineerTask, at: Hex): boolean =>
+  (state.tasksTried ?? []).includes(triedKey(task, at));
+
+/** Cleared as each player-turn opens. */
+export const clearTasks = (state: GameState): GameState =>
+  (state.tasksTried?.length ?? 0) === 0 ? state : { ...state, tasksTried: [] };
+
+// --- What is on offer ------------------------------------------------------
+
+export interface TaskOffer {
+  readonly task: EngineerTask;
+  readonly toward?: Hex;
+  readonly target?: UnitId;
+  readonly weapon?: string;
+  readonly label: string;
+}
+
+/**
+ * What this Sapper could attempt from where it stands, for the interface and
+ * the tests. Empty once it has fired or moved.
+ */
+export const engineerTasks = (state: GameState, map: GameMap, u: Unit): TaskOffer[] => {
+  if (!isSapper(u) || !onBoard(u)) return [];
+  if (u.kind === 'unit' && (u.firedThisPhase || u.disabled !== 'none' || u.ridingOn)) return [];
+  if (u.kind === 'unit' && u.moveUsed > 0) return [];
+  if (isOgre(u) && u.moveUsed > 0) return [];
+  const out: TaskOffer[] = [];
+  const here = u.pos;
+  const owner = u.owner;
+  const ground = baseTerrain(terrainAt(map, here, state.terrainOverrides));
+  const raw = terrainAt(map, here, state.terrainOverrides);
+  const cut = (state.routesCut ?? []).includes(key(here));
+
+  // 15.03.5: "Sappers may protect infantry in clear, forest, or rubble terrain."
   const diggable = ground === 'clear' || ground === 'forest' || ground === 'rubble';
-  if (!entrenchedAt(state, u.pos) && diggable) {
-    out.push({ task: 'entrench', label: 'Entrench this hex' });
+  if (!entrenchedAt(state, here) && diggable) {
+    out.push({ task: 'entrench', label: 'Dig entrenchments' });
   }
-  const mine = mineAt(state, u.pos);
-  if (mine && (mine.revealed || mine.owner === u.owner)) {
-    out.push({ task: 'clearMines', label: 'Clear the minefield here' });
+  // 15.03.1
+  if (minefieldsLeft(state, owner) > 0 && !mineAt(state, here)) {
+    out.push({ task: 'layMine', label: 'Plant a mine' });
   }
-  for (const n of neighbors(u.pos)) {
-    if (bridgeStands(state, map, u.pos, n)) {
+  // 15.03.2 and 15.03.4
+  const mine = mineAt(state, here);
+  if (mine && (mine.revealed || mine.owner === owner)) {
+    out.push({
+      task: 'clearMines',
+      label: mine.owner === owner ? 'Lift our own mine' : 'Disarm the mine',
+    });
+  }
+  // 15.03.6: a road cut in one spot, mended. Not damaged or rubbled ground.
+  if (cut && isRouteHex(map, here) && raw !== 'damagedTown' && raw !== 'damagedForest') {
+    out.push({ task: 'repairRoute', label: 'Mend the road here' });
+  }
+  // 15.03.7
+  for (const n of neighbors(here)) {
+    if (sideFeatureBetween(map, here, n, state.sideOverrides) === 'ridge') {
+      out.push({ task: 'gradeRidge', toward: n, label: `Grade the ridge toward ${key(n)}` });
+    }
+  }
+  // 15.03.8: an Ogre with nothing left to shoot with, in this hex.
+  for (const e of unitsAt(state, here)) {
+    if (e.owner === owner || !isOgre(e)) continue;
+    const live = e.weapons.filter((w) => !w.destroyed);
+    if (live.length === 0) {
+      out.push({ task: 'finishOgre', target: e.id, label: `Finish off ${e.typeId}` });
+    } else if (live.every((w) => w.kind === 'ap') && (isVulcan(u) || isHeavyDrone(u))) {
+      out.push({ task: 'finishOgre', target: e.id, label: `Plant an execution charge` });
+    }
+  }
+  // 13.02: the bridge you are standing on.
+  for (const n of neighbors(here)) {
+    if (bridgeStands(state, map, here, n)) {
       out.push({ task: 'demolish', toward: n, label: `Drop the bridge to ${key(n)}` });
+    }
+  }
+
+  // --- 15.04, for the Vulcan and its Drones ---------------------------------
+  if (!isVulcan(u) && !isHeavyDrone(u)) return out;
+
+  if (cut && isRouteHex(map, here)) {
+    // 15.04.2 rail, 15.04.3 roads cut by damaged terrain.
+    if (hasRoute(map, here, 'rail') && raw !== 'damagedTown' && raw !== 'damagedForest') {
+      out.push({ task: 'repairRail', label: 'Relay the rail' });
+    }
+    if (raw === 'damagedTown' || raw === 'damagedForest') {
+      out.push({ task: 'clearDamagedRoad', label: 'Clear the road through the wreckage' });
+    }
+  }
+  for (const friend of unitsAt(state, here)) {
+    if (friend.owner !== owner || friend.id === u.id) continue;
+    // 15.04.1
+    if (friend.stuck)
+      out.push({ task: 'freeStuck', target: friend.id, label: 'Pull it out of the swamp' });
+    if (!isOgre(friend)) continue;
+    // 15.04.5 and 15.04.6
+    if (friend.treads < ogreType(friend.typeId).treads) {
+      out.push({ task: 'repairTreads', target: friend.id, label: 'Repair treads in the field' });
+    }
+    for (const w of friend.weapons) {
+      if (!w.destroyed || w.beyondRepair === true) continue;
+      // "Destroyed external missiles and missile racks are always too damaged
+      // to attempt field repair." (15.04.5)
+      if (w.kind === 'missile' || w.kind === 'missileRack') continue;
+      out.push({
+        task: 'repairWeapon',
+        target: friend.id,
+        weapon: w.id,
+        label: 'Attempt a field repair',
+      });
+      break;
     }
   }
   return out;
 };
 
+// --- Doing the work --------------------------------------------------------
+
+export interface TaskOptions {
+  readonly toward?: Hex;
+  readonly target?: UnitId;
+  readonly weapon?: string;
+}
+
 /**
- * An engineering task, in place of the squad's shot.
+ * Attempt one task, in place of the Sapper's shot.
  *
  * "To attempt to perform an engineering task, one or more Combat Engineer
  * squads and/or Vulcans must start their turn in the hex they wish to perform
- * the task, and stay in that hex for the duration of that turn ... Attempting
- * a task counts as that squad's 'attack' for that turn, and is made during the
- * Fire Phase." (15.03) So the engineers stand where the work is and spend
- * their fire on it.
- *
- * Only the tasks a single squad can finish in a turn are here. The rulebook's
- * dice pools — extra squads and Drones each add a die, a Vulcan four — are not
- * modelled: one squad, one attempt.
+ * the task, and stay in that hex for the duration of that turn. Tasks are
+ * assigned a number that must be rolled on one die for success ... There is no
+ * limit as to the number of Sappers that may help to perform any specific task
+ * on a turn, but each Sapper may make only one attempt per turn, and the
+ * specific task may be attempted only once per turn regardless of how many
+ * Sappers participate ... Attempting a task counts as that squad's 'attack'
+ * for that turn, and is made during the Fire Phase." (15.03)
  */
 export const engineer = (
   state: GameState,
@@ -308,66 +529,379 @@ export const engineer = (
   unitId: UnitId,
   task: EngineerTask,
   toward?: Hex,
+  opts: TaskOptions = {},
 ): { state: GameState; ok: boolean; reason?: string } => {
   if (state.phase !== 'fire')
     return { state, ok: false, reason: 'engineering is done in the fire phase (15.03)' };
   if (activePlayer(state) !== by) return { state, ok: false, reason: 'it is not your turn' };
   const u = state.units[unitId];
-  if (!u || !onBoard(u) || u.kind !== 'unit') return { state, ok: false, reason: 'no such unit' };
+  if (!u || !onBoard(u)) return { state, ok: false, reason: 'no such unit' };
   if (u.owner !== by) return { state, ok: false, reason: 'not your unit' };
-  if (!isEngineer(u)) return { state, ok: false, reason: 'only combat engineers do that' };
-  if (u.disabled !== 'none') return { state, ok: false, reason: 'disabled engineers do no work' };
-  if (u.ridingOn) return { state, ok: false, reason: 'the engineers must dismount first' };
-  if (u.firedThisPhase) {
+  if (!isSapper(u)) return { state, ok: false, reason: 'only Sappers do engineering work (15.00)' };
+  if (u.kind === 'unit' && u.disabled !== 'none')
+    return { state, ok: false, reason: 'disabled engineers do no work' };
+  if (u.kind === 'unit' && u.ridingOn)
+    return { state, ok: false, reason: 'the engineers must dismount first' };
+  if (u.kind === 'unit' && u.firedThisPhase)
     return { state, ok: false, reason: 'the work is their attack for the turn: they have fired' };
-  }
-  if (u.moveUsed > 0) {
+  if (u.moveUsed > 0)
     return { state, ok: false, reason: 'they must start the turn in the hex and stay in it' };
+  if (isVulcanTask(task) && !isVulcan(u) && !isHeavyDrone(u)) {
+    return { state, ok: false, reason: 'only a Vulcan or its Heavy Drones can do that (15.04)' };
+  }
+  if (taskTried(state, task, u.pos)) {
+    return { state, ok: false, reason: 'that work has already been tried here this turn (15.03)' };
   }
 
-  let next = state;
+  const here = u.pos;
+  const where = toward ?? opts.toward;
+  const dice = isVulcanTask(task) ? vulcanDice(state, here, by) : engineeringDice(state, here, by);
+
+  const done = (s: GameState): GameState => {
+    let out: GameState = { ...s, tasksTried: [...(s.tasksTried ?? []), triedKey(task, here)] };
+    if (u.kind === 'unit') {
+      out = updateAnyUnit(out, unitId, () => ({ firedThisPhase: true, squadsFired: u.squads }));
+    }
+    return out;
+  };
+  const refuse = (reason: string) => ({ state, ok: false, reason });
+
   switch (task) {
+    // --- 15.03 ------------------------------------------------------------
     case 'entrench': {
-      const ground = baseTerrain(terrainAt(map, u.pos, state.terrainOverrides));
+      const ground = baseTerrain(terrainAt(map, here, state.terrainOverrides));
       if (ground !== 'clear' && ground !== 'forest' && ground !== 'rubble') {
+        return refuse('entrenchments only help in clear, forest or rubble (15.03.5)');
+      }
+      if (entrenchedAt(state, here)) return refuse('that hex is entrenched already');
+      const roll = rollPool(state, dice);
+      // "On a roll of a 1-4, one squad-equivalent ... protect one squad ... a
+      // roll of a 5 ... two squads, and a roll of a 6 a 3-squad entrenchment."
+      const squads = roll.best >= 6 ? 3 : roll.best === 5 ? 2 : 1;
+      let next: GameState = {
+        ...roll.state,
+        entrenched: { ...entrenchedOf(roll.state), [key(here)]: squads },
+      };
+      next = log(
+        next,
+        'good',
+        `${unitName(u)} dig in at ${key(here)} — rolled ${roll.best}: cover for ${squads} squad${squads === 1 ? '' : 's'}.`,
+        [here],
+      );
+      return { state: done(next), ok: true };
+    }
+
+    case 'layMine': {
+      if (minefieldsLeft(state, by) <= 0) return refuse('no mines left in this scenario');
+      if (mineAt(state, here)) return refuse('there is a mine here already');
+      const roll = rollPool(state, dice);
+      if (roll.best < TASK_ROLL.layMine) {
         return {
-          state,
-          ok: false,
-          reason: 'entrenchments only help in clear, forest or rubble (15.03.5)',
+          state: done(
+            log(roll.state, 'info', `${unitName(u)} fail to seat the mine — rolled ${roll.best}.`, [
+              here,
+            ]),
+          ),
+          ok: true,
         };
       }
-      if (entrenchedAt(state, u.pos))
-        return { state, ok: false, reason: 'that hex is entrenched already' };
-      next = { ...next, entrenched: [...entrenchedOf(next), key(u.pos)] };
-      next = log(next, 'info', `${unitName(u)} entrench ${key(u.pos)}.`, [u.pos]);
-      break;
+      const next = log(
+        plantMinefield(roll.state, map, by, here),
+        'good',
+        `${unitName(u)} plant a mine.`,
+        [here],
+      );
+      return { state: done(next), ok: true };
     }
+
     case 'clearMines': {
-      const mine = mineAt(state, u.pos);
-      if (!mine) return { state, ok: false, reason: 'there is no minefield here' };
-      if (!mine.revealed && mine.owner !== u.owner) {
-        return { state, ok: false, reason: 'nobody knows of a minefield here' };
+      const mine = mineAt(state, here);
+      if (!mine) return refuse('there is no minefield here');
+      // "Any friendly Sapper in the mined hex can automatically disarm
+      // successfully placed mines without requiring a roll." (15.03.2)
+      if (mine.owner === by) {
+        const next = log(
+          removeMinefield(state, mine.id),
+          'info',
+          `${unitName(u)} lift their own mine.`,
+          [here],
+        );
+        return { state: done(next), ok: true };
       }
-      next = removeMinefield(next, mine.id);
-      next = log(next, 'info', `${unitName(u)} clear the minefield at ${key(u.pos)}.`, [u.pos]);
-      break;
+      if (!mine.revealed) return refuse('nobody knows of a minefield here');
+      const roll = rollPool(state, dice);
+      if (roll.best < TASK_ROLL.clearMines) {
+        return {
+          state: done(
+            log(
+              roll.state,
+              'info',
+              `${unitName(u)} work at the mine — rolled ${roll.best}: another turn of it.`,
+              [here],
+            ),
+          ),
+          ok: true,
+        };
+      }
+      const next = log(
+        removeMinefield(roll.state, mine.id),
+        'good',
+        `${unitName(u)} disarm the mine — rolled ${roll.best}.`,
+        [here],
+      );
+      return { state: done(next), ok: true };
     }
-    case 'demolish': {
-      if (!toward) return { state, ok: false, reason: 'say which bridge' };
-      if (distance(u.pos, toward) !== 1)
-        return { state, ok: false, reason: 'the bridge must be next to them' };
-      if (!bridgeStands(state, map, u.pos, toward)) {
-        return { state, ok: false, reason: 'there is no bridge standing there' };
+
+    case 'repairRoute':
+    case 'repairRail':
+    case 'clearDamagedRoad': {
+      if (!(state.routesCut ?? []).includes(key(here))) return refuse('the road here is not cut');
+      const raw = terrainAt(map, here, state.terrainOverrides);
+      const wrecked = raw === 'damagedTown' || raw === 'damagedForest';
+      if (baseTerrain(raw) === 'rubble') return refuse('rubble is beyond repair (15.04.3)');
+      if (task === 'clearDamagedRoad') {
+        if (!wrecked) return refuse('nothing here is blocked by damaged terrain');
+        // "Clearing damaged terrain requires either a Vulcan or at least two
+        // Heavy Drones." (15.04.3)
+        if (!vulcanAt(state, here, by) && heavyDronesAt(state, here, by) < 2) {
+          return refuse('that needs a Vulcan, or two Heavy Drones');
+        }
+      } else if (wrecked) {
+        return refuse('the damage here is too extensive; a Vulcan must clear it (15.03.6)');
       }
-      next = demolishBridge(next, u.pos, toward);
-      next = log(next, 'info', `${unitName(u)} blow the bridge.`, [u.pos, toward]);
-      break;
+      if (task === 'repairRoute') {
+        // "A player picking one or more Combat Engineer squads may choose a
+        // Truck or Hovertruck per squad with the needed gear ... Vulcans and
+        // Heavy Drones have these tools and supplies automatically." (15.03.6)
+        const hasKit =
+          vulcanAt(state, here, by) ||
+          heavyDronesAt(state, here, by) > 0 ||
+          unitsAt(state, here).some(
+            (t) =>
+              t.owner === by && t.kind === 'unit' && (t.classId === 'TK' || t.classId === 'HT'),
+          );
+        if (!hasKit) return refuse('a supply Truck has to be here with them (15.03.6)');
+      }
+      const roll = rollPool(state, dice);
+      const needs = TASK_ROLL[task];
+      if (roll.best < needs) {
+        return {
+          state: done(
+            log(roll.state, 'info', `The work goes on at ${key(here)} — rolled ${roll.best}.`, [
+              here,
+            ]),
+          ),
+          ok: true,
+        };
+      }
+      const next = log(
+        { ...roll.state, routesCut: (roll.state.routesCut ?? []).filter((k) => k !== key(here)) },
+        'good',
+        `${unitName(u)} put the ${hasRoute(map, here, 'rail') ? 'line' : 'road'} through ${key(here)} back in service.`,
+        [here],
+      );
+      return { state: done(next), ok: true };
+    }
+
+    case 'gradeRidge': {
+      if (!where) return refuse('say which ridge');
+      if (sideFeatureBetween(map, here, where, state.sideOverrides) !== 'ridge') {
+        return refuse('there is no ridge on that side');
+      }
+      const roll = rollPool(state, dice);
+      if (roll.best < TASK_ROLL.gradeRidge) {
+        return {
+          state: done(
+            log(roll.state, 'info', `The charges do not take — rolled ${roll.best}.`, [here]),
+          ),
+          ok: true,
+        };
+      }
+      const next = log(
+        setSideOverride(roll.state, here, where, 'none'),
+        'good',
+        `${unitName(u)} blow a gap in the ridge at ${key(here)}.`,
+        [here, where],
+      );
+      return { state: done(next), ok: true };
+    }
+
+    case 'finishOgre': {
+      const targetId = opts.target;
+      const ogre = targetId ? state.units[targetId] : undefined;
+      if (!ogre || !isOgre(ogre) || !onBoard(ogre)) return refuse('no cybertank here to finish');
+      if (!eq(ogre.pos, here)) return refuse('they have to climb onto it');
+      if (ogre.owner === by) return refuse('that is your own cybertank');
+      const live = ogre.weapons.filter((w) => !w.destroyed);
+      let needs = TASK_ROLL.finishOgre;
+      if (live.length > 0) {
+        if (!live.every((w) => w.kind === 'ap')) return refuse('it can still shoot back');
+        if (!isVulcan(u) && !isHeavyDrone(u)) {
+          return refuse('an execution charge on an armed Ogre is a Vulcan’s work (15.03.8)');
+        }
+        // "a roll of 4+ to succeed if the Ogre is immobile, or a 6 to succeed
+        // if the Ogre can still move".
+        needs = ogre.treads > 0 ? 6 : 4;
+      }
+      const roll = rollPool(state, dice);
+      if (roll.best < needs) {
+        return {
+          state: done(
+            log(
+              roll.state,
+              'info',
+              `The charge does not fire — rolled ${roll.best}, needed ${needs}.`,
+              [here],
+            ),
+          ),
+          ok: true,
+        };
+      }
+      let next = log(
+        roll.state,
+        'good',
+        `${unitName(u)} blow ${unitName(ogre)} apart at close quarters.`,
+        [here],
+      );
+      next = destroyUnit(next, ogre.id, 'coup de grâce', by);
+      return { state: done(next), ok: true };
+    }
+
+    case 'demolish': {
+      if (!where) return refuse('say which bridge');
+      if (distance(here, where) !== 1) return refuse('the bridge must be next to them');
+      if (!bridgeStands(state, map, here, where))
+        return refuse('there is no bridge standing there');
+      const next = log(
+        demolishBridge(state, here, where),
+        'good',
+        `${unitName(u)} blow the bridge.`,
+        [here, where],
+      );
+      return { state: done(next), ok: true };
+    }
+
+    // --- 15.04 ------------------------------------------------------------
+    case 'freeStuck': {
+      const targetId = opts.target;
+      const stuck = targetId ? state.units[targetId] : undefined;
+      if (!stuck || !onBoard(stuck) || !stuck.stuck) return refuse('nothing stuck here');
+      if (!eq(stuck.pos, here)) return refuse('it is not in this hex');
+      if (!vulcanAt(state, here, by)) {
+        return refuse('Heavy Drones may not free a unit on their own (15.04.1)');
+      }
+      if (isVulcan(stuck)) return refuse('a Vulcan may not free itself (15.04.1)');
+      // "A Vulcan may attempt to free any unit size 5 or smaller on its own.
+      // For every step up in size, one Heavy Drone is required."
+      const size = isOgre(stuck) ? ogreType(stuck.typeId).size : unitClass(stuck.classId).size;
+      const needDrones = Math.max(0, size - 5);
+      if (heavyDronesAt(state, here, by) < needDrones) {
+        return refuse(
+          `a size ${String(size)} unit needs ${String(needDrones)} Heavy Drone${needDrones === 1 ? '' : 's'} to help (15.04.1)`,
+        );
+      }
+      const roll = rollPool(state, dice);
+      if (roll.best < TASK_ROLL.freeStuck) {
+        return {
+          state: done(log(roll.state, 'info', `It will not shift — rolled ${roll.best}.`, [here])),
+          ok: true,
+        };
+      }
+      let next = updateAnyUnit(roll.state, stuck.id, () => ({ stuck: false }));
+      next = log(next, 'good', `${unitName(u)} winch ${unitName(stuck)} out of the swamp.`, [here]);
+      return { state: done(next), ok: true };
+    }
+
+    case 'repairWeapon': {
+      if (!isVulcan(u))
+        return refuse('field repair of a weapon is the Vulcan’s own work (15.04.5)');
+      const targetId = opts.target;
+      const ogre = targetId ? state.units[targetId] : undefined;
+      if (!ogre || !isOgre(ogre) || !eq(ogre.pos, here))
+        return refuse('no cybertank here to work on');
+      const w = ogre.weapons.find((x) => x.id === opts.weapon);
+      if (!w || !w.destroyed) return refuse('that weapon is not damaged');
+      if (w.beyondRepair === true) return refuse('that one is beyond field repair');
+      if (w.kind === 'missile' || w.kind === 'missileRack') {
+        return refuse('destroyed missiles and racks are always beyond field repair (15.04.5)');
+      }
+      // "Whenever an attempt is made to repair a weapon that was destroyed,
+      // roll one die. On a 5 or 6, the damage is light enough that an attempt
+      // ... may be made. On any other result, a notation should be made on the
+      // record sheet that this weapon is beyond field repair."
+      const look = rollDie(state.rng);
+      let next: GameState = { ...state, rng: look.state };
+      if (look.value < 5) {
+        next = withUnit(next, {
+          ...ogre,
+          weapons: ogre.weapons.map((x) => (x.id === w.id ? { ...x, beyondRepair: true } : x)),
+        });
+        next = log(
+          next,
+          'info',
+          `The mounting is wrecked — rolled ${look.value}: beyond field repair.`,
+          [here],
+        );
+        return { state: done(next), ok: true };
+      }
+      // "Only one die is rolled for each attempt, and a 6 is required."
+      const fix = rollDie(next.rng);
+      next = { ...next, rng: fix.state };
+      if (fix.value < TASK_ROLL.repairWeapon) {
+        next = log(next, 'info', `The repair fails — rolled ${fix.value}.`, [here]);
+        return { state: done(next), ok: true };
+      }
+      const live = next.units[ogre.id];
+      if (live && isOgre(live)) {
+        next = withUnit(next, {
+          ...live,
+          weapons: live.weapons.map((x) =>
+            x.id === w.id ? { ...x, destroyed: false, fired: false } : x,
+          ),
+        });
+      }
+      next = log(
+        next,
+        'good',
+        `${unitName(u)} bring a ${OGRE_WEAPONS[w.kind].name.toLowerCase()} back on line.`,
+        [here],
+      );
+      return { state: done(next), ok: true };
+    }
+
+    case 'repairTreads': {
+      const targetId = opts.target;
+      const ogre = targetId ? state.units[targetId] : undefined;
+      if (!ogre || !isOgre(ogre) || !eq(ogre.pos, here))
+        return refuse('no cybertank here to work on');
+      const full = ogreType(ogre.typeId).treads;
+      if (ogre.treads >= full) return refuse('its treads are whole');
+      // "two dice for a Vulcan, one for each Drone. For every 6 that is rolled
+      // during the attempt, one tread is repaired." (15.04.6)
+      let next = state;
+      let mended = 0;
+      for (let i = 0; i < Math.max(1, dice); i++) {
+        const d = rollDie(next.rng);
+        next = { ...next, rng: d.state };
+        if (d.value >= TASK_ROLL.repairTreads) mended += 1;
+      }
+      if (mended === 0) {
+        return {
+          state: done(log(next, 'info', 'A turn of work, and nothing to show for it.', [here])),
+          ok: true,
+        };
+      }
+      const put = Math.min(mended, full - ogre.treads);
+      next = updateAnyUnit(next, ogre.id, () => ({ treads: ogre.treads + put }));
+      next = log(
+        next,
+        'good',
+        `${unitName(u)} relay ${String(put)} tread unit${put === 1 ? '' : 's'}.`,
+        [here],
+      );
+      return { state: done(next), ok: true };
     }
   }
-
-  // The task was their attack for the turn (15.03).
-  next = updateAnyUnit(next, unitId, () => ({ firedThisPhase: true, squadsFired: u.squads }));
-  return { state: next, ok: true };
 };
 
 /** For the record: a conventional unit with the shape the sheet rules need. */

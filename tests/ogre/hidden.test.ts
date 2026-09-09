@@ -149,8 +149,8 @@ describe('minefields (13.04)', () => {
           [B]: { hexes: [key(at(8, 6)), key(at(8, 7)), key(at(9, 6))], label: 'the east' },
           [A]: { hexes: [key(at(2, 6))], label: 'the west' },
         },
-        mines: { [B]: 2 },
       },
+      minesLeft: { [B]: 2 },
     };
     expect(setupActor(s)).toBe(B);
     expect(minefieldsLeft(s, B)).toBe(2);
@@ -346,7 +346,7 @@ describe('a battle with something to hide', () => {
     const s = CUSTOM.build({ seed: 7, order: hiddenOrder(7), setup: true });
     expect(hasHiddenInformation(s.options)).toBe(true);
     expect(Object.values(s.units).filter(isDummy)).toHaveLength(6);
-    expect(s.setup?.mines).toEqual({ attacker: 4, defender: 4 });
+    expect(s.minesLeft).toEqual({ attacker: 4, defender: 4 });
     // Nothing is face down until the counters are down.
     expect(Object.values(s.units).some((u) => u.concealed)).toBe(false);
   });

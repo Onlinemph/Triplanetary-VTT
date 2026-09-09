@@ -255,24 +255,26 @@ seat: the train opens up a step a turn and runs, the escort stays with it, the
 raiders go for it (`docs/AI.md`, "exit goals"). It is not in
 `units.SELECTABLE_CLASSES`, so the builder does not offer it.
 
-### 10 – Cruise missiles (shape transcribed, numbers provisional)
+### 10 – Cruise missiles
 
-| Rule                                                           | Where                                       |
-| -------------------------------------------------------------- | ------------------------------------------- |
-| 3.01 A loaded Missile Crawler attacks by firing its missile    | `missiles.launchMissile` (it becomes a CRL) |
-| 10.02 Launch at any hex, in the fire phase                     | `missiles.launchCheck`                      |
-| 10.03 Flight: a leg a turn, straight for the target            | `missiles.flyMissiles` from `advancePhase`  |
-| 10.04 Interception by lasers with a line of sight, in passing  | `missiles.flyMissile`                       |
-| 10.05 Detonation: ground zero total, the hex a crater, a blast | `missiles.detonate`, `blastUnit`            |
-| 10.06 Fratricide between missiles                              | `missiles.detonate`                         |
+| Rule                                                                    | Where                                          |
+| ----------------------------------------------------------------------- | ---------------------------------------------- |
+| 3.01 A loaded Missile Crawler attacks by firing its missile             | `missiles.launchMissile` (it becomes a CRL)    |
+| 10.02 Reaches any hex on the map, resolved before any more actions      | `missiles.launchMissile` traces the path       |
+| 10.02.1 Fratricide: six hexes, and nothing flies near a fresh crater    | `missiles.blastsThisTurn`, `launchCheck`       |
+| 10.03 Every gun in range gets one shot; disabled units may not          | `missiles.shotsAgainst`                        |
+| 10.03.1 Ogres fire once with each weapon, a rack once a turn            | `missiles.shotsAgainst`                        |
+| 10.03.2 Two dice against a table by unit type, +1/+2/+3 for distance    | `missiles.interceptionTarget`, `trackingBonus` |
+| 10.03.3 Premature detonation: a hit missile goes off on a 6             | `missiles.launchMissile`                       |
+| 10.04 Ground zero total, a crater unless in water, then the blast table | `missiles.detonate`, `blastEffect`             |
+| 10.04 Terrain cover, and SP and treads attacked five at a time          | `missiles.effectiveDistance`, `blastUnit`      |
+| 12.04 Each Laser or Laser Tower fires once at each missile in range     | `missiles.shotsAgainst`                        |
 
-The flight per turn (12 hexes), the missile's defence against interception
-(2), the blast strengths by ring (12 at one hex, 6 at two) and the fratricide
-radius (2) are placeholders in `CRUISE_MISSILE`, chosen to play sensibly
-against the rest of the CRT and flagged for correction against the printed
-table. Everything else about the section — the launch being the crawler's
-attack, lasers being the only interception, ground zero taking cybertanks
-whole, the rings attacking an Ogre component by component — is the rule.
+The one thing here that is not the rulebook's is the route. The rules let the
+owner trace "any route indicated by its owner"; the engine flies a straight
+line. It shows in exactly one place — a second missile that would pass within
+six hexes of this turn's crater has nowhere else to go — and `launchCheck`
+refuses the launch and says so, rather than quietly flying it through.
 
 ### 11 – Buildings
 
@@ -320,11 +322,11 @@ printed text.
 The rest of Section 13 that is in, and the engineering of Section 15, again
 from their shape (`src/ogre/engine/engineering.ts`):
 
-| Rule                          | Where                                                                                                                                                                                                                                                                                                                                                                                                        |
-| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| 13.02 Bridges                 | A road or rail crossing a stream is a target of its own (`TargetRef` kind `bridge`) when terrain damage is in play: defence 4 (`BRIDGE`), an X drops it (`demolishBridge`, `GameState.bridgesDown`), a D does nothing; the route is gone across that hexside only (`routeBetween`).                                                                                                                          |
-| 13.07 Superheavy record sheet | `GameOptions.superheavyRecordSheet`: a Superheavy carries two guns of 3, two AP and three tread units (`SUPERHEAVY_SHEET`); an X takes one of them on a die (1-2 gun, 3-4 tread, 5-6 AP), a D a tread unit (`applySheetDamage`); it shoots with the guns and moves on the tread units it has left, walks through infantry only with an AP left, and is destroyed when it has neither a gun nor a tread unit. |
-| 15 Combat engineering         | `engineer` order, movement phase, a Combat Engineer counter that has not moved: entrench its hex (infantry there defend as in forest, `GameState.entrenched`), clear the minefield it stands in (13.04), or drop the bridge on a neighbouring hexside — the whole phase spent.                                                                                                                               |
+| Rule                          | Where                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| ----------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 13.02 Bridges                 | A road or rail crossing a stream is a target of its own (`TargetRef` kind `bridge`) when terrain damage is in play: defence 4 (`BRIDGE`), an X drops it (`demolishBridge`, `GameState.bridgesDown`), a D does nothing; the route is gone across that hexside only (`routeBetween`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| 13.07 Superheavy record sheet | `GameOptions.superheavyRecordSheet`: a Superheavy carries two guns of 3, two AP and three tread units (`SUPERHEAVY_SHEET`); an X takes one of them on a die (1-2 gun, 3-4 tread, 5-6 AP), a D a tread unit (`applySheetDamage`); it shoots with the guns and moves on the tread units it has left, walks through infantry only with an AP left, and is destroyed when it has neither a gun nor a tread unit.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| 15 Combat engineering         | `engineer` order in the fire phase, spending the Sapper's attack (15.03). Dice pools: a Combat Engineer squad a die, a Heavy Drone two, a Vulcan four; a Vulcan task is two for the Vulcan and one a Drone (`engineeringDice`, `vulcanDice`). Tasks: dig entrenchments (the die sets how many squads it shelters), plant a mine (5+), lift a friendly mine or disarm an enemy one (5+), mend a cut road with a supply Truck (6), grade a ridge flat (5+), finish off a weaponless cybertank (4+, or a Vulcan's execution charge at 4+ immobile and 6 mobile). Vulcan tasks: pull a stuck unit out (6, a Heavy Drone per size above five), relay cut rail (5+), clear a road through damaged terrain (4+, a Vulcan or two Drones), field-repair an Ogre weapon (5+ to see if it can be tried at all, then a 6) or its treads (a tread per six rolled). One attempt per task per hex per turn. |
 
 The numbers are provisional: the bridge's defence, the sheet's components and
 the die that picks one, the drone's stowage. Correct them against the printed
@@ -372,14 +374,14 @@ record sheets carried in from the last battle (`assault.applyOgreRecord`).
 Each of these is a self-contained addition; none of them require changing the
 engine's shape.
 
-| Section                     | What is missing                                                                       | Notes                                                                                                                                                                                                           |
-| --------------------------- | ------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **9 – The train**           | The two-counter train, the M0/1–M6/7 speed markers, armed trains, collisions, cargo   | D3 and the X-only damage rule are the printed ones. An original scenario fields it (The Train); see above.                                                                                                      |
-| **10 – Cruise missiles**    | Immediate flight, the 2d6 interception table, the printed blast table                 | The launch, the crater, the road cut and fratricide are in; the flight model and the numbers are ours. The printed rule is simpler than what is here.                                                           |
-| **12 – Lasers**             | Structure Points, the damaged state, the fire restriction                             | Attack 2, ranges 30 and 60, the line of sight and the double strength when overrun are the printed ones (12.02, 12.03, 12.06, 12.09).                                                                           |
-| **13 – Optional rules**     | River bridges (13.02.1), the layer's choice of road mine, passive detection (13.04.1) | Terrain damage (13.01), bridges at D6 (13.02), mines (13.04), camouflage (13.05), dummies (13.06) and the Superheavy's record sheet (13.07) are all as printed.                                                 |
-| **14 – Advanced units**     | The LAD's three-turn deployment from a cargo pallet                                   | Both units' statistics are in, and the Ninja's stealth; the drone rides a vehicle as one squad and sets up the turn it is set down.                                                                             |
-| **15 – Combat engineering** | The dice pools, most of the task list, and the whole of the Vulcan's work             | Engineers work in the fire phase, spending their attack; entrenchments are as printed (15.03.5); a bridge in your own hex comes down automatically (13.02). The Vulcan's chassis is right and its jobs are not. |
+| Section                     | What is missing                                                                                                                                                        | Notes                                                                                                                                                           |
+| --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **9 – The train**           | The two-counter train, the M0/1–M6/7 speed markers, armed trains, collisions, cargo                                                                                    | D3 and the X-only damage rule are the printed ones. An original scenario fields it (The Train); see above.                                                      |
+| **10 – Cruise missiles**    | The owner's choice of route; the engine flies a straight line                                                                                                          | Immediate flight, the 2d6 interception table with its tracking bonuses, premature detonation, six-hex fratricide and the printed blast table are all in.        |
+| **12 – Lasers**             | Structure Points, the damaged state, the fire restriction                                                                                                              | Attack 2, ranges 30 and 60, the line of sight and the double strength when overrun are the printed ones (12.02, 12.03, 12.06, 12.09).                           |
+| **13 – Optional rules**     | River bridges (13.02.1), the layer's choice of road mine, passive detection (13.04.1)                                                                                  | Terrain damage (13.01), bridges at D6 (13.02), mines (13.04), camouflage (13.05), dummies (13.06) and the Superheavy's record sheet (13.07) are all as printed. |
+| **14 – Advanced units**     | The LAD's three-turn deployment from a cargo pallet                                                                                                                    | Both units' statistics are in, and the Ninja's stealth; the drone rides a vehicle as one squad and sets up the turn it is set down.                             |
+| **15 – Combat engineering** | Mine detection (15.03.3), reloading missiles (15.04.4), revetments (15.04.7), towing (15.04.8), Drone control and cargo (15.02.1, 15.02.4-5), assembly times (15.02.2) | The dice pools, the entrenchment rules and eleven of the tasks are in, the Vulcan's own among them. See above.                                                  |
 
 ---
 

@@ -9,6 +9,7 @@
  */
 
 import type { Hex } from './hex.js';
+import type { EngineerTask } from './engineering.js';
 import type { AttackerRef, TargetRef, PlayerId, UnitId } from './types.js';
 
 export interface CommandBase {
@@ -234,11 +235,18 @@ export interface LayMinefieldCommand extends CommandBase {
  * minefield it stands in, or dropping the bridge on the hexside toward
  * `toward`.
  */
+/**
+ * One engineering or Vulcan task, in place of the Sapper's shot (15.03,
+ * 15.04). `toward` names a hexside — a bridge or a ridge; `target` the unit
+ * being worked on or finished off; `weapon` the component being repaired.
+ */
 export interface EngineerCommand extends CommandBase {
   readonly type: 'engineer';
   readonly unit: UnitId;
-  readonly task: 'entrench' | 'clearMines' | 'demolish';
+  readonly task: EngineerTask;
   readonly toward?: Hex;
+  readonly target?: UnitId;
+  readonly weapon?: string;
 }
 
 export type Command =

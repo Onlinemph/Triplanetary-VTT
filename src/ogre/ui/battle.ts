@@ -1232,9 +1232,10 @@ export const createOgreBattle = (opts: OgreBattleOptions): OgreBattle => {
       el(
         'p',
         { class: 'note' },
-        `One nuclear-armed missile. It flies ${CRUISE_MISSILE.speed} hexes a turn straight at the hex ` +
-          'you name; only a laser with a line of sight can stop it. Ground zero is total, and the ' +
-          'blast reaches two hexes out — including onto your own side.',
+        'One nuclear-armed missile, and it reaches any hex on the map inside the turn it is ' +
+          'fired. Every enemy gun it passes gets one shot at it on two dice, and the further it ' +
+          'has flown the easier it is to track. Ground zero is total; the blast falls off over ' +
+          `${String(CRUISE_MISSILE.blastReach)} hexes, and it does not care whose side you are on.`,
       ),
       u.kind === 'unit' && u.firedThisPhase
         ? el('p', { class: 'empty' }, 'This crawler has launched.')
@@ -1457,6 +1458,8 @@ export const createOgreBattle = (opts: OgreBattleOptions): OgreBattle => {
             unit: u.id,
             task: t.task,
             ...(t.toward ? { toward: t.toward } : {}),
+            ...(t.target !== undefined ? { target: t.target } : {}),
+            ...(t.weapon !== undefined ? { weapon: t.weapon } : {}),
           }),
         ),
       ),
