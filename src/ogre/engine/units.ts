@@ -47,6 +47,7 @@ export type UnitClassId =
   | 'TK'
   | 'HT'
   | 'TRAIN'
+  | 'HDRN'
   | 'LSR'
   | 'LTWR'
   // Infantry
@@ -496,6 +497,23 @@ export const UNIT_CLASSES: Readonly<Record<UnitClassId, UnitClass>> = {
     note: 'Fully stated: a one-shot "heavy weapon attack at Attack Strength 3 and Range 4", plus "an inherent Attack 1 at Range 1"; 4 VP per squad (3.02.2).',
   },
 
+  HDRN: {
+    id: 'HDRN',
+    name: 'Heavy Drone',
+    abbr: 'HDRN',
+    kind: 'armor',
+    mobility: 'heavyTracked',
+    attack: 0,
+    range: 0,
+    defense: 3,
+    move: 3,
+    size: 3,
+    armorUnits: 1,
+    vp: 16,
+    note: '"Vulcan Heavy Drones have one giant manipulator arm and no weapons, and move and defend as Heavy Tanks ... Drones are worth 16 victory points each." (15.02.3) For engineering it is worth two Combat Engineer squads, and it rolls one die on a Vulcan task.',
+    unconfirmed: ['size'],
+  },
+
   CE: {
     id: 'CE',
     name: 'Combat Engineers',
@@ -609,6 +627,9 @@ export const SELECTABLE_CLASSES: readonly UnitClassId[] = [
   'MCRL',
   'TK',
   'HT',
+  // The Vulcan's Heavy Drones: no weapons, but they are what makes a Vulcan
+  // worth bringing (15.02.3).
+  'HDRN',
 ];
 
 /**

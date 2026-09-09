@@ -104,7 +104,7 @@ export const mineAt = (state: GameState, h: Hex): Minefield | undefined =>
 
 /** Minefields still to be laid by this side, during the setup. */
 export const minefieldsLeft = (state: GameState, player: PlayerId): number =>
-  state.setup?.mines?.[player] ?? 0;
+  state.minesLeft?.[player] ?? 0;
 
 /**
  * Lay one minefield during the setup, in the layer's own zone, on ground a
@@ -140,9 +140,33 @@ export const layMinefield = (
   const next: GameState = {
     ...state,
     mines: [...minesOf(state), mine],
-    setup: { ...state.setup, mines: { ...(state.setup.mines ?? {}), [by]: left - 1 } },
+    minesLeft: { ...(state.minesLeft ?? {}), [by]: left - 1 },
   };
   return { state: next, ok: true };
+};
+
+/**
+ * Plant a mine during play, where a Sapper stands (15.03.1).
+ *
+ * The setup's zone rules do not apply — engineers work where they are — but
+ * the scenario's allowance does: "If mines are available in the scenario, any
+ * Sapper may attempt to place a mine, as per Section 13.04."
+ */
+export const plantMinefield = (
+  state: GameState,
+  map: GameMap,
+  by: PlayerId,
+  at: Hex,
+): GameState => {
+  const left = minefieldsLeft(state, by);
+  if (left <= 0) return state;
+  const id = `mine-${by}-${minesOf(state).length + 1}`;
+  const mine: Minefield = { id, owner: by, pos: at, revealed: false, onRoad: isRouteHex(map, at) };
+  return {
+    ...state,
+    mines: [...minesOf(state), mine],
+    minesLeft: { ...(state.minesLeft ?? {}), [by]: left - 1 },
+  };
 };
 
 /** Take a minefield off the map: cleared by engineers (15), or for a test. */

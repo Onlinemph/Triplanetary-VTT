@@ -721,7 +721,7 @@ export class MapRenderer {
   private drawMines(state: GameState, view: RenderView, size: number): void {
     const ctx = this.ctx;
     // Entrenchments (15): a ring of trench around the hex.
-    for (const k of state.entrenched ?? []) {
+    for (const k of Object.keys(state.entrenched ?? {})) {
       const comma = k.indexOf(',');
       const h = { q: Number(k.slice(0, comma)), r: Number(k.slice(comma + 1)) };
       this.path(ctx, h, size, size * 0.2);

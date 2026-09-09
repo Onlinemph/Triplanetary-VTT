@@ -87,41 +87,34 @@ is set up may not be moved.
 **Here:** the LAD mounts and dismounts like a squad of infantry, and is
 "setting up" — unable to fire — for the rest of the turn it dismounts.
 
-### Combat engineering is a sketch (§15)
+### Combat engineering, and what the Vulcan still cannot do (§15)
 
-The parts that are in are right: engineers work in the fire phase, spending
-their attack; entrenchments double infantry defence in clear and triple it in
-forest or rubble, and nowhere else; a bridge in the hex you stand in comes
-down automatically.
+Most of Section 15 is in: the dice pools (a Combat Engineer squad a die, a
+Heavy Drone two, a Vulcan four; a Vulcan task is two dice for the Vulcan and
+one for each Drone), the fire-phase timing, one attempt per task per turn, and
+eleven of the tasks — entrenchments with the die setting how many squads they
+shelter, planting and disarming mines, mending a road, grading a ridge,
+finishing off a weaponless cybertank, and the Vulcan's own work on stuck
+units, cut rail, roads through wreckage, and an Ogre's weapons and treads.
 
-Not in: the **dice pools** (each extra squad adds a die, a Heavy Drone two, a
-Vulcan four; a 6 succeeds, or the number the task names), and with them most
-of the task list — placing mines (5+), disarming enemy mines (5+), active mine
-detection, terrain levelling with a supply Truck (6), grading ridges (5+),
-the coup de grace against a weaponless Ogre (4+). Entrenchment capacity (one
-squad on 1-4, two on a 5, three on a 6) is not modelled either: a hex is
-simply entrenched or not.
+What is not:
 
-### The Vulcan does no work at all (§15.02, §15.04)
-
-The Vulcan's chassis is right — Mark III-B, move 4, 48 tread units, two
-secondary batteries, six AP guns, two manipulator arms at D2 — and so is the
-unfinished-Ogre rule. Everything it is _for_ is missing:
-
-- **Heavy Drones** (a Heavy Tank chassis with one arm, 16 VP each, four to a
-  Vulcan), combat Drones, and the sixteen "ducklings" it can drive at half
-  strength.
-- **Maintenance and assembly** times: six turns to winch a damaged unit
-  aboard, six to load or unload palleted cargo, one for a single item, and
-  12/30/42/60/72/75 turns to assemble an Ogre from modules by mark.
-- **Vulcan tasks**: freeing units stuck in swamp, repairing cut rail, clearing
-  roads in damaged terrain, reloading missiles, field-repairing an Ogre's
-  weapons and treads, creating revetments.
-- **Cargo**: a dozen Ogre missiles or six squads inside, Size 4 on top.
-- Passive mine detection for Ninjas, Vulcans and Ogres of Size 8 or more.
-
-This is a whole subsystem rather than a gap, and it is the only place where
-the rulebook is fully in hand and the engine has nothing.
+- **Active mine detection** (15.03.3): searching adjacent hexes on a roll
+  greater than the number searched.
+- **Reloading missiles** (15.04.4), which needs the Vulcan's cargo hold.
+- **Revetments** (15.04.7): a prepared position adding +1 defence after the
+  terrain multiplier, targetable in its own right at D2, small for size 3 and
+  large for size 5. This is the most valuable of the four.
+- **Towing** (15.04.8): hitch on a 2+, with the Vulcan's move dropping by the
+  towed vehicle's size.
+- **Everything about Drones as Drones** (15.02.1, 15.02.4, 15.02.5): the
+  Vulcan's cargo capacity, combat Drones, and the sixteen "ducklings" it can
+  drive at half strength. A Heavy Drone is a counter here, and a useful one,
+  but nothing connects it to a Vulcan's four control channels.
+- **Assembly times** (15.02.2): 12 turns for a Mark II up to 75 for a Ninja.
+  The unfinished-Ogre rule that governs the result is already in.
+- **Marine Engineers** (15.01.1), who cost 6 VP and double their defence in
+  water.
 
 ### Smaller known gaps
 

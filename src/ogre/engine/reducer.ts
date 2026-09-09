@@ -26,6 +26,7 @@ import {
 import { SETUP_COMMANDS, finishSetup, placeUnit } from './setup.js';
 import { deployReserveCheck } from './reserves.js';
 import { clearBlasts, launchMissile } from './missiles.js';
+import { clearTasks } from './engineering.js';
 import {
   apRemaining,
   log,
@@ -192,7 +193,13 @@ const route = (state: GameState, cmd: Command, map: GameMap): ApplyResult => {
     case 'layMinefield':
       return wrap(state, layMinefield(state, map, cmd.by, cmd.at));
     case 'engineer':
-      return wrap(state, engineer(state, map, cmd.by, cmd.unit, cmd.task, cmd.toward));
+      return wrap(
+        state,
+        engineer(state, map, cmd.by, cmd.unit, cmd.task, cmd.toward, {
+          ...(cmd.target !== undefined ? { target: cmd.target } : {}),
+          ...(cmd.weapon !== undefined ? { weapon: cmd.weapon } : {}),
+        }),
+      );
     case 'endPhase':
       return { state: advancePhase(state, map), result: ok() };
     case 'resign':
@@ -673,12 +680,14 @@ export const advancePhase = (state: GameState, map: GameMap): GameState => {
 const startNextPlayerTurn = (state: GameState, _map: GameMap): GameState => {
   const nextIndex = (state.activePlayerIndex + 1) % state.playerOrder.length;
   const wrapped = nextIndex === 0;
-  let next: GameState = clearBlasts({
-    ...state,
-    activePlayerIndex: nextIndex,
-    turn: wrapped ? state.turn + 1 : state.turn,
-    phase: 'recovery',
-  });
+  let next: GameState = clearTasks(
+    clearBlasts({
+      ...state,
+      activePlayerIndex: nextIndex,
+      turn: wrapped ? state.turn + 1 : state.turn,
+      phase: 'recovery',
+    }),
+  );
 
   const player = activePlayer(next);
   next = resetFireFlags(next, player);

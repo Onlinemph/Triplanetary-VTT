@@ -1458,6 +1458,8 @@ export const createOgreBattle = (opts: OgreBattleOptions): OgreBattle => {
             unit: u.id,
             task: t.task,
             ...(t.toward ? { toward: t.toward } : {}),
+            ...(t.target !== undefined ? { target: t.target } : {}),
+            ...(t.weapon !== undefined ? { weapon: t.weapon } : {}),
           }),
         ),
       ),

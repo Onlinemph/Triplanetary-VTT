@@ -155,6 +155,11 @@ export interface OgreWeapon {
   readonly kind: OgreWeaponKind;
   readonly destroyed: boolean;
   /**
+   * Looked at by a Vulcan and found past mending (15.04.5): "a notation should
+   * be made on the record sheet that this weapon is beyond field repair."
+   */
+  readonly beyondRepair?: boolean;
+  /**
    * For an external missile: expended. For a missile rack: used this turn.
    * For a battery: fired this fire phase.
    */
@@ -424,7 +429,6 @@ export interface SetupState {
   readonly index: number;
   readonly zones: Readonly<Record<PlayerId, SetupZone>>;
   /** Minefields each side has still to lay (13.04). */
-  readonly mines?: Readonly<Record<PlayerId, number>>;
 }
 
 // ---------------------------------------------------------------------------
@@ -522,7 +526,12 @@ export interface GameState {
    * Orbital Drop attacker places on a dead world (its §5). Keyed by canonical
    * hexside, like `GameMap.sides`, and read in preference to it.
    */
-  readonly sideOverrides?: Readonly<Record<string, SideFeature>>;
+  /**
+   * Hexsides changed in play, by canonical key. `'none'` is a hexside graded
+   * flat by engineers (15.03.7): "a low point may be created in a ridge to
+   * allow units to pass through the ridge as if it were not there."
+   */
+  readonly sideOverrides?: Readonly<Record<string, SideFeature | 'none'>>;
 
   readonly options: GameOptions;
   readonly rng: RngState;
@@ -545,8 +554,19 @@ export interface GameState {
   readonly mines?: readonly Minefield[];
   /** Bridges dropped (13.02, 15), by canonical hexside key; see `engineering.ts`. */
   readonly bridgesDown?: readonly string[];
-  /** Hexes combat engineers have entrenched (15), by hex key. */
-  readonly entrenched?: readonly string[];
+  /**
+   * Entrenchments (15.03.5), by hex key, holding the squads each protects:
+   * one on a die of 1-4, two on a 5, three on a 6.
+   */
+  readonly entrenched?: Readonly<Record<string, number>>;
+  /** Minefields each side has left to lay (13.04, 15.03.1), by player. */
+  readonly minesLeft?: Readonly<Record<string, number>>;
+  /**
+   * Engineering tasks attempted this player-turn, as `task:hex`: "the specific
+   * task may be attempted only once per turn regardless of how many Sappers
+   * participate" (15.03). Cleared as each turn opens.
+   */
+  readonly tasksTried?: readonly string[];
 
   readonly victory: VictoryState | null;
   /** Free-form per-scenario bookkeeping (entry edges, objectives, timers). */

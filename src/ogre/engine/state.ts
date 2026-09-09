@@ -252,7 +252,12 @@ export const setTerrainOverride = (state: GameState, h: Hex, t: Terrain): GameSt
 });
 
 /** Lay a ridge (or any hexside feature) over the map between two hexes. */
-export const setSideOverride = (state: GameState, a: Hex, b: Hex, f: SideFeature): GameState => {
+export const setSideOverride = (
+  state: GameState,
+  a: Hex,
+  b: Hex,
+  f: SideFeature | 'none',
+): GameState => {
   const k = sideKeyBetween(a, b);
   if (k === '') return state;
   return { ...state, sideOverrides: { ...(state.sideOverrides ?? {}), [k]: f } };
@@ -299,6 +304,29 @@ export const printedDefense = (u: ConventionalUnit): number =>
  * Terrain is applied here rather than at the call sites so that gunnery,
  * spillover, ram attacks and cruise-missile shockwaves all agree.
  */
+/**
+ * Whether this counter is inside the hex's entrenchment (15.03.5).
+ *
+ * "A die roll determines how many squads the entrenchments will protect" — so
+ * a hex shelters a fixed number of squads, not everybody in it. The counters
+ * fill it in id order, which is arbitrary but the same for both players and
+ * for every replay.
+ */
+const shelteredByEntrenchment = (state: GameState, u: ConventionalUnit, where: Hex): boolean => {
+  const room = (state.entrenched ?? {})[key(where)] ?? 0;
+  if (room <= 0) return false;
+  let used = 0;
+  for (const other of Object.values(state.units).sort((a, b) => (a.id < b.id ? -1 : 1))) {
+    if (other.kind !== 'unit' || other.destroyed || other.offMap) continue;
+    if (other.ridingOn != null) continue;
+    if (!(other.pos.q === where.q && other.pos.r === where.r)) continue;
+    if (unitClass(other.classId).kind !== 'infantry') continue;
+    if (other.id === u.id) return used + u.squads <= room;
+    used += other.squads;
+  }
+  return false;
+};
+
 export const defenseOf = (
   state: GameState,
   map: GameMap,
@@ -346,7 +374,7 @@ export const defenseOf = (
   // benefit for the forest or rubble) ... Entrenchments in any terrain other
   // than clear, forest, or rubble offer no benefit. Entrenchments have no
   // effect on vehicles." (15.03.5)
-  if (treatAsInfantry && (state.entrenched ?? []).includes(key(where))) {
+  if (treatAsInfantry && shelteredByEntrenchment(state, u, where)) {
     const ground = baseTerrain(terrain);
     if (ground === 'clear') multiplier = 2;
     else if (ground === 'forest' || ground === 'rubble') multiplier = 3;

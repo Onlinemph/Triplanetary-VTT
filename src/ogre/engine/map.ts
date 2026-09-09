@@ -113,12 +113,15 @@ export const sideFeatureBetween = (
   map: GameMap,
   a: Hex,
   b: Hex,
-  overrides?: Readonly<Record<string, SideFeature>>,
+  overrides?: Readonly<Record<string, SideFeature | 'none'>>,
 ): SideFeature | undefined => {
   const dir = directionTo(a, b);
   if (dir < 0) return undefined;
   const k = sideKey(canonicalSide(a, dir));
-  return overrides?.[k] ?? map.sides[k];
+  const over = overrides?.[k];
+  // A ridge graded flat by engineers is no hexside feature at all (15.03.7).
+  if (over === 'none') return undefined;
+  return over ?? map.sides[k];
 };
 
 /**
